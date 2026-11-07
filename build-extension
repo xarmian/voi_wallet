@@ -15,6 +15,9 @@ echo "Found new bundle: $NEW_INDEX_JS"
 # Copy extension files (overwrites index.html with template)
 cp extension/* ./dist
 
+# Stamp the extension version from package.json (one source of truth)
+node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('dist/manifest.json','utf8'));m.version=require('./package.json').version;fs.writeFileSync('dist/manifest.json',JSON.stringify(m,null,2)+'\\n')"
+
 # Rename _expo to expo-assets
 mv dist/_expo dist/expo-assets
 

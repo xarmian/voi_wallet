@@ -1,18 +1,33 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import * as Clipboard from 'expo-clipboard';
 import {
+  AccountDeletionExpectation,
   AccountMetadata,
   AccountType,
-  RekeyedAccountMetadata,
 } from '@/types/wallet';
-import { useWalletStore, useAccountBalance } from '@/store/walletStore';
+import {
+  useWalletStore,
+  useAccountBalance,
+  useRekeyState,
+} from '@/store/walletStore';
 import AccountAvatar from './AccountAvatar';
 import { formatNativeBalance } from '@/utils/bigint';
-import { useCurrentNetworkConfig } from '@/store/networkStore';
+import {
+  useCurrentNetworkConfig,
+  useCurrentNetwork,
+} from '@/store/networkStore';
+import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
+import {
+  displayOverridesLoaded,
+  useRekeyDisplayStatus,
+} from '@/store/rekeyDisplayStatus';
+
+// TASK-458: rekeyed, custody not yet confirmed by chain state.
+const REKEYED_CHECKING = 'Rekeyed (Checking)';
 
 interface AccountListItemProps {
   account: AccountMetadata;
@@ -20,7 +35,7 @@ interface AccountListItemProps {
   balance?: string | number | bigint;
   onSelect: (accountId: string) => void;
   onEdit?: (accountId: string) => void;
-  onDelete?: (accountId: string) => void;
+  onDelete?: (accountId: string, expected: AccountDeletionExpectation) => void;
   shouldLoadBalance?: boolean;
   hideBalance?: boolean;
 }
@@ -40,7 +55,37 @@ export default function AccountListItem({
   const setActiveAccount = useWalletStore((state) => state.setActiveAccount);
   const walletAccounts = useWalletStore((state) => state.wallet?.accounts);
   const accountBalanceData = useAccountBalance(account.id);
+  const currentNetwork = useCurrentNetwork();
+  const rekeyState = useRekeyState(account.address, currentNetwork);
+  // TASK-458: the last refresh's display-only status labels the account while
+  // this network's chain state loads, so an external rekey shows after the
+  // next refresh. The stored type is the fallback only when that is unknown.
+  const displayRekey = useRekeyDisplayStatus(account.address, currentNetwork);
   const currentNetworkConfig = useCurrentNetworkConfig();
+  const [deletionProtection, setDeletionProtection] = useState<{
+    account: AccountMetadata;
+    protected: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (account.type !== AccountType.REKEYED) return;
+    let cancelled = false;
+    void isListDeletionProtected(account).then((protectedAccount) => {
+      if (!cancelled) {
+        setDeletionProtection({ account, protected: protectedAccount });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
+
+  // A result belongs only to the metadata it checked; pending stays hidden.
+  const canDelete =
+    account.type !== AccountType.STANDARD &&
+    (account.type !== AccountType.REKEYED ||
+      (deletionProtection?.account === account &&
+        !deletionProtection.protected));
 
   // Extract values without destructuring to avoid infinite loops
   const centralizedBalance = accountBalanceData.balance;
@@ -63,7 +108,34 @@ export default function AccountListItem({
     return formatNativeBalance(amount, currentNetworkConfig.nativeToken);
   };
 
+  const signerLabel = (authAddress: string | undefined) => {
+    const signer = walletAccounts?.find(
+      (candidate) => candidate.address === authAddress
+    );
+    if (signer?.type === AccountType.LEDGER) return 'Ledger';
+    if (signer?.type === AccountType.REMOTE_SIGNER) return 'Airgap';
+    return null;
+  };
+
   const getAccountTypeLabel = (account: AccountMetadata) => {
+    if (
+      rekeyState.status === 'loaded' &&
+      !displayOverridesLoaded(displayRekey, rekeyState)
+    ) {
+      if (rekeyState.isRekeyed) {
+        return (
+          signerLabel(rekeyState.authAddress) ??
+          (rekeyState.canSign ? 'Rekeyed' : 'Rekeyed (No Key)')
+        );
+      }
+    } else if (displayRekey?.status === 'delegated') {
+      // Custody is unconfirmed until chain state (re)loads: never imply a key.
+      return signerLabel(displayRekey.authAddress) ?? REKEYED_CHECKING;
+    } else if (displayRekey?.status !== 'self') {
+      if (account.type === AccountType.REKEYED) return REKEYED_CHECKING;
+    } else if (account.type === AccountType.REKEYED) {
+      return '';
+    }
     switch (account.type) {
       case AccountType.STANDARD:
         return '';
@@ -73,36 +145,6 @@ export default function AccountListItem({
         return 'Ledger';
       case AccountType.REMOTE_SIGNER:
         return 'Airgap';
-      case AccountType.REKEYED:
-        const rekeyedAccount = account as RekeyedAccountMetadata;
-        const hasLedgerSigner =
-          walletAccounts?.some(
-            (candidate) =>
-              candidate.type === AccountType.LEDGER &&
-              candidate.address === rekeyedAccount.authAddress
-          ) ?? false;
-
-        if (hasLedgerSigner) {
-          return 'Ledger';
-        }
-
-        // Check if rekeyed to a remote signer account
-        const hasRemoteSignerAuth =
-          walletAccounts?.some(
-            (candidate) =>
-              candidate.type === AccountType.REMOTE_SIGNER &&
-              candidate.address === rekeyedAccount.authAddress
-          ) ?? false;
-
-        if (hasRemoteSignerAuth) {
-          return 'Airgap';
-        }
-
-        if (rekeyedAccount.canSign) {
-          return 'Rekeyed';
-        }
-
-        return 'Rekeyed (No Key)';
       default:
         return '';
     }
@@ -137,7 +179,7 @@ export default function AccountListItem({
   };
 
   const handleDelete = () => {
-    if (onDelete && account.type !== AccountType.STANDARD) {
+    if (onDelete && canDelete) {
       Alert.alert(
         'Delete Account',
         `Are you sure you want to delete "${account.label || 'this account'}"?`,
@@ -146,7 +188,32 @@ export default function AccountListItem({
           {
             text: 'Delete',
             style: 'destructive',
-            onPress: () => onDelete(account.id),
+            // The account can change (or gain its key) while the alert is
+            // open: re-check its CURRENT metadata before deleting.
+            onPress: async () => {
+              const current = () =>
+                useWalletStore
+                  .getState()
+                  .wallet?.accounts.find((a) => a.id === account.id) ?? account;
+              const checked = current();
+              const isProtected = await isListDeletionProtected(checked);
+              // The verdict only holds for the metadata it checked: if the
+              // account changed during the probe, don't act on a stale answer.
+              if (isProtected || current() !== checked) {
+                Alert.alert(
+                  'Account not deleted',
+                  'This account holds its own key, or it changed while you were confirming, so it wasn’t deleted from the account list.'
+                );
+                return;
+              }
+              // TASK-424: the service re-checks this identity, and that the
+              // account is still keyless, before it deletes anything.
+              onDelete(account.id, {
+                address: checked.address,
+                type: checked.type,
+                keyless: true,
+              });
+            },
           },
         ]
       );
@@ -225,7 +292,7 @@ export default function AccountListItem({
               </TouchableOpacity>
             )}
 
-            {onDelete && account.type !== AccountType.STANDARD && (
+            {onDelete && canDelete && (
               <TouchableOpacity
                 style={styles.actionButton}
                 onPress={handleDelete}

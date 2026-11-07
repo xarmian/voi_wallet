@@ -17,6 +17,7 @@ import {
 import { TinymanAsaList, TinymanAsaToken } from './types';
 import { getNetworkConfig } from '../network/config';
 import { NetworkId } from '@/types/network';
+import { fetchBuffered } from '@/utils/fetchBuffered';
 
 const TINYMAN_ASA_LIST_URL = 'https://asa-list.tinyman.org/assets.json';
 const CACHE_TTL = 15 * 60 * 1000; // 15 minutes
@@ -99,14 +100,12 @@ export class DeflexSwapService implements SwapProvider {
     }
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
-
-      const response = await fetch(TINYMAN_ASA_LIST_URL, {
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
+      // TASK-440 #9: the deadline covers the body read too.
+      const response = await fetchBuffered(
+        TINYMAN_ASA_LIST_URL,
+        {},
+        REQUEST_TIMEOUT
+      );
 
       if (!response.ok) {
         throw new DeflexApiError(

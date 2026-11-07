@@ -297,3 +297,31 @@ describe('getPrivateKey trial-decrypt reader (PR1)', () => {
     ).rejects.toBeInstanceOf(AccountStorageError);
   });
 });
+
+describe('legacy migration cleanup failure', () => {
+  it('returns the key and retains migrated primary and discoverable legacy on delete failure', async () => {
+    const id = 'legacy-delete-failure';
+    const sk = fakeKey(64);
+    const legacy = JSON.stringify({
+      accountId: id,
+      authMethod: 'pin',
+      encryptedPrivateKey: makeFormatA(sk),
+      publicData: {},
+    });
+    mockPlatform.__secure.set(`voi_account_${id}`, legacy);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest
+      .spyOn(platform.secureStorage, 'deleteItem')
+      .mockRejectedValueOnce(new Error('disk full'));
+    expect(await AccountSecureStorage.getPrivateKey(id, PIN)).toEqual(sk);
+    expect(mockPlatform.__secure.has(`voi_account_secret_${id}`)).toBe(true);
+    expect(mockPlatform.__secure.get(`voi_account_${id}`)).toBe(legacy);
+    // Without the primary, the surviving legacy copy remains discoverable.
+    mockPlatform.__secure.delete(`voi_account_secret_${id}`);
+    expect(await AccountSecureStorage.probeSecretPresenceStrict(id)).toBe(true);
+    AccountSecureStorage.clearPrivateKeyCache();
+    expect(await AccountSecureStorage.getPrivateKey(id, PIN)).toEqual(sk);
+    expect(mockPlatform.__secure.has(`voi_account_${id}`)).toBe(false);
+    expect(warn).toHaveBeenCalled();
+  });
+});

@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '@/navigation/AppNavigator';
 import { WalletService } from '@/services/wallet';
+import { storeMnemonicSecret } from '@/utils/accountQRParser';
 import MnemonicDisplay from '@/components/wallet/MnemonicDisplay';
 import MnemonicVerification from '@/components/wallet/MnemonicVerification';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
@@ -83,13 +84,16 @@ export default function CreateWalletScreen({ navigation }: Props) {
 
   // Navigate on to PIN/passphrase setup. `backupVerified` is a BOOLEAN route
   // param (DR-11 carrier #1) — SecuritySetupScreen consumes it at import time.
-  // It is not key material, so it does not widen the DR-9 mnemonic-in-nav-state
-  // exposure that TASK-224 will remediate.
+  // TASK-224: the phrase itself never enters route params; it goes through the
+  // in-memory secret holder and only its opaque id is passed. A FRESH id is
+  // stored on every navigate, because SecuritySetup clears the previous one on
+  // unmount (e.g. when the user comes back here and continues again).
   const goToSecuritySetup = useCallback(
     (backupVerified: boolean) => {
       leavingIntentionallyRef.current = true;
+      const mnemonicSecretId = storeMnemonicSecret(mnemonic);
       navigation.navigate('SecuritySetup', {
-        mnemonic,
+        mnemonicSecretId,
         source: 'create',
         backupVerified,
       });

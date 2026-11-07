@@ -31,6 +31,7 @@ import {
   EncryptedBackupFile,
   EncryptedBackupFileV1,
   EncryptedBackupFileV2,
+  EncryptedBackupFileV3,
   ScryptKdfParams,
   BackupError,
 } from './types';
@@ -152,7 +153,7 @@ async function generateRandomHex(byteLength: number): Promise<string> {
  * authenticated and cannot be tampered without failing verification.
  */
 function canonicalV2Aad(params: {
-  version: 2;
+  version: 2 | 3;
   kdf: 'scrypt';
   kdfParams: ScryptKdfParams;
   salt: string;
@@ -254,7 +255,11 @@ export function validateEncryptedBackupFile(
     return v1;
   }
 
-  if (obj.version === 2) {
+  // v3 is the v2 construction under a different version number (TASK-504): the
+  // marker of an incomplete backup. It takes every v2 check, including the KDF
+  // caps, before any scrypt work.
+  if (obj.version === 2 || obj.version === 3) {
+    const version: 2 | 3 = obj.version;
     if (obj.kdf !== 'scrypt') {
       throw new BackupError('Unsupported backup KDF', 'VERSION_MISMATCH');
     }
@@ -319,17 +324,17 @@ export function validateEncryptedBackupFile(
       );
     }
 
-    const v2: EncryptedBackupFileV2 = {
-      format: 'voibackup',
-      version: 2,
-      kdf: 'scrypt',
+    const v2or3 = {
+      format: 'voibackup' as const,
+      version,
+      kdf: 'scrypt' as const,
       kdfParams: { N, r, p, dkLen },
       salt: obj.salt as string,
       iv: obj.iv as string,
       ciphertext: obj.ciphertext,
       hmac: obj.hmac,
     };
-    return v2;
+    return v2or3 as EncryptedBackupFileV2 | EncryptedBackupFileV3;
   }
 
   throw new BackupError(
@@ -349,8 +354,13 @@ export function validateEncryptedBackupFile(
  */
 export async function encryptBackup(
   data: string,
-  password: string
+  password: string,
+  options: { incomplete?: boolean } = {}
 ): Promise<EncryptedBackupFile> {
+  // An incomplete backup (a key was left out) takes envelope v3, so an app that
+  // predates it refuses the file instead of restoring it with a wipe. A complete
+  // backup keeps v2 and restores on every build that could before.
+  const version: 2 | 3 = options.incomplete ? 3 : 2;
   let keyWordArray: CryptoJS.lib.WordArray | null = null;
   let hmacKeyWordArray: CryptoJS.lib.WordArray | null = null;
 
@@ -389,7 +399,7 @@ export async function encryptBackup(
     // Encrypt-then-MAC. The MAC covers the canonical envelope params (AAD) plus
     // the ciphertext, binding N/r/p/dkLen/salt/iv/version to the ciphertext.
     const aad = canonicalV2Aad({
-      version: 2,
+      version,
       kdf: 'scrypt',
       kdfParams,
       salt,
@@ -402,14 +412,14 @@ export async function encryptBackup(
 
     return {
       format: 'voibackup',
-      version: 2,
+      version,
       kdf: 'scrypt',
       kdfParams,
       salt,
       iv,
       ciphertext,
       hmac,
-    };
+    } as EncryptedBackupFileV2 | EncryptedBackupFileV3;
   } catch (error) {
     throw new BackupError(
       `Encryption failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -483,7 +493,7 @@ async function decryptBackupV1(
  * Decrypt a v2 (scrypt) backup envelope.
  */
 async function decryptBackupV2(
-  encrypted: EncryptedBackupFileV2,
+  encrypted: EncryptedBackupFileV2 | EncryptedBackupFileV3,
   password: string
 ): Promise<string> {
   let keyWordArray: CryptoJS.lib.WordArray | null = null;
@@ -543,7 +553,7 @@ async function decryptBackupV2(
 /**
  * Decrypt backup data with a user-provided password.
  *
- * Dispatches on the envelope `version`: v1 -> legacy PBKDF2, v2 -> scrypt.
+ * Dispatches on the envelope `version`: v1 -> legacy PBKDF2, v2 and v3 -> scrypt.
  * Validates + caps the (untrusted) envelope first, so v2 parameter caps are
  * enforced before scrypt runs even when called directly.
  *

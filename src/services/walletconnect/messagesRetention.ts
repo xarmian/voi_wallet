@@ -679,8 +679,7 @@ async function readMainKeyConfirmed(): Promise<ReadResult> {
 }
 
 type StoreAction =
-  | { kind: 'set'; key: string; value: string }
-  | { kind: 'remove'; key: string };
+  { kind: 'set'; key: string; value: string } | { kind: 'remove'; key: string };
 
 /** Read + validate a metadata key. `null` means "fail the whole sweep closed". */
 function resolveMetadata(read: ReadResult): TopicLifetime[] | null {

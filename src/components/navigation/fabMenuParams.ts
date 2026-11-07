@@ -17,8 +17,7 @@ export interface FabMenuAccount {
 
 /** Params handed to a nested stack screen. Empty for screens that take none. */
 export type FabStackScreenParams =
-  | { accountId: string }
-  | Record<string, never>;
+  { accountId: string } | Record<string, never>;
 
 /**
  * Build the params for a nested stack destination.

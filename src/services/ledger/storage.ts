@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { LedgerDeviceInfo } from './transport';
 import type { DeviceModelId } from '@ledgerhq/devices';
+import { redactError } from '@/utils/logRedaction';
 
 export interface PersistedLedgerDevice {
   id: string;
@@ -74,7 +75,10 @@ export class LedgerDeviceStorage {
         return true;
       });
     } catch (error) {
-      console.error('Failed to load persisted Ledger devices:', error);
+      console.error(
+        'Failed to load persisted Ledger devices:',
+        redactError(error)
+      );
       return [];
     }
   }
@@ -124,7 +128,7 @@ export class LedgerDeviceStorage {
 
       console.log('Ledger device saved to storage:', deviceInfo.id);
     } catch (error) {
-      console.error('Failed to save Ledger device:', error);
+      console.error('Failed to save Ledger device:', redactError(error));
       // Don't throw - persistence failures shouldn't break functionality
     }
   }
@@ -144,7 +148,7 @@ export class LedgerDeviceStorage {
 
       console.log('Ledger device removed from storage:', deviceId);
     } catch (error) {
-      console.error('Failed to remove Ledger device:', error);
+      console.error('Failed to remove Ledger device:', redactError(error));
       // Don't throw - persistence failures shouldn't break functionality
     }
   }
@@ -157,7 +161,10 @@ export class LedgerDeviceStorage {
       const devices = await this.loadDevices();
       return devices.find((d) => d.id === deviceId) || null;
     } catch (error) {
-      console.error('Failed to find persisted Ledger device:', error);
+      console.error(
+        'Failed to find persisted Ledger device:',
+        redactError(error)
+      );
       return null;
     }
   }
@@ -179,7 +186,10 @@ export class LedgerDeviceStorage {
         );
       }
     } catch (error) {
-      console.error('Failed to update last connected timestamp:', error);
+      console.error(
+        'Failed to update last connected timestamp:',
+        redactError(error)
+      );
       // Don't throw - persistence failures shouldn't break functionality
     }
   }
@@ -192,7 +202,10 @@ export class LedgerDeviceStorage {
       await AsyncStorage.removeItem(LedgerDeviceStorage.STORAGE_KEY);
       console.log('All persisted Ledger devices cleared');
     } catch (error) {
-      console.error('Failed to clear persisted Ledger devices:', error);
+      console.error(
+        'Failed to clear persisted Ledger devices:',
+        redactError(error)
+      );
     }
   }
 

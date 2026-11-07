@@ -1,9 +1,12 @@
 import { useMemo } from 'react';
-import { StyleSheet, ViewStyle, TextStyle } from 'react-native';
+import { ViewStyle, TextStyle, ImageStyle } from 'react-native';
 import { useTheme } from '../contexts/ThemeContext';
 import { Theme, GlassEffect } from '../constants/themes';
 
-export const useThemedStyles = <T extends StyleSheet.NamedStyles<T>>(
+// RN 0.88 removed StyleSheet.NamedStyles; this is its former definition.
+type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
+
+export const useThemedStyles = <T extends NamedStyles<T>>(
   styleFactory: (theme: Theme) => T
 ): T => {
   const { theme } = useTheme();

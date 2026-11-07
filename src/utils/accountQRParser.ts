@@ -29,6 +29,21 @@ const storeAccountSecret = (secret: AccountSecret): string => {
 };
 
 /**
+ * TASK-224: stores a 25-word recovery phrase in the in-memory holder and
+ * returns an opaque id, so onboarding can hand SecuritySetupScreen a
+ * `mnemonicSecretId` route param instead of the raw phrase (route params are
+ * serializable navigation state and must never carry key material).
+ *
+ * Thin wrapper over the private {@link storeAccountSecret}: same shallow-copy
+ * semantics, same lifetime rules. The consumer reads it with
+ * {@link getAccountSecret} and MUST call {@link clearAccountSecret} once the
+ * phrase is consumed (success or failure) and on unmount. Nothing here is
+ * persisted: a cold boot finds the store empty and the id resolves to nothing.
+ */
+export const storeMnemonicSecret = (mnemonic: string): string =>
+  storeAccountSecret({ mnemonic });
+
+/**
  * Returns a stored account secret by id, or `undefined` if none exists.
  *
  * IMPORTANT: this returns a shallow COPY (`{ ...secret }`), so mutating or
@@ -102,10 +117,7 @@ export interface ScannedAccount {
 
 export interface QRAccountData {
   type:
-    | 'voi-accounts'
-    | 'single-mnemonic'
-    | 'single-private-key'
-    | 'address-list';
+    'voi-accounts' | 'single-mnemonic' | 'single-private-key' | 'address-list';
   accounts?: {
     address?: string;
     name?: string;

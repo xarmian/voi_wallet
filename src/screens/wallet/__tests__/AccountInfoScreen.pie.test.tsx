@@ -92,28 +92,29 @@ interface SvgHostNode {
   props: { d?: string; r?: number | string; fill?: { payload?: number } };
 }
 
-// react-test-renderer host names for react-native-svg's rendered components.
+// Host element types for react-native-svg's rendered components.
 const findHosts = (
-  tree: ReturnType<typeof render>,
+  tree: Awaited<ReturnType<typeof render>>,
   hostName: string
-): SvgHostNode[] => tree.UNSAFE_root.findAllByType(hostName as never);
+): SvgHostNode[] => tree.container.queryAll((node) => node.type === hostName);
 
-const paths = (tree: ReturnType<typeof render>) => findHosts(tree, 'RNSVGPath');
-const circles = (tree: ReturnType<typeof render>) =>
+const paths = (tree: Awaited<ReturnType<typeof render>>) =>
+  findHosts(tree, 'RNSVGPath');
+const circles = (tree: Awaited<ReturnType<typeof render>>) =>
   findHosts(tree, 'RNSVGCircle');
 
 describe('AssetDistributionPie', () => {
-  it('mounts and emits one path per slice for a representative distribution', () => {
+  it('mounts and emits one path per slice for a representative distribution', async () => {
     const data = distribution([50, 30, 20]);
-    const tree = render(<AssetDistributionPie data={data} />);
+    const tree = await render(<AssetDistributionPie data={data} />);
 
     expect(paths(tree)).toHaveLength(3);
     expect(circles(tree)).toHaveLength(0);
   });
 
-  it('fills the slices in array order, matching the hand-rolled legend', () => {
+  it('fills the slices in array order, matching the hand-rolled legend', async () => {
     const data = distribution([50, 30, 20]);
-    const tree = render(<AssetDistributionPie data={data} />);
+    const tree = await render(<AssetDistributionPie data={data} />);
     const rendered = paths(tree);
 
     // The legend at the bottom of the card lists `assetDistribution` in the
@@ -135,9 +136,9 @@ describe('AssetDistributionPie', () => {
     expect(ds[1]).toContain(bottom); // 30% picks up at 6 o'clock
   });
 
-  it('renders a single-slice distribution as a full circle, not a blank arc', () => {
+  it('renders a single-slice distribution as a full circle, not a blank arc', async () => {
     const data = distribution([100]);
-    const tree = render(<AssetDistributionPie data={data} />);
+    const tree = await render(<AssetDistributionPie data={data} />);
 
     expect(paths(tree)).toHaveLength(0);
     const [circle] = circles(tree);
@@ -145,15 +146,15 @@ describe('AssetDistributionPie', () => {
     expect(Number(circle.props.r)).toBeGreaterThan(0);
   });
 
-  it('does not throw and draws nothing for an empty distribution', () => {
-    const tree = render(<AssetDistributionPie data={[]} />);
+  it('does not throw and draws nothing for an empty distribution', async () => {
+    const tree = await render(<AssetDistributionPie data={[]} />);
 
     expect(paths(tree)).toHaveLength(0);
     expect(circles(tree)).toHaveLength(0);
   });
 
-  it('does not throw and draws nothing when every population is zero', () => {
-    const tree = render(
+  it('does not throw and draws nothing when every population is zero', async () => {
+    const tree = await render(
       <AssetDistributionPie data={distribution([0, 0, 0])} />
     );
 

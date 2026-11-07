@@ -13,6 +13,8 @@ import {
   AVAILABLE_NETWORKS,
 } from '@/services/network/config';
 import { MultiAccountWalletService } from '@/services/wallet';
+import { redactAddress, redactError } from '@/utils/logRedaction';
+import { fetchBuffered } from '@/utils/fetchBuffered';
 
 export class AuthAccountDiscoveryService {
   private static instance: AuthAccountDiscoveryService;
@@ -178,8 +180,8 @@ export class AuthAccountDiscoveryService {
         return accounts;
       } catch (error) {
         console.warn(
-          `Failed to search for auth accounts with address ${authAddress} on ${networkName}:`,
-          error
+          `Failed to search for auth accounts with address ${redactAddress(authAddress)} on ${networkName}:`,
+          redactError(error)
         );
         return [];
       }
@@ -223,18 +225,16 @@ export class AuthAccountDiscoveryService {
 
         const url = `${config.indexerUrl}/v2/accounts?${params.toString()}`;
 
-        // Create timeout controller for React Native compatibility
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-        const response = await fetch(url, {
-          headers: {
-            'X-API-Key': config.token || '',
+        // TASK-440 #9: the 30 s deadline covers the body read too.
+        const response = await fetchBuffered(
+          url,
+          {
+            headers: {
+              'X-API-Key': config.token || '',
+            },
           },
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeoutId);
+          30000
+        );
 
         if (!response.ok) {
           if (response.status === 429) {
@@ -277,7 +277,9 @@ export class AuthAccountDiscoveryService {
 
         nextToken = data['next-token'];
       } catch (error) {
-        console.error(`Failed to query indexer for auth accounts: ${error}`);
+        console.error(
+          `Failed to query indexer for auth accounts: ${redactError(error)}`
+        );
         break; // Stop pagination on error
       }
     } while (nextToken);
@@ -316,7 +318,10 @@ export class AuthAccountDiscoveryService {
         }
       } catch (error) {
         // Non-critical, continue without first seen date
-        console.warn(`Could not get first transaction for ${address}:`, error);
+        console.warn(
+          `Could not get first transaction for ${redactAddress(address)}:`,
+          redactError(error)
+        );
       }
 
       // Get last activity from account data if available

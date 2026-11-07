@@ -52,6 +52,14 @@ export interface Message {
   sourceId?: number;
   /** Transaction fee paid in microVOI */
   fee: number;
+  /**
+   * Set on a local placeholder whose send may have landed but returned no
+   * txid (TASK-454). With no txid there is no identity to match on chain, so
+   * it keeps its spinner for a fixed window, then ages out. Memory-only.
+   */
+  unsettled?: boolean;
+  /** When the send attempt behind an unsettled placeholder started (ms). */
+  attemptedAt?: number;
 }
 
 /**

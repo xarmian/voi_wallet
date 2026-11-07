@@ -18,11 +18,19 @@
  */
 
 let unlocked = false;
+const listeners = new Set<() => void>();
 
 export const AppLockSignal = {
   /** AuthContext writes the current unlock state here on every transition. */
   setUnlocked(value: boolean): void {
     unlocked = value;
+    listeners.forEach((listener) => listener());
+  },
+  subscribe(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
   },
   /** True when the app is unlocked (safe to derive keys). */
   isUnlocked(): boolean {

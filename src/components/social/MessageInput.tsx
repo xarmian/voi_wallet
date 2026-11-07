@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Keyboard,
+  type TextInputInstance,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -236,7 +237,7 @@ export default function MessageInput({
   const [message, setMessage] = useState('');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState(0);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<TextInputInstance>(null);
 
   const canSend = message.trim().length > 0 && !isSending && !disabled;
   const isOverLimit = message.length > MAX_MESSAGE_LENGTH;

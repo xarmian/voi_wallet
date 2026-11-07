@@ -35,6 +35,11 @@ import {
 import { useWalletStore } from '@/store/walletStore';
 import AuthAccountDiscovery from '@/components/auth-account/AuthAccountDiscovery';
 import { AccountSecureStorage } from '@/services/secure';
+import {
+  clearOrphanPin,
+  onboardingNeedsSecuritySetup,
+  withStrictReadTimeout,
+} from '@/services/secure/orphanPin';
 
 type ImportState = {
   accounts: LedgerAccountDiscoveryResult[];
@@ -242,16 +247,10 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
       return;
     }
 
-    try {
-      const hasPin = await AccountSecureStorage.hasPin();
-      if (!hasPin) {
-        navigation.replace('SecuritySetup', { source: 'ledger' });
-      } else {
-        navigation.navigate('Main');
-      }
-    } catch (error) {
-      console.error('Failed to finalize ledger onboarding:', error);
+    if (await onboardingNeedsSecuritySetup()) {
       navigation.replace('SecuritySetup', { source: 'ledger' });
+    } else {
+      navigation.navigate('Main');
     }
   }, [isOnboarding, navigation]);
 
@@ -386,9 +385,6 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
         selectedIndexes.has(account.derivationIndex) && !account.existsInWallet
     );
 
-    // Store the accounts being imported for auth discovery
-    setImportedLedgerAccounts(toImport);
-
     if (toImport.length === 0) {
       Alert.alert(
         'No Accounts Selected',
@@ -406,6 +402,18 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
     };
 
     try {
+      // Heal before any store write makes the wallet nonempty. Persisting PIN
+      // removal keeps later batches and restarts on the normal no-PIN path.
+      // The onboarding check excludes every existing wallet account type.
+      if (
+        isOnboarding &&
+        (await onboardingNeedsSecuritySetup()) &&
+        (await withStrictReadTimeout(AccountSecureStorage.hasPinStrict()))
+      ) {
+        await clearOrphanPin();
+      }
+      // Store the accounts being imported for auth discovery.
+      setImportedLedgerAccounts(toImport);
       for (const account of toImport) {
         try {
           const derivedFromScan: LedgerAccountDerivation = {
@@ -588,6 +596,7 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
                 navigation.goBack();
               }
             }}
+            accessibilityLabel="Back"
             style={styles.backButton}
           >
             <Ionicons name="chevron-back" size={24} color={colors.text} />

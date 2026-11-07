@@ -103,10 +103,7 @@ export async function createRemoteSigningRequestFromBase64(
  * Determines the signing method needed for a set of transactions
  */
 export type SigningMethod =
-  | 'local'
-  | 'ledger'
-  | 'remote_signer'
-  | 'cannot_sign';
+  'local' | 'ledger' | 'remote_signer' | 'cannot_sign';
 
 export interface SigningMethodResult {
   method: SigningMethod;

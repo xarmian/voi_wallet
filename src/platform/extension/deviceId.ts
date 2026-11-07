@@ -11,13 +11,23 @@ const DEVICE_ID_KEY = 'voi_device_installation_id';
 
 export class ExtensionDeviceIdAdapter implements DeviceIdAdapter {
   private cachedId: string | null = null;
+  // TASK-449: one load at a time (see the mobile adapter).
+  private inFlight: Promise<string> | null = null;
 
   async getDeviceId(): Promise<string> {
     // Return cached value if available
     if (this.cachedId) {
       return this.cachedId;
     }
+    if (!this.inFlight) {
+      this.inFlight = this.loadOrCreate().finally(() => {
+        this.inFlight = null;
+      });
+    }
+    return this.inFlight;
+  }
 
+  private async loadOrCreate(): Promise<string> {
     // Check if we already have a stored ID
     const existing = await extensionStorage.getItem(DEVICE_ID_KEY);
     if (existing) {

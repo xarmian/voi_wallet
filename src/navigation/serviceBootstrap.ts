@@ -1,3 +1,4 @@
+import { StackActions } from '@react-navigation/native';
 import { Platform } from 'react-native';
 
 import { detectPlatform } from '@/platform/detection';
@@ -10,6 +11,7 @@ import { WalletConnectService } from '@/services/walletconnect';
 import { DeepLinkService } from '@/services/deeplink';
 import { extensionDeepLinkHandler } from '@/services/deeplink/extensionHandler';
 import { isWalletConnectUri } from '@/services/walletconnect/utils';
+import { redactError, redactSensitiveForLog } from '@/utils/logRedaction';
 import { notificationService } from '@/services/notifications';
 import {
   takeAccountSubscribeToken,
@@ -17,7 +19,19 @@ import {
 } from '@/services/notifications/subscribePass';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { ledgerTransportService } from '@/services/ledger/transport';
-import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
+import {
+  QueueFullError,
+  TransactionRequestQueue,
+} from '@/services/walletconnect/TransactionRequestQueue';
+import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestResponder';
+import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
+import { createCoordinatorTransport } from '@/services/walletconnect/coordinatorTransport';
+import { setupIncompleteGuard } from '@/services/walletconnect/entryGuard';
+import {
+  requestRefFor,
+  proposalRefFor,
+  requestExpiryOf,
+} from '@/services/walletconnect/requestRefs';
 
 /**
  * Whole-app service boot, extracted verbatim from AppNavigator's mount effect
@@ -98,6 +112,16 @@ export const initializeServices = async ({
     let onProposal: ((proposal: any) => void) | null = null;
     let onRequest: ((requestEvent: any) => Promise<void>) | null = null;
 
+    const onSessionGone = (event: { topic?: string }) => {
+      if (event?.topic) {
+        void RequestCoordinator.getInstance().onSessionEnded(event.topic);
+      }
+    };
+    const onSessionDisconnected = (topic: string) => {
+      if (topic) void RequestCoordinator.getInstance().onSessionEnded(topic);
+    };
+    // The v1 disconnect path is not wired to the coordinator in this unit.
+
     // Whether the deferred (off-critical-path) per-account subscribe should
     // run. Set once the notification service is initialized and a push token
     // is registered; the actual subscribe is scheduled after startup.
@@ -115,65 +139,203 @@ export const initializeServices = async ({
       // AppNavigator navigation handlers must attach to that same initialized
       // instance, so init and .on(...) stay together in one unit.
       const initWalletConnect = async () => {
+        RequestCoordinator.getInstance().setTransport(
+          createCoordinatorTransport()
+        );
+        // Every new request and proposal, v2 here and v1 through DeepLinkService,
+        // is admitted by this one coordinator, so one guard covers all of them.
+        // While PIN setup is unfinished the dApp is answered at once and no
+        // route, queue entry or review is created.
+        RequestCoordinator.getInstance().setEntryGuard(setupIncompleteGuard);
+        // TASK-394: answer requests the transaction queue drops unshown (full
+        // queue, stale entry) so the dApp is not left waiting. Installed
+        // before v2 init so v1 requests (DeepLinkService) are covered even if
+        // v2 init fails.
+        TransactionRequestQueue.setDroppedRequestHandler(answerDroppedRequests);
         try {
           wcService = WalletConnectService.getInstance();
           await wcService.initialize();
 
+          // TASK-382: WalletConnect events go through DeepLinkService's
+          // cold-start route queue (DR-10), so an event that arrives before
+          // the navigation container is ready (a wc: link that woke the app)
+          // waits for it instead of being dropped.
+          const deepLinkService = DeepLinkService.getInstance();
+
           // Listen for WalletConnect session proposals and navigate to approval screen
-          onProposal = (proposal: any) => {
+          onProposal = async (proposal: any) => {
+            const coordinator = RequestCoordinator.getInstance();
+            const ref = proposalRefFor(proposal);
+            const admission = await coordinator.admit(
+              ref,
+              proposal.expiryTimestamp
+            );
+            if (admission.action !== 'show') return;
             try {
-              if (navigationRef.current?.isReady?.()) {
-                // Close any open QR scanner first when possible
-                if (navigationRef.current.canGoBack?.()) {
-                  navigationRef.current.goBack();
+              await deepLinkService.deliverRoute(
+                `wc:proposal:${proposal?.id}`,
+                () => {
+                  try {
+                    if (navigationRef.current?.isReady?.()) {
+                      // Close only the QR scanner before showing the proposal.
+                      if (
+                        navigationRef.current.getCurrentRoute?.()?.name ===
+                          'QRScanner' &&
+                        navigationRef.current.canGoBack?.()
+                      ) {
+                        navigationRef.current.goBack();
+                      }
+                      navigationRef.current.dispatch(
+                        StackActions.push('WalletConnectSessionProposal', {
+                          proposal,
+                        })
+                      );
+                    } else {
+                      coordinator.release(ref);
+                      console.error(
+                        'WalletConnect session proposal not shown: navigation not ready'
+                      );
+                    }
+                  } catch (error) {
+                    coordinator.release(ref);
+                    console.error(
+                      'Failed to navigate to WalletConnectSessionProposal:',
+                      redactError(error)
+                    );
+                  }
                 }
-                // Then navigate to session proposal
-                navigationRef.current.navigate('WalletConnectSessionProposal', {
-                  proposal,
-                });
-              }
-            } catch (err) {
+              );
+            } catch (error) {
+              coordinator.release(ref);
               console.error(
-                'Failed to navigate to WalletConnectSessionProposal:',
-                err
+                'Failed to deliver WalletConnect session proposal:',
+                redactError(error)
               );
             }
           };
           wcService.on('session_proposal', onProposal);
 
           onRequest = async (requestEvent: any) => {
-            try {
-              if (navigationRef.current?.isReady?.()) {
-                // Get current route name
-                const currentRoute = navigationRef.current.getCurrentRoute();
+            // TASK-257: surface each (topic, id) once. A repeat emit (relay
+            // redelivery, a second listener) is dropped here, including while
+            // the original is still on screen. The claim lives until the
+            // request is shown or queued; a failed delivery releases it
+            // (TransactionRequestQueue.claim documents the lifecycle).
+            if (
+              !TransactionRequestQueue.claim(
+                requestEvent?.id,
+                requestEvent?.topic
+              )
+            ) {
+              void RequestCoordinator.getInstance().retryUnpublished(
+                requestRefFor(requestEvent, 2)
+              );
+              console.log(
+                '[AppNavigator] Duplicate transaction request ignored'
+              );
+              return;
+            }
+            const coordinator = RequestCoordinator.getInstance();
+            const ref = requestRefFor(requestEvent, 2);
+            const admission = await coordinator.admit(
+              ref,
+              requestExpiryOf(requestEvent)
+            );
+            if (admission.action !== 'show') {
+              TransactionRequestQueue.releaseClaim(
+                requestEvent.id,
+                requestEvent.topic
+              );
+              return;
+            }
+            // Not shown and not queued: let a redelivery of it through.
+            const release = () => {
+              TransactionRequestQueue.releaseClaim(
+                requestEvent.id,
+                requestEvent.topic
+              );
+              coordinator.release(ref);
+            };
 
-                // Check if we're already on the TransactionRequestScreen
-                if (currentRoute?.name === 'WalletConnectTransactionRequest') {
-                  // Enqueue the request instead of navigating immediately
-                  console.log(
-                    '[AppNavigator] Currently on transaction screen, enqueueing request'
-                  );
-                  await TransactionRequestQueue.enqueue({
-                    id: requestEvent.id,
-                    topic: requestEvent.topic,
-                    params: requestEvent.params,
-                  });
+            const showOrQueue = async () => {
+              let delivered = false;
+              try {
+                const nav = navigationRef.current;
+                if (nav?.isReady?.()) {
+                  // Check if we're already on the TransactionRequestScreen
+                  if (
+                    nav.getCurrentRoute()?.name ===
+                    'WalletConnectTransactionRequest'
+                  ) {
+                    // Enqueue the request instead of navigating immediately;
+                    // that screen takes it next. The claim stays: queued.
+                    console.log(
+                      '[AppNavigator] Currently on transaction screen, enqueueing request'
+                    );
+                    try {
+                      await TransactionRequestQueue.enqueue({
+                        id: requestEvent.id,
+                        topic: requestEvent.topic,
+                        params: requestEvent.params,
+                      });
+                    } catch (err) {
+                      if (!(err instanceof QueueFullError)) throw err;
+                      // TASK-394: answer it as dropped (marks it displayed,
+                      // so a redelivery is not shown) instead of releasing.
+                      TransactionRequestQueue.reportDropped(
+                        [
+                          {
+                            id: requestEvent.id,
+                            topic: requestEvent.topic,
+                            params: requestEvent.params,
+                            timestamp: Date.now(),
+                          },
+                        ],
+                        'full'
+                      );
+                    }
+                  } else {
+                    // Navigate immediately if not on transaction screen
+                    nav.navigate('WalletConnectTransactionRequest', {
+                      requestEvent,
+                    });
+                    TransactionRequestQueue.markDisplayed(
+                      requestEvent.id,
+                      requestEvent.topic
+                    );
+                  }
+                  delivered = true;
                 } else {
-                  // Navigate immediately if not on transaction screen
-                  navigationRef.current.navigate(
-                    'WalletConnectTransactionRequest',
-                    { requestEvent }
+                  console.error(
+                    'WalletConnect transaction request not shown: navigation not ready'
                   );
                 }
+              } catch (err) {
+                console.error(
+                  'Failed to handle WalletConnect transaction request:',
+                  redactError(err)
+                );
+              } finally {
+                if (!delivered) release();
               }
-            } catch (err) {
-              console.error(
-                'Failed to handle WalletConnect transaction request:',
-                err
-              );
-            }
+            };
+
+            await deepLinkService
+              .deliverSigningRequest(showOrQueue)
+              .catch((err) => {
+                // The route queue never rejects; if it ever did, the handler
+                // never ran, so the request was not delivered.
+                release();
+                console.error(
+                  'Failed to deliver WalletConnect transaction request:',
+                  redactError(err)
+                );
+              });
           };
           wcService.on('session_request', onRequest);
+          wcService.on('session_deleted', onSessionGone);
+          wcService.on('session_expired', onSessionGone);
+          wcService.on('session_disconnected', onSessionDisconnected);
 
           console.log('WalletConnect service initialized');
         } catch (error) {
@@ -207,7 +369,11 @@ export const initializeServices = async ({
           // Initialize extension-specific deep link handling (for WalletConnect URIs from getvoi.app)
           if (Platform.OS === 'web' && detectPlatform() === 'extension') {
             extensionDeepLinkHandler.initialize(async (uri: string) => {
-              console.log('[AppNavigator] Extension received WC URI:', uri);
+              // The URI carries the session symKey (TASK-290 sweep).
+              console.log(
+                '[AppNavigator] Extension received WC URI:',
+                redactSensitiveForLog(uri)
+              );
               if (isWalletConnectUri(uri)) {
                 await deepLinkService.testDeepLink(uri);
               }
@@ -241,8 +407,10 @@ export const initializeServices = async ({
           // Check if user has a wallet, then register the push token
           const wallet = await MultiAccountWalletService.getCurrentWallet();
           if (wallet && wallet.accounts.length > 0) {
-            // Register push token if permissions granted
-            const token = await notificationService.registerPushToken();
+            // Refresh an opted-in user's token without prompting at startup.
+            const token = await notificationService.registerPushToken({
+              prompt: false,
+            });
             if (token) {
               // Defer the per-account subscribe off the critical path; it
               // re-reads the wallet at run time so startup-created accounts
@@ -312,15 +480,37 @@ export const initializeServices = async ({
           console.log(
             '[AppNavigator] Processing queued transaction requests on startup'
           );
-          const nextRequest = await TransactionRequestQueue.peek();
-          if (nextRequest && navigationRef.current) {
-            // Dequeue and navigate to the first request
-            await TransactionRequestQueue.dequeue();
-            navigationRef.current.navigate('WalletConnectTransactionRequest', {
-              requestEvent: nextRequest,
-              version: nextRequest.version,
-            });
-          }
+          // TASK-257/TASK-382: through the same route queue as live
+          // requests, so it waits for navigation and runs in order with
+          // them. Not awaited: startup must not block on navigation.
+          void DeepLinkService.getInstance().deliverSigningRequest(async () => {
+            const nav = navigationRef.current;
+            if (!nav?.isReady?.()) {
+              // Left queued; nothing was dequeued.
+              console.error(
+                '[AppNavigator] Queued transaction requests not shown: navigation not ready'
+              );
+              return;
+            }
+            // The transaction screen owns the queue while it is showing
+            // (it takes the next request when the user answers this one),
+            // exactly as a live request arriving now would be queued.
+            if (
+              nav.getCurrentRoute()?.name === 'WalletConnectTransactionRequest'
+            ) {
+              return;
+            }
+            // Atomic take: skips (drops) only requests already displayed this
+            // session, and marks + shows the next one under the queue lock, so
+            // a screen completion racing this drain cannot show it too. It is
+            // removed only once shown; a failed navigate leaves it queued.
+            await TransactionRequestQueue.takeNext((req) =>
+              nav.navigate('WalletConnectTransactionRequest', {
+                requestEvent: req,
+                version: req.version,
+              })
+            );
+          });
         }
       } catch (error) {
         console.error(
@@ -375,10 +565,17 @@ export const initializeServices = async ({
         }
         if (wcService && onRequest) {
           wcService.off?.('session_request', onRequest);
+          wcService.off?.('session_deleted', onSessionGone);
+          wcService.off?.('session_expired', onSessionGone);
+          wcService.off?.('session_disconnected', onSessionDisconnected);
         }
         if (!isSignerMode) {
           extensionDeepLinkHandler.cleanup();
           notificationService.cleanup();
+          // Removes the Linking 'url' subscription and the navigation-ready
+          // listeners. A route still queued for readiness is kept and is
+          // delivered after a remount (TASK-381).
+          DeepLinkService.getInstance().cleanup();
         }
       } catch {}
     };

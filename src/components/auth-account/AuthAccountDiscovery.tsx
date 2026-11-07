@@ -17,6 +17,7 @@ import { useWalletStore } from '@/store/walletStore';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import AuthAccountList from './AuthAccountList';
 import AuthAccountPreview from './AuthAccountPreview';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 interface AuthAccountDiscoveryProps {
   ledgerAccounts: LedgerAccountDiscoveryResult[]; // The Ledger accounts that were imported
@@ -217,8 +218,8 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
           await new Promise((resolve) => setTimeout(resolve, 100));
         } catch (error) {
           console.error(
-            `Failed to import auth account ${authAccount.address}:`,
-            error
+            `Failed to import auth account ${redactAddress(authAccount.address)}:`,
+            redactError(error)
           );
           results.failed += 1;
         }

@@ -1,4 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import {
+  routeReviewBinding,
+  type ReviewBinding,
+} from '@/services/walletconnect/reviewBinding';
+import React, {
+  useState,
+  useMemo,
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+} from 'react';
 import {
   View,
   Text,
@@ -7,8 +17,17 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  AppState,
 } from 'react-native';
 import { Image } from 'expo-image';
+import Toast from 'react-native-toast-message';
+import { redactError } from '@/utils/logRedaction';
+import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
+import {
+  proposalRefFor,
+  v1ProposalRefFor,
+} from '@/services/walletconnect/requestRefs';
+import RequestAgeLabel from '@/components/walletconnect/RequestAgeLabel';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -22,15 +41,31 @@ import {
   VOI_CHAIN_DATA,
   ALGORAND_MAINNET_CHAIN_DATA,
 } from '@/services/walletconnect';
+import { resolveV1Chain } from '@/services/walletconnect/v1/config';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountMetadata } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
-import { getSignableAccounts } from '@/services/walletconnect/utils';
+import {
+  getProposalChains,
+  resolveProposalEligibility,
+} from '@/services/walletconnect/utils';
+import { useExperimentalStore } from '@/store/experimentalStore';
 import AccountSelectionItem from '@/components/walletconnect/AccountSelectionItem';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useAuth } from '@/contexts/AuthContext';
+import {
+  reviewGrant,
+  walletConnectProposalKey,
+  walletConnectRequestKey,
+} from '@/services/auth/reviewGrant';
+import LockedRequestGate from '@/components/walletconnect/LockedRequestGate';
+import {
+  useAppSwitcherProtection,
+  useSecureScreen,
+} from '@/hooks/useSecureScreen';
 
 type SessionProposalScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -46,23 +81,154 @@ interface Props {
   route: SessionProposalScreenRouteProp;
 }
 
+type ConnectParams = RootStackParamList['WalletConnectSessionProposal'];
+
+/** The route screen: a thin wrapper that binds the review to its router. */
 export default function SessionProposalScreen({ navigation, route }: Props) {
+  const binding = useMemo(
+    () => routeReviewBinding(navigation, route.key),
+    [navigation, route.key]
+  );
+  return <ConnectReview params={route?.params} binding={binding} />;
+}
+
+export function ConnectReview({
+  params,
+  binding,
+}: {
+  params: ConnectParams | undefined;
+  binding: ReviewBinding;
+}) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const scoped = binding.nav;
 
   // Check for v1 or v2 proposal
-  const proposal = route?.params?.proposal as SessionProposal | undefined;
-  const version = route?.params?.version as number | undefined;
-  const v1SessionRequest = route?.params?.sessionRequest;
+  const proposal = params?.proposal as SessionProposal | undefined;
+  const version = params?.version as number | undefined;
+  const v1SessionRequest = params?.sessionRequest;
 
   // Determine which version we're handling
-  const isV1 = version === 1 || v1SessionRequest;
+  const isV1 = version === 1 || !!v1SessionRequest;
 
+  const coordinator = RequestCoordinator.getInstance();
+  const proposalId = proposal?.id;
+  const pairingTopic = proposal?.pairingTopic;
+  const hasV1Request = !!v1SessionRequest;
+  const v1ProposalId = v1SessionRequest?.id;
+  // Equivalent route params must not replay the abandonment cleanup.
+  const ref = useMemo(
+    () =>
+      isV1 && hasV1Request
+        ? v1ProposalRefFor({ id: v1ProposalId })
+        : proposalId !== undefined && pairingTopic !== undefined
+          ? proposalRefFor({ id: proposalId, pairingTopic })
+          : null,
+    [isV1, hasV1Request, v1ProposalId, proposalId, pairingTopic]
+  );
+  const decidedRef = useRef(false);
+  const approvingRef = useRef(false);
+  const admittingRef = useRef(false);
+  const [admitted, setAdmitted] = useState(false);
+
+  // TASK-438: while the wallet is locked the connect screen shows only the
+  // gate (dApp name and icon, URL host, requested networks; Unlock to review /
+  // Reject). Accounts are not loaded, probed or mounted until the review
+  // capability covers this proposal. A late proposal requires fresh authentication;
+  // background, idle timeout and re-lock end its review access.
+  useSecureScreen();
+  useAppSwitcherProtection();
+  const { authState } = useAuth();
+  const requestKey = proposal
+    ? walletConnectProposalKey(proposal.pairingTopic, proposal.id)
+    : walletConnectRequestKey(
+        'v1',
+        `proposal-${v1SessionRequest?.peerId ?? ''}`
+      );
+  const requiresReviewUnlock = authState.isLocked || !authState.isAuthenticated;
+  const grantValid = useSyncExternalStore(reviewGrant.subscribe, () =>
+    reviewGrant.isValid(requestKey)
+  );
+  const [foreground, setForeground] = useState(
+    AppState.currentState !== 'background' &&
+      AppState.currentState !== 'inactive'
+  );
+  const canReview = !requiresReviewUnlock || (grantValid && foreground);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      setForeground(state === 'active');
+      if (state === 'background') {
+        reviewGrant.revoke(true, 'background');
+        if (!decidedRef.current && !approvingRef.current && ref) {
+          decidedRef.current = true;
+          void coordinator.settle(ref, 'background');
+          scoped.goBack();
+          Toast.show({
+            type: 'info',
+            text1: 'Request closed',
+            text2: 'Try again in the dApp.',
+          });
+        }
+      }
+    });
+    return () => subscription.remove();
+  }, [coordinator, ref, scoped]);
+
+  // However the screen is left, this proposal leaves the sitting.
+  // Leaving without choosing is reported by `beforeRemove` below (a navigation
+  // event), not by this cleanup: an effect replay must never decline a request.
+  useEffect(() => () => reviewGrant.leave(requestKey), [requestKey]);
+  useEffect(
+    () =>
+      binding.onLeave(() => {
+        reviewGrant.leave(requestKey);
+        if (!decidedRef.current && ref) {
+          decidedRef.current = true;
+          void coordinator.settle(ref, 'abandoned');
+        }
+      }),
+    [coordinator, ref, binding, requestKey]
+  );
+
+  useEffect(() => {
+    if (!ref) return;
+    return coordinator.subscribe(ref, ({ reason }) => {
+      if (decidedRef.current || admittingRef.current) return;
+      decidedRef.current = true;
+      if (reason === 'expired' || reason === 'session-ended') {
+        Alert.alert(
+          'Request ended',
+          reason === 'expired'
+            ? 'Request expired. Try again in the dApp.'
+            : 'Connection ended. Reconnect in the dApp.'
+        );
+        scoped.goBack();
+      }
+    });
+  }, [coordinator, ref, scoped, admitted]);
+
+  const handleBack = () => {
+    if (!decidedRef.current && ref) {
+      decidedRef.current = true;
+      void coordinator.settle(ref, 'abandoned');
+    }
+    scoped.goBack();
+  };
+
+  const [probing, setProbing] = useState(true);
+  const [eligibility, setEligibility] = useState<
+    Awaited<ReturnType<typeof resolveProposalEligibility>>
+  >([]);
+  const [approvedChains, setApprovedChains] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [accounts, setAccounts] = useState<AccountMetadata[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(
     new Set()
   );
+
+  const generation = useRef(0);
+  const inFlight = useRef(false);
 
   useEffect(() => {
     // Only load accounts when there's actually a proposal to act on. The
@@ -70,14 +236,62 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     // unconditional), so without this guard loadAccounts() — and its error
     // Alerts — would fire on the "No proposal data" screen too.
     if (!proposal && !v1SessionRequest) return;
+    // TASK-438: no account read or keystore probe before review is allowed.
+    if (!canReview) return;
     loadAccounts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; proposal/v1SessionRequest are stable route params
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when the proposal changes or review becomes allowed
+  }, [proposal, v1SessionRequest, canReview]);
 
   const loadAccounts = async () => {
+    const current = ++generation.current;
+    inFlight.current = true;
+    setProbing(true);
     try {
+      if (ref) {
+        admittingRef.current = true;
+        const state = await coordinator.ensureOpen(
+          ref,
+          isV1 ? undefined : proposal?.expiryTimestamp
+        );
+        admittingRef.current = false;
+        if (decidedRef.current) return;
+        if (state !== 'open') {
+          decidedRef.current = true;
+          if (state === 'expired' || state === 'handled') {
+            Toast.show({
+              type: 'info',
+              text1:
+                state === 'expired'
+                  ? 'Request expired'
+                  : 'Request already handled',
+              text2:
+                state === 'expired'
+                  ? 'Try again in the dApp.'
+                  : 'Check the dApp before you try again.',
+            });
+          }
+          scoped.goBack();
+          return;
+        }
+        setAdmitted(true);
+      }
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
-      const signableAccounts = getSignableAccounts(allAccounts);
+      const v1Chain = resolveV1Chain(v1SessionRequest?.chainId);
+      const chains = isV1
+        ? v1Chain
+          ? [v1Chain.chainId]
+          : []
+        : getProposalChains(
+            proposal!,
+            useExperimentalStore.getState().allowUnsupportedNetworks
+          );
+      const result = await resolveProposalEligibility(allAccounts, chains);
+      if (current !== generation.current) return;
+      setApprovedChains(chains);
+      setEligibility(result);
+      const signableAccounts = result
+        .filter((entry) => entry.eligibleChains.length)
+        .map((entry) => entry.account);
       setAccounts(signableAccounts);
       // Pre-select all signable accounts by default
       const initialSelection = new Set(
@@ -85,12 +299,27 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       );
       setSelectedAccountIds(initialSelection);
     } catch (error) {
-      console.error('Failed to load accounts:', error);
+      if (current !== generation.current) return;
+      console.error('Failed to load accounts:', redactError(error));
       Alert.alert('Error', 'Failed to load accounts');
+      if (!decidedRef.current && ref) {
+        decidedRef.current = true;
+        void coordinator.settle(ref, 'load-failed');
+        scoped.goBack();
+      }
+    } finally {
+      admittingRef.current = false;
+      if (current === generation.current) {
+        inFlight.current = false;
+        setProbing(false);
+      }
     }
   };
 
   const handleApprove = async () => {
+    if (approvingRef.current) return;
+    // TASK-438: connecting shares account addresses, so it needs review access.
+    if (requiresReviewUnlock && !reviewGrant.isValid(requestKey)) return;
     if (accounts.length === 0) {
       Alert.alert('Error', 'No signable accounts available');
       return;
@@ -101,11 +330,29 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       return;
     }
 
+    approvingRef.current = true;
     setIsLoading(true);
+    let approved = false;
     try {
       const selectedAccounts = accounts.filter((account) =>
         selectedAccountIds.has(account.id)
       );
+
+      if (!ref) return;
+      let won: boolean;
+      try {
+        won = await coordinator.decide(ref, 'approved');
+      } catch {
+        Alert.alert('Error', 'Could not record your approval. Try again.');
+        return;
+      }
+      if (!won) {
+        decidedRef.current = true;
+        Alert.alert('Request ended', 'Request expired. Try again in the dApp.');
+        scoped.goBack();
+        return;
+      }
+      decidedRef.current = true;
 
       if (isV1) {
         // Handle v1 session approval
@@ -119,19 +366,27 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         await wcService.approveSession(proposal!, selectedAccounts);
       }
 
-      Alert.alert('Success', 'Successfully connected to dApp', [
-        {
-          text: 'OK',
-          onPress: () => navigation.navigate('Main'),
-        },
-      ]);
+      approved = true;
+
+      // Leave only this Connect route before the alert; stacked requests stay.
+      scoped.popOrReplace('Main');
+      Alert.alert('Success', 'Successfully connected to dApp');
     } catch (error) {
-      console.error('Failed to approve session:', error);
-      Alert.alert(
-        'Error',
-        error instanceof Error ? error.message : 'Failed to connect to dApp'
-      );
+      console.error('Failed to approve session:', redactError(error));
+      const message =
+        error instanceof Error ? error.message : 'Failed to connect to dApp';
+      if (!approved && ref && !message.includes('requires a network')) {
+        await coordinator.sendError(
+          ref,
+          message.includes('No signable accounts')
+            ? 'unsupported-accounts'
+            : 'load-failed'
+        );
+      }
+      Alert.alert('Error', message);
+      if (!approved) scoped.goBack();
     } finally {
+      approvingRef.current = false;
       setIsLoading(false);
     }
   };
@@ -139,22 +394,13 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   const handleReject = async () => {
     setIsLoading(true);
     try {
-      if (isV1) {
-        // Handle v1 session rejection
-        const v1Client = WalletConnectV1Client.getInstance();
-        await v1Client.rejectSession();
-      } else {
-        // Handle v2 session rejection
-        const wcService = WalletConnectService.getInstance();
-        await wcService.rejectSession(proposal!);
+      if (ref) {
+        decidedRef.current = true;
+        await coordinator.settle(ref, 'declined');
       }
-
-      navigation.goBack();
-    } catch (error) {
-      console.error('Failed to reject session:', error);
-      // If rejection fails (e.g., proposal no longer exists), just navigate back
-      // This can happen if the dApp closed the connection before we rejected
-      navigation.goBack();
+      // If rejection fails (e.g., proposal no longer exists), just navigate back.
+      // The coordinator swallows publish failures, including a closed connection.
+      scoped.goBack();
     } finally {
       setIsLoading(false);
     }
@@ -214,7 +460,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
 
     // v2 permissions - collect all chains and methods across namespaces
     const allChains = new Set<string>();
-    const allRequestedChains = new Set<string>(); // For debug logging
     const allMethods = new Set<string>();
     const supportedChainIds = [
       VOI_CHAIN_DATA.chainId,
@@ -226,7 +471,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       Object.values(proposal!.requiredNamespaces).forEach((namespace) => {
         if (namespace.chains) {
           namespace.chains.forEach((chain: string) => {
-            allRequestedChains.add(chain); // Track all requested chains
             // Only add supported chains
             if (supportedChainIds.includes(chain)) {
               allChains.add(chain);
@@ -244,7 +488,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       Object.values(proposal!.optionalNamespaces).forEach((namespace) => {
         if (namespace.chains) {
           namespace.chains.forEach((chain: string) => {
-            allRequestedChains.add(chain); // Track all requested chains
             // Only add supported chains
             if (supportedChainIds.includes(chain)) {
               allChains.add(chain);
@@ -256,21 +499,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         }
       });
     }
-
-    // Debug output
-    console.log(
-      '[WalletConnect] dApp requested chains:',
-      Array.from(allRequestedChains)
-    );
-    console.log('[WalletConnect] Supported chains:', Array.from(allChains));
-    console.log(
-      '[WalletConnect] Required namespaces:',
-      proposal!.requiredNamespaces
-    );
-    console.log(
-      '[WalletConnect] Optional namespaces:',
-      proposal!.optionalNamespaces
-    );
 
     // Convert chain IDs to readable names (all chains in the set are already supported)
     const chainNames = Array.from(allChains).map((chainId) =>
@@ -356,13 +584,48 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         </View>
       )}
 
+      {probing && (
+        <ActivityIndicator accessibilityLabel="Checking signing authority" />
+      )}
+      {eligibility.some((entry) => entry.errorChains.length > 0) && (
+        <View>
+          <Text style={styles.permissionText}>
+            {"Couldn't check signing authority for "}
+            {
+              eligibility.filter((entry) => entry.errorChains.length > 0).length
+            }{' '}
+            account(s)
+          </Text>
+          <TouchableOpacity
+            onPress={() => {
+              if (!inFlight.current) void loadAccounts();
+            }}
+            disabled={probing || isLoading}
+          >
+            <Text style={styles.selectAllText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {accounts.map((account) => (
-        <AccountSelectionItem
-          key={account.id}
-          account={account}
-          isSelected={selectedAccountIds.has(account.id)}
-          onToggleSelection={handleToggleAccountSelection}
-        />
+        <View key={account.id}>
+          <AccountSelectionItem
+            account={account}
+            isSelected={selectedAccountIds.has(account.id)}
+            onToggleSelection={handleToggleAccountSelection}
+          />
+          {(() => {
+            const chains =
+              eligibility.find((entry) => entry.account.id === account.id)
+                ?.eligibleChains ?? [];
+            return (
+              chains.length < approvedChains.length && (
+                <Text style={styles.permissionText}>
+                  Only on {chains.map(getNetworkNameByChainId).join(', ')}
+                </Text>
+              )
+            );
+          })()}
+        </View>
       ))}
     </View>
   );
@@ -373,7 +636,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         <UniversalHeader
           title="WalletConnect"
           showBackButton
-          onBackPress={() => navigation.goBack()}
+          onBackPress={() => scoped.goBack()}
         />
         <View style={[styles.scrollView, { justifyContent: 'center' }]}>
           <View style={{ alignItems: 'center' }}>
@@ -392,54 +655,103 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     );
   }
 
+  // Gate display: proposal metadata only (no account or network lookups).
+  const gateMetadata = isV1
+    ? v1SessionRequest?.peerMeta
+    : proposal?.proposer.metadata;
+  const gateNetworks = (() => {
+    if (isV1) {
+      const v1Chain = resolveV1Chain(v1SessionRequest?.chainId);
+      return v1Chain ? getNetworkNameByChainId(v1Chain.chainId) : 'Unknown';
+    }
+    return (
+      getProposalChains(
+        proposal!,
+        useExperimentalStore.getState().allowUnsupportedNetworks
+      )
+        .map(getNetworkNameByChainId)
+        .join(', ') || 'Unknown'
+    );
+  })();
+
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView
+      onTouchStart={() => reviewGrant.touch(requestKey)}
+      style={styles.container}
+      edges={['top', 'bottom']}
+    >
       <UniversalHeader
         title="Connect to dApp"
         showBackButton
-        onBackPress={() => navigation.goBack()}
+        onBackPress={handleBack}
       />
 
-      <ScrollView
-        style={styles.scrollView}
-        showsVerticalScrollIndicator={false}
-      >
-        {renderDAppInfo()}
-        {renderPermissions()}
-        {renderAccounts()}
-
-        <View style={styles.warningContainer}>
-          <Ionicons name="warning" size={24} color={theme.colors.warning} />
-          <Text style={styles.warningText}>
-            Only connect to dApps you trust. Connected dApps will be able to
-            view your account addresses and request transaction signatures.
-          </Text>
-        </View>
-      </ScrollView>
-
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity
-          style={[styles.button, styles.rejectButton]}
-          onPress={handleReject}
-          disabled={isLoading}
-        >
-          <Text style={styles.rejectButtonText}>Reject</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.approveButton]}
-          onPress={handleApprove}
-          disabled={
-            isLoading || accounts.length === 0 || selectedAccountIds.size === 0
+      {!canReview ? (
+        <LockedRequestGate
+          requestKey={requestKey}
+          dapp={
+            gateMetadata
+              ? {
+                  name: gateMetadata.name,
+                  url: gateMetadata.url,
+                  icon: gateMetadata.icons?.[0],
+                }
+              : undefined
           }
-        >
-          {isLoading ? (
-            <ActivityIndicator color={theme.colors.buttonText} />
-          ) : (
-            <Text style={styles.approveButtonText}>Connect</Text>
-          )}
-        </TouchableOpacity>
-      </View>
+          network={gateNetworks}
+          biometricEnabled={authState.biometricEnabled}
+          onReject={handleReject}
+        />
+      ) : (
+        <>
+          <ScrollView
+            style={styles.scrollView}
+            showsVerticalScrollIndicator={false}
+          >
+            {renderDAppInfo()}
+            {ref && <RequestAgeLabel requestRef={ref} />}
+            {renderPermissions()}
+            {renderAccounts()}
+
+            <View style={styles.warningContainer}>
+              <Ionicons name="warning" size={24} color={theme.colors.warning} />
+              <Text style={styles.warningText}>
+                Only connect to dApps you trust. Connected dApps will be able to
+                view your account addresses and request transaction signatures.
+              </Text>
+            </View>
+          </ScrollView>
+
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.rejectButton]}
+              onPress={handleReject}
+              disabled={isLoading}
+            >
+              <Text style={styles.rejectButtonText}>Reject</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Connect"
+              style={[styles.button, styles.approveButton]}
+              onPress={handleApprove}
+              disabled={
+                probing ||
+                isLoading ||
+                accounts.length === 0 ||
+                selectedAccountIds.size === 0
+              }
+            >
+              {isLoading || probing ? (
+                <ActivityIndicator color={theme.colors.buttonText} />
+              ) : (
+                <Text style={styles.approveButtonText}>Connect</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
     </SafeAreaView>
   );
 }

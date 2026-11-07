@@ -242,7 +242,9 @@ const LedgerAccountList: React.FC<LedgerAccountListProps> = ({
         );
       }}
       ItemSeparatorComponent={() => <View style={styles.separator} />}
-      ListHeaderComponent={header}
+      // `?? undefined` / `: undefined`: RN 0.88's VirtualizedList types reject
+      // null; undefined renders the same.
+      ListHeaderComponent={header ?? undefined}
       ListEmptyComponent={
         isEmpty ? (
           <View style={styles.emptyContainer}>
@@ -251,7 +253,7 @@ const LedgerAccountList: React.FC<LedgerAccountListProps> = ({
               {emptyMessage || 'Adjust the derivation range and scan again.'}
             </Text>
           </View>
-        ) : null
+        ) : undefined
       }
       ListFooterComponent={
         <>

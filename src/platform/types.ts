@@ -82,11 +82,7 @@ export interface CryptoAdapter {
 
 // Biometric/WebAuthn Authentication Types
 export type AuthenticationType =
-  | 'fingerprint'
-  | 'facial'
-  | 'iris'
-  | 'webauthn'
-  | 'none';
+  'fingerprint' | 'facial' | 'iris' | 'webauthn' | 'none';
 
 export interface AuthCapability {
   available: boolean;

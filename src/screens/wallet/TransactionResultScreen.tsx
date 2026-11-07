@@ -48,6 +48,10 @@ interface TransactionResultParams {
   // isSuccess is true: `false` => submitted but still pending (distinct UI);
   // `undefined`/true => treat as confirmed success (backward-compatible default).
   confirmed?: boolean;
+  // Pending copy for an outcome the caller knows more about (e.g. "may have
+  // been sent" with no txid, TASK-447). Defaults to the generic pending copy.
+  pendingTitle?: string;
+  pendingMessage?: string;
   errorMessage?: string;
   homeRoute?: string; // Route to navigate back to (e.g., 'HomeMain' or 'NFTMain')
   networkId?: string;
@@ -110,12 +114,13 @@ export default function TransactionResultScreen() {
   };
 
   const getStatusTitle = () => {
-    if (isPending) return 'Transaction Pending';
+    if (isPending) return params.pendingTitle || 'Transaction Pending';
     return params.isSuccess ? 'Transaction Sent!' : 'Transaction Failed';
   };
 
   const getStatusMessage = () => {
     if (isPending) {
+      if (params.pendingMessage) return params.pendingMessage;
       return 'Submitted — waiting for confirmation. It may still confirm; check your history.';
     }
     if (params.isSuccess) {

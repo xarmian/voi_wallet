@@ -28,6 +28,7 @@
  */
 
 import React from 'react';
+import { SecureKeyManager } from '@/services/secure/keyManager';
 import { render, fireEvent, act } from '@testing-library/react-native';
 import type { AccountBalance } from '@/types/wallet';
 
@@ -104,6 +105,10 @@ jest.mock('@/services/secure/keyManager', () => ({
   SecureKeyManager: {
     getSigningInfo: jest.fn(async () => null),
     getLedgerSigningInfo: jest.fn(async () => null),
+    resolveSigningRoute: jest.fn(async () => ({
+      kind: 'unavailable',
+      reason: 'Cannot sign transactions for watch-only accounts',
+    })),
   },
 }));
 
@@ -180,9 +185,22 @@ jest.mock('@/components/common/UniversalHeader', () => ({
   __esModule: true,
   default: () => null,
 }));
-jest.mock('@/components/common/GlassButton', () => ({
-  GlassButton: () => null,
-}));
+jest.mock('@/components/common/GlassButton', () => {
+  const { Pressable, Text } = require('react-native');
+  return {
+    GlassButton: ({
+      label,
+      disabled,
+    }: {
+      label: string;
+      disabled: boolean;
+    }) => (
+      <Pressable accessibilityRole="button" disabled={disabled}>
+        <Text>{label}</Text>
+      </Pressable>
+    ),
+  };
+});
 jest.mock('@/components/account/AccountListModal', () => ({
   __esModule: true,
   default: () => null,
@@ -312,6 +330,22 @@ beforeEach(() => {
   mockRouteParams = undefined;
   mockBalances = {};
   mockTokenMappings = [];
+  jest.mocked(SecureKeyManager.getSigningInfo).mockReset().mockResolvedValue({
+    canSign: false,
+    signingAddress: 'WATCH',
+    isRekeyed: true,
+  });
+  jest
+    .mocked(SecureKeyManager.getLedgerSigningInfo)
+    .mockReset()
+    .mockRejectedValue(new Error('No Ledger signer'));
+  jest
+    .mocked(SecureKeyManager.resolveSigningRoute)
+    .mockReset()
+    .mockResolvedValue({
+      kind: 'unavailable',
+      reason: 'Cannot sign transactions for watch-only accounts',
+    });
 
   mockGetAccountBalance.mockReset();
   mockGetAccountBalance.mockImplementation((networkId: string) =>
@@ -341,11 +375,11 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     mockBalances[VOI] = bal(VOI, 5_000_000n, 900_000n);
     mockRouteParams = { fee: '1000' };
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     const maxButton = await screen.findByLabelText(MAX_LABEL);
-    fireEvent.press(maxButton);
+    await fireEvent.press(maxButton);
 
     // balance - fee - minBalance = 5_000_000 - 1000 - 900_000 = 4_099_000.
     // Before the fix (minBalance dropped) this would have filled "4.999".
@@ -359,7 +393,7 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     mockBalances[VOI] = bal(VOI, 5_000_000n, 900_000n);
     mockRouteParams = { fee: '1000' };
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
     await screen.findByLabelText(MAX_LABEL);
 
@@ -367,11 +401,11 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
 
     // "4.999" == balance - fee. Spendable is 4.099, so this must error now.
     // (Pre-fix, spendable == balance - fee, so this was wrongly accepted.)
-    fireEvent.changeText(amountInput, '4.999');
+    await fireEvent.changeText(amountInput, '4.999');
     expect(screen.queryByText(/exceeds spendable balance/i)).toBeTruthy();
 
     // The actual spendable amount is accepted.
-    fireEvent.changeText(amountInput, '4.099');
+    await fireEvent.changeText(amountInput, '4.099');
     expect(screen.queryByText(/exceeds spendable balance/i)).toBeNull();
     await settle();
   });
@@ -385,11 +419,11 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     // Aggregate reserve = 0.9 + 0.5 = 1.4 VOI. Present but MUST be ignored.
     mockMultiNetworkBalance = { minBalance: 1_400_000n, assets: [] };
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     const maxButton = await screen.findByLabelText(MAX_LABEL);
-    fireEvent.press(maxButton);
+    await fireEvent.press(maxButton);
 
     const amountInput = screen.getByPlaceholderText(AMOUNT_PLACEHOLDER);
     // Correct (VOI-only): 5_000_000 - 0 - 900_000 = 4_100_000 -> "4.1".
@@ -415,14 +449,14 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     });
     mockTokenMappings = dualNativeMappings;
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
     // Auto-selected VOI native — wait until its balance has loaded.
     await screen.findByLabelText(MAX_LABEL);
 
     // Switch to the ALGO asset (network B) — selectedNetworkId is still VOI.
     await act(async () => {
-      fireEvent.press(screen.getByTestId(`asset-option-${ALGO}-0`));
+      await fireEvent.press(screen.getByTestId(`asset-option-${ALGO}-0`));
     });
     await settle();
 
@@ -430,7 +464,7 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     // using ALGO's reserve (0.5), NOT VOI's (0.9). A test keyed to
     // selectedNetworkId (still VOI) would instead compute VOI's reserve.
     const maxButton = await screen.findByLabelText(MAX_LABEL);
-    fireEvent.press(maxButton);
+    await fireEvent.press(maxButton);
     const amountInput = screen.getByPlaceholderText(AMOUNT_PLACEHOLDER);
     expect(amountInput.props.value).toBe('2.5');
     await settle();
@@ -447,11 +481,11 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     });
     mockTokenMappings = dualNativeMappings;
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     const maxButton = await screen.findByLabelText(MAX_LABEL);
-    fireEvent.press(maxButton);
+    await fireEvent.press(maxButton);
 
     const amountInput = screen.getByPlaceholderText(AMOUNT_PLACEHOLDER);
     // Record-based: 5_000_000 - 900_000 = 4_100_000 -> "4.1".
@@ -476,7 +510,7 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
       networkId === VOI ? voiD.promise : algoD.promise
     );
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     // Resolve VOI: Max becomes available for the VOI reserve.
@@ -487,7 +521,7 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
 
     // Switch to ALGO but leave its fetch pending.
     await act(async () => {
-      fireEvent.press(screen.getByTestId(`asset-option-${ALGO}-0`));
+      await fireEvent.press(screen.getByTestId(`asset-option-${ALGO}-0`));
     });
 
     // The identity now mismatches the (VOI) record: native spendable is 0n, so
@@ -496,7 +530,7 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
 
     // And the validator rejects any positive amount while spendable is 0n.
     const amountInput = screen.getByPlaceholderText(AMOUNT_PLACEHOLDER);
-    fireEvent.changeText(amountInput, '0.1');
+    await fireEvent.changeText(amountInput, '0.1');
     expect(screen.queryByText(/exceeds spendable balance/i)).toBeTruthy();
 
     // Once ALGO resolves, Max returns and the amount is within spendable again.
@@ -522,7 +556,7 @@ describe('SendScreen ARC-0090 prefill network resolution (TASK-245 item 1)', () 
     // The screen is ALREADY MOUNTED sitting on ALGORAND (no route network yet).
     mockCurrentNetwork = ALGO;
     mockRouteParams = undefined;
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     // A deep link now arrives on the already-mounted screen, naming VOI + asset
@@ -531,7 +565,7 @@ describe('SendScreen ARC-0090 prefill network resolution (TASK-245 item 1)', () 
     // runs — the bug resolved decimals against the STALE ALGORAND network.
     mockRouteParams = { networkId: VOI, asset: '12345', amount: '1000000' };
     await act(async () => {
-      screen.rerender(<SendScreen />);
+      await screen.rerender(<SendScreen />);
     });
     await settle();
 
@@ -559,7 +593,7 @@ describe('SendScreen ARC-0090 prefill network resolution (TASK-245 item 1)', () 
     mockCurrentNetwork = ALGO;
     mockRouteParams = { networkId: VOI, asset: '12345', amount: '1000000' };
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     expect(mockGetAssetInfo).toHaveBeenCalledWith(VOI, 12345);
@@ -567,5 +601,159 @@ describe('SendScreen ARC-0090 prefill network resolution (TASK-245 item 1)', () 
     expect(assetInfoNetworks).not.toContain(ALGO);
     expect(screen.getByDisplayValue('1')).toBeTruthy();
     await settle();
+  });
+});
+
+it('retries a failed WATCH authority lookup without showing watch-only status', async () => {
+  mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
+  const retry =
+    makeDeferred<
+      Awaited<ReturnType<typeof SecureKeyManager.resolveSigningRoute>>
+    >();
+  jest
+    .mocked(SecureKeyManager.resolveSigningRoute)
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockReturnValueOnce(retry.promise);
+  const screen = await render(<SendScreen />);
+  await settle();
+  expect(screen.getByText("Couldn't check signing authority")).toBeTruthy();
+  expect(screen.queryByText(/This is a watch-only account/)).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Send Transaction' })
+  ).toBeDisabled();
+  await fireEvent.press(screen.getByText('Retry'));
+  await settle();
+  expect(screen.queryByText(/This is a watch-only account/)).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Send Transaction' })
+  ).toBeDisabled();
+  await act(async () =>
+    retry.resolve({
+      kind: 'ledger',
+      ledgerAccount: {} as never,
+      signerAddress: 'LEDGER',
+      viaRekey: true,
+    })
+  );
+  expect(screen.queryByText("Couldn't check signing authority")).toBeNull();
+  expect(screen.getByText(/Ledger signer detected/)).toBeTruthy();
+  expect(SecureKeyManager.resolveSigningRoute).toHaveBeenCalledTimes(2);
+  expect(SecureKeyManager.resolveSigningRoute).toHaveBeenLastCalledWith(
+    'WATCH',
+    VOI
+  );
+});
+
+// TASK-425: the screen allows a WATCH send exactly when the signer's route
+// would sign it.
+describe('WATCH accounts follow the signing route (TASK-425)', () => {
+  it('a WATCH rekeyed to a key we hold can send', async () => {
+    mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
+    jest.mocked(SecureKeyManager.resolveSigningRoute).mockResolvedValue({
+      kind: 'software',
+      signingAddress: 'AUTH',
+      rekeyedTo: 'AUTH',
+    });
+    const screen = await render(<SendScreen />);
+    await settle();
+    expect(screen.getByText(/rekeyed to a key in this wallet/)).toBeTruthy();
+    expect(screen.queryByText(/This is a watch-only account/)).toBeNull();
+    expect(SecureKeyManager.resolveSigningRoute).toHaveBeenCalledWith(
+      'WATCH',
+      VOI
+    );
+  });
+
+  // Fills a valid recipient and a spendable amount, so the only remaining
+  // reason the Send button could be disabled is the WATCH gate.
+  const fillSendable = async (screen: Awaited<ReturnType<typeof render>>) => {
+    const recipient = require('algosdk').generateAccount().addr.toString();
+    jest
+      .mocked(require('@/utils/address').resolveAddressOrName)
+      .mockResolvedValue(recipient);
+    await fireEvent.changeText(
+      screen.getByPlaceholderText('Enter address'),
+      recipient
+    );
+    // Recipient resolution is debounced by 500ms.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+    await settle();
+    await fireEvent.changeText(
+      screen.getByPlaceholderText(AMOUNT_PLACEHOLDER),
+      '0.1'
+    );
+    await settle();
+  };
+
+  it.each([
+    ['software', { kind: 'software', signingAddress: 'AUTH' }, false],
+    [
+      'ledger',
+      {
+        kind: 'ledger',
+        ledgerAccount: {},
+        signerAddress: 'LEDGER',
+        viaRekey: true,
+      },
+      false,
+    ],
+    ['unavailable', { kind: 'unavailable', reason: 'no' }, true],
+  ])(
+    'a %s route decides whether a filled WATCH send is allowed',
+    async (_kind, route, disabled) => {
+      mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
+      mockBalances[VOI] = bal(VOI, 5_000_000n, 900_000n);
+      mockMultiNetworkBalance = dualNativeMultiBalance({
+        voi: 5_000_000n,
+        algo: 3_000_000n,
+      });
+      mockTokenMappings = dualNativeMappings;
+      jest
+        .mocked(SecureKeyManager.resolveSigningRoute)
+        .mockResolvedValue(route as never);
+      const screen = await render(<SendScreen />);
+      await settle();
+      await fillSendable(screen);
+      const button = screen.getByRole('button', { name: 'Send Transaction' });
+      if (disabled) expect(button).toBeDisabled();
+      else expect(button).not.toBeDisabled();
+    }
+  );
+
+  it('a WATCH with no route stays watch-only', async () => {
+    mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
+    const screen = await render(<SendScreen />);
+    await settle();
+    expect(screen.getByText(/This is a watch-only account/)).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Send Transaction' })
+    ).toBeDisabled();
+  });
+
+  it('an NFT send resolves the route on the NFT network, not the current one', async () => {
+    mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
+    mockCurrentNetwork = VOI;
+    mockRouteParams = {
+      nftToken: {
+        contractId: 1,
+        tokenId: '1',
+        networkId: ALGO,
+        metadata: { name: 'Test NFT' },
+      },
+    } as never;
+    await render(<SendScreen />);
+    await settle();
+    expect(SecureKeyManager.resolveSigningRoute).toHaveBeenLastCalledWith(
+      'WATCH',
+      ALGO
+    );
+  });
+
+  it('a non-WATCH account adds no route lookup', async () => {
+    await render(<SendScreen />);
+    await settle();
+    expect(SecureKeyManager.resolveSigningRoute).not.toHaveBeenCalled();
   });
 });

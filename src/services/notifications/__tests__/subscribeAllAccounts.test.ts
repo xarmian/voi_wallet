@@ -75,8 +75,7 @@ interface SelectQuery {
   in(column: string, values: string[]): SelectQuery;
   then<TResult1 = SelectResult, TResult2 = never>(
     onfulfilled?:
-      | ((value: SelectResult) => TResult1 | PromiseLike<TResult1>)
-      | null,
+      ((value: SelectResult) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
   ): PromiseLike<TResult1 | TResult2>;
 }
@@ -192,6 +191,16 @@ jest.mock('../../../platform', () => ({
   deviceId: { getDeviceId: jest.fn(async () => DEVICE_ID) },
 }));
 
+// TASK-425 U2: whether a REKEYED record kept its own key is a secret-store
+// probe; each test sets the answer.
+const mockProbeOwnKey = jest.fn(
+  async (_account: unknown): Promise<'present' | 'absent' | 'unresolved'> =>
+    'present'
+);
+jest.mock('@/services/wallet/ownKeyCustody', () => ({
+  probeOwnKey: (account: unknown) => mockProbeOwnKey(account),
+}));
+
 import { notificationService } from '../index';
 import { DEFAULT_NOTIFICATION_PREFERENCES } from '../types';
 import {
@@ -258,11 +267,25 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  mockProbeOwnKey.mockReset();
+  mockProbeOwnKey.mockImplementation(async () => 'present');
   mockDb.rows.clear();
   mockDb.selectCalls = [];
   mockDb.upsertCalls = [];
   mockDb.selectError = null;
   mockDb.betweenReadAndWrite = null;
+});
+
+describe('subscribeAccount — defaults', () => {
+  it('stores block reward notifications as off for a new subscription', async () => {
+    await expect(
+      notificationService.subscribeAccount(STANDARD_A)
+    ).resolves.toBe(true);
+
+    expect(mockDb.rows.get(STANDARD_A)).toMatchObject({
+      notify_proposer_payouts: false,
+    });
+  });
 });
 
 describe('subscribeAllAccounts — existing preferences are never overwritten', () => {
@@ -304,6 +327,24 @@ describe('subscribeAllAccounts — existing preferences are never overwritten', 
 });
 
 describe('subscribeAllAccounts — defaults are decided per account', () => {
+  it('stores block reward notifications as off for new accounts of every type', async () => {
+    const accounts = [
+      account(STANDARD_A, AccountType.STANDARD),
+      account(WATCH_A, AccountType.WATCH),
+      account(LEDGER_A, AccountType.LEDGER),
+      account(STANDARD_B, AccountType.REKEYED),
+      account(address(6), AccountType.REMOTE_SIGNER),
+    ];
+
+    await notificationService.subscribeAllAccounts(accounts);
+
+    for (const { address } of accounts) {
+      expect(mockDb.rows.get(address)).toMatchObject({
+        notify_proposer_payouts: false,
+      });
+    }
+  });
+
   it('disables messages for watch accounts and enables them for every other type', async () => {
     await notificationService.subscribeAllAccounts([
       account(STANDARD_A, AccountType.STANDARD),
@@ -335,7 +376,7 @@ describe('subscribeAllAccounts — defaults are decided per account', () => {
       account_address: STANDARD_A,
       notify_messages: true,
       notify_voi_payments: DEFAULT_NOTIFICATION_PREFERENCES.voiPayments,
-      notify_proposer_payouts: true,
+      notify_proposer_payouts: DEFAULT_NOTIFICATION_PREFERENCES.blockRewards,
       notify_price_alerts: DEFAULT_NOTIFICATION_PREFERENCES.priceAlerts,
       price_alert_threshold_percent:
         DEFAULT_NOTIFICATION_PREFERENCES.priceAlertThreshold,
@@ -345,9 +386,43 @@ describe('subscribeAllAccounts — defaults are decided per account', () => {
       notify_messages: false,
       // Only `messages` differs for a watch account; the rest are defaults.
       notify_voi_payments: DEFAULT_NOTIFICATION_PREFERENCES.voiPayments,
-      notify_proposer_payouts: true,
+      notify_proposer_payouts: DEFAULT_NOTIFICATION_PREFERENCES.blockRewards,
     });
     expect(writtenRow(STANDARD_B)?.notify_messages).toBe(true);
+  });
+
+  it('disables messages for a REKEYED account that has not kept its own key (TASK-425)', async () => {
+    mockProbeOwnKey.mockImplementation(async (acc) =>
+      (acc as { address: string }).address === STANDARD_A ? 'present' : 'absent'
+    );
+
+    await notificationService.subscribeAllAccounts([
+      account(STANDARD_A, AccountType.REKEYED),
+      account(STANDARD_B, AccountType.REKEYED),
+      account(LEDGER_A, AccountType.LEDGER),
+    ]);
+
+    expect(writtenRow(STANDARD_A)?.notify_messages).toBe(true);
+    expect(writtenRow(STANDARD_B)?.notify_messages).toBe(false);
+    // Only REKEYED is probed: a LEDGER default is unchanged.
+    expect(writtenRow(LEDGER_A)?.notify_messages).toBe(true);
+    expect(mockProbeOwnKey).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips a REKEYED account whose probe is unresolved, rather than storing false (TASK-425)', async () => {
+    mockProbeOwnKey.mockImplementation(async (acc) =>
+      (acc as { address: string }).address === STANDARD_B
+        ? 'unresolved'
+        : 'present'
+    );
+
+    await notificationService.subscribeAllAccounts([
+      account(STANDARD_A, AccountType.STANDARD),
+      account(STANDARD_B, AccountType.REKEYED),
+    ]);
+
+    expect(writtenAddresses()).toEqual([STANDARD_A]);
+    expect(mockDb.rows.has(STANDARD_B)).toBe(false);
   });
 });
 

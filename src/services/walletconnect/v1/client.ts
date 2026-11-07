@@ -3,6 +3,8 @@
  * Main client class for WalletConnect v1 protocol support
  */
 
+import { MultiAccountWalletService } from '@/services/wallet';
+import { resolveProposalEligibility } from '../utils';
 import { EventEmitter } from 'events';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -33,6 +35,7 @@ import {
   WC_ERROR_CODES,
 } from './protocol';
 import {
+  resolveV1Chain,
   DEFAULT_PEER_META,
   DEFAULT_CHAIN_ID,
   WC_V1_SESSION_STORAGE_KEY,
@@ -186,10 +189,23 @@ export class WalletConnectV1Client extends EventEmitter {
     }
 
     try {
+      const responseChainId = chainId ?? this.sessionData.chainId;
+      const chain = resolveV1Chain(responseChainId);
+      if (!chain) throw new Error('Unsupported v1 chain');
+      const selected = (
+        await MultiAccountWalletService.getAllAccounts()
+      ).filter((account) => accounts.includes(account.address));
+      const eligibility = await resolveProposalEligibility(selected, [
+        chain.chainId,
+      ]);
+      if (eligibility.some((result) => result.errorChains.length))
+        console.error('Signing authority probe failed for v1 proposal');
+      accounts = eligibility
+        .filter((result) => result.eligibleChains.length)
+        .map(({ account }) => account.address);
+      if (!accounts.length) throw new Error('No signable accounts available');
       // Use the chain ID from the session request (dApp's requested chainId)
       // This ensures we respond with the same chainId the dApp sent us
-      const responseChainId = chainId ?? this.sessionData.chainId;
-
       // Create approval response
       const response = createSessionApprovalResponse(
         this.handshakeId,

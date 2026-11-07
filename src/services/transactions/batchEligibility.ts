@@ -73,8 +73,7 @@ export type BatchDeclineReason =
   | 'not-a-reviewed-signer';
 
 export type BatchEntryEligibility =
-  | { eligible: true }
-  | { eligible: false; reason: BatchDeclineReason };
+  { eligible: true } | { eligible: false; reason: BatchDeclineReason };
 
 const ELIGIBLE: BatchEntryEligibility = { eligible: true };
 

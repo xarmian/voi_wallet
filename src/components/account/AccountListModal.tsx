@@ -14,6 +14,7 @@ import {
   useThemeSpacing,
 } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useBottomSheetModalVisibility } from '@/hooks/useBottomSheetModalVisibility';
 import {
   BottomSheetModal,
   BottomSheetBackdrop,
@@ -25,7 +26,12 @@ import {
   useActiveAccount,
   useWalletStore,
 } from '@/store/walletStore';
-import { AccountMetadata, AccountType } from '@/types/wallet';
+import {
+  AccountDeletionExpectation,
+  AccountDeletionPreconditionError,
+  AccountMetadata,
+  AccountType,
+} from '@/types/wallet';
 import AccountListItem from './AccountListItem';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -37,6 +43,8 @@ interface AccountListModalProps {
   onAccountSelect?: (accountId: string) => void;
   /** Only show accounts that can sign (STANDARD, LEDGER) - used in airgap mode */
   filterSignable?: boolean;
+  /** When set, show only these account ids (overrides filterSignable). */
+  onlyAccountIds?: ReadonlySet<string>;
   /** Don't display balance information - used in airgap mode */
   hideBalances?: boolean;
 }
@@ -48,9 +56,13 @@ export default function AccountListModal({
   onEditAccount,
   onAccountSelect,
   filterSignable = false,
+  onlyAccountIds,
   hideBalances = false,
 }: AccountListModalProps) {
   const bottomSheetRef = useRef<BottomSheetModal>(null);
+  // Open/close the bottom sheet based on visibility (guarded, TASK-432)
+  const { onChange: syncSheetVisibility, onDismiss: handleSheetDismiss } =
+    useBottomSheetModalVisibility(bottomSheetRef, isVisible);
   const accounts = useAccounts();
   const activeAccount = useActiveAccount();
   const deleteAccount = useWalletStore((state) => state.deleteAccount);
@@ -69,8 +81,10 @@ export default function AccountListModal({
   const filteredAccounts = useMemo(() => {
     let result = accounts;
 
-    // Filter to signable accounts only (STANDARD, LEDGER) if requested
-    if (filterSignable) {
+    if (onlyAccountIds) {
+      result = result.filter((account) => onlyAccountIds.has(account.id));
+    } else if (filterSignable) {
+      // Filter to signable accounts only (STANDARD, LEDGER) if requested
       result = result.filter(
         (account) =>
           account.type === AccountType.STANDARD ||
@@ -88,16 +102,17 @@ export default function AccountListModal({
     }
 
     return result;
-  }, [accounts, searchQuery, filterSignable]);
+  }, [accounts, searchQuery, filterSignable, onlyAccountIds]);
 
   // Handle sheet changes
   const handleSheetChanges = useCallback(
     (index: number) => {
+      syncSheetVisibility(index);
       if (index === -1) {
         onClose();
       }
     },
-    [onClose]
+    [onClose, syncSheetVisibility]
   );
 
   // Render backdrop
@@ -126,13 +141,18 @@ export default function AccountListModal({
 
   // Handle account deletion
   const handleDeleteAccount = useCallback(
-    async (accountId: string) => {
+    async (accountId: string, expected: AccountDeletionExpectation) => {
       try {
-        await deleteAccount(accountId);
+        await deleteAccount(accountId, expected);
         Alert.alert('Success', 'Account deleted successfully');
       } catch (error) {
         console.error('Failed to delete account:', error);
-        Alert.alert('Error', 'Failed to delete account');
+        Alert.alert(
+          'Error',
+          error instanceof AccountDeletionPreconditionError
+            ? error.message
+            : 'Failed to delete account'
+        );
       }
     },
     [deleteAccount]
@@ -162,17 +182,11 @@ export default function AccountListModal({
     ]
   );
 
-  // Open/close the bottom sheet based on visibility
+  // Batch load all account balances when modal opens (single state update)
+  // Skip in airgap mode when balances are hidden (no network access)
   React.useEffect(() => {
-    if (isVisible) {
-      bottomSheetRef.current?.present();
-      // Batch load all account balances when modal opens (single state update)
-      // Skip in airgap mode when balances are hidden (no network access)
-      if (!hideBalances) {
-        refreshAllBalances();
-      }
-    } else {
-      bottomSheetRef.current?.dismiss();
+    if (isVisible && !hideBalances) {
+      refreshAllBalances();
     }
   }, [isVisible, refreshAllBalances, hideBalances]);
 
@@ -249,6 +263,7 @@ export default function AccountListModal({
       ref={bottomSheetRef}
       snapPoints={snapPoints}
       onChange={handleSheetChanges}
+      onDismiss={handleSheetDismiss}
       backdropComponent={renderBackdrop}
       enablePanDownToClose
       handleIndicatorStyle={styles.indicator}

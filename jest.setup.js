@@ -6,6 +6,17 @@ if (typeof global.Buffer === 'undefined') {
   global.Buffer = Buffer;
 }
 
+// Native process memory survives a JS reload. Tests may replace this value to
+// simulate a cold start while retaining the same mocked native module.
+global.__voiProcessSessionId = 'test-process-id';
+jest.mock(
+  './modules/voi-process-session',
+  () => ({
+    getNativeProcessSessionId: () => global.__voiProcessSessionId,
+  }),
+  { virtual: true }
+);
+
 // WalletConnect config (src/services/walletconnect/config.ts) throws at module
 // load time if no project ID is configured. The real value comes from a .env
 // file that jest does not load, so provide a harmless dummy here (setupFiles run

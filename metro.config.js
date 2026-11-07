@@ -1,5 +1,6 @@
 const { getDefaultConfig } = require('expo/metro-config');
 const { NON_INLINED_REQUIRES } = require('./metro.inlineRequires');
+const { createDevOnlyResolver } = require('./metro.devOnlyResolver');
 
 const config = getDefaultConfig(__dirname);
 
@@ -12,6 +13,15 @@ config.resolver.alias = {
 
 // Ensure these modules are resolved
 config.resolver.platforms = ['native', 'web', 'default'];
+
+// DR-18 (FR-374): release bundles (dev=false) get an empty module for anything
+// under src/dev/ (the dev-only crypto self-test). Every other request, and
+// every request in a dev bundle, goes to the upstream resolver unchanged.
+// See ./metro.devOnlyResolver.js.
+config.resolver.resolveRequest = createDevOnlyResolver(
+  __dirname,
+  config.resolver.resolveRequest
+);
 
 // F-01 (TASK-176): enable Metro inline requires so per-module factories evaluate
 // on first use instead of eagerly at cold boot, cutting time-to-first-frame.

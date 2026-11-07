@@ -33,19 +33,21 @@ function requestedIds(url: string): number[] {
 }
 
 function okResponse(ids: number[], priceFor: (id: number) => number) {
+  const body = ids.map((id) => ({
+    network_id: 0,
+    asset_id: id,
+    denominating_asset_id: 31566704,
+    price: priceFor(id),
+    confidence: 1,
+    total_lockup: 0,
+  }));
   return {
     ok: true,
     status: 200,
     statusText: 'OK',
-    json: async () =>
-      ids.map((id) => ({
-        network_id: 0,
-        asset_id: id,
-        denominating_asset_id: 31566704,
-        price: priceFor(id),
-        confidence: 1,
-        total_lockup: 0,
-      })),
+    json: async () => body,
+    // TASK-440 #9: fetchBuffered reads the body as text inside its deadline.
+    text: async () => JSON.stringify(body),
   };
 }
 

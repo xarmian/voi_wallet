@@ -37,7 +37,9 @@ import {
   RouteProp,
 } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Swipeable } from 'react-native-gesture-handler';
+// RNGH 3 removed the legacy `Swipeable`; ReanimatedSwipeable is its drop-in
+// replacement (same friction/threshold/overshoot defaults).
+import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -428,7 +430,7 @@ export default function ClaimableTokensScreen() {
   // row's open/closed swipe state stays bound to its own item.
   const renderItem = useCallback(
     ({ item }: { item: ClaimableItem }) => (
-      <Swipeable
+      <ReanimatedSwipeable
         renderRightActions={() => renderRightActions(item)}
         overshootRight={false}
       >
@@ -437,7 +439,7 @@ export default function ClaimableTokensScreen() {
           onPress={() => handleItemPress(item)}
           isHidden={hiddenApprovals.has(item.id)}
         />
-      </Swipeable>
+      </ReanimatedSwipeable>
     ),
     [hiddenApprovals, renderRightActions, handleItemPress]
   );
@@ -527,7 +529,8 @@ export default function ClaimableTokensScreen() {
           // Passed as an element, not a component reference: the header holds
           // a running Reanimated banner, and an unstable component identity
           // would make VirtualizedList remount it on every render.
-          ListHeaderComponent={renderListHeader()}
+          // `?? undefined`: RN 0.88's VirtualizedList types reject null.
+          ListHeaderComponent={renderListHeader() ?? undefined}
           ListEmptyComponent={renderListEmpty}
           // Rows are variable height (token name/amount wrapping), so no
           // getItemLayout here — a wrong fixed height breaks scrolling.

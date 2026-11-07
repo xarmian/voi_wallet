@@ -107,8 +107,7 @@ export class ExtensionDeepLinkHandler {
 
       if (changes[WC_PENDING_URI_KEY]) {
         const newValue = changes[WC_PENDING_URI_KEY].newValue as
-          | PendingWcUri
-          | undefined;
+          PendingWcUri | undefined;
 
         if (newValue && newValue.uri) {
           const age = Date.now() - newValue.timestamp;

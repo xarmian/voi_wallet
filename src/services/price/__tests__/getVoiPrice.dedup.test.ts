@@ -32,6 +32,8 @@ function okResponse(price: number) {
     status: 200,
     statusText: 'OK',
     json: async () => marketDataResponse(price),
+    // TASK-440 #9: fetchBuffered reads the body as text inside its deadline.
+    text: async () => JSON.stringify(marketDataResponse(price)),
   };
 }
 

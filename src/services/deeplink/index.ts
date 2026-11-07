@@ -1,4 +1,5 @@
 import { Alert, Platform, Linking } from 'react-native';
+import Toast from 'react-native-toast-message';
 import { NavigationContainerRef, StackActions } from '@react-navigation/native';
 import { WalletConnectService } from '@/services/walletconnect';
 import {
@@ -11,6 +12,11 @@ import {
   parseWalletConnectV1Uri,
 } from '@/services/walletconnect/utils';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
+import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
+import {
+  requestRefFor,
+  v1ProposalRefFor,
+} from '@/services/walletconnect/requestRefs';
 import { redactSensitiveForLog, redactError } from '@/utils/logRedaction';
 import {
   isArc0090Uri,
@@ -27,7 +33,10 @@ import {
   validateKeyregUri,
   validateApplUri,
 } from '@/utils/arc0090Uri';
-import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
+import {
+  QueueFullError,
+  TransactionRequestQueue,
+} from '@/services/walletconnect/TransactionRequestQueue';
 import {
   notificationService,
   NotificationData,
@@ -36,6 +45,11 @@ import { useWalletStore } from '@/store/walletStore';
 import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
+import {
+  createPendingRouteQueue,
+  PendingRouteQueue,
+  RouteRun,
+} from './pendingRoute';
 
 // Log-redaction helpers (TASK-33): deep-link URIs and their parsed contents can
 // embed full addresses, amounts, notes and other PII. These keep debug logs
@@ -63,6 +77,13 @@ const redactNotificationData = (
 });
 
 export type DeepLinkHandler = (url: string) => Promise<boolean>;
+
+export const V1_PAIRING_WAIT_MS = 60_000;
+
+export const V1_BUSY_TOAST = {
+  text1: 'Connection in progress',
+  text2: 'Finish or cancel the open connection, then try again.',
+};
 
 export interface DeepLinkRoute {
   screen: string;
@@ -118,6 +139,20 @@ export class DeepLinkService {
   private pendingNotification: NotificationData | null = null;
   private isAppUnlocked: boolean = false;
   private linkingSubscription: { remove: () => void } | null = null;
+  // DR-10 / TASK-381: cold-start delivery. Deep links and notification taps
+  // are handed to this queue, which holds them until the NavigationContainer
+  // is ready and then runs the unchanged handlers in arrival order.
+  private readyListeners: Set<() => void> = new Set();
+  private navigationRefUnsubscribes: (() => void)[] = [];
+  private untrackedNotificationCount = 0;
+  private readonly routeQueue: PendingRouteQueue = this.createRouteQueue();
+  // TASK-257: the single v1 `call_request` listener and the client and
+  // pairing topic it currently serves (see attachV1CallRequests).
+  private v1CallRequestClient: WalletConnectV1Client | null = null;
+  private v1CallRequestTopic = '';
+  private v1PairingInFlight = false;
+  private v1PairingTimer: ReturnType<typeof setTimeout> | null = null;
+  private signingDeliverySeq = 0;
 
   static getInstance(): DeepLinkService {
     if (!DeepLinkService.instance) {
@@ -131,7 +166,257 @@ export class DeepLinkService {
   }
 
   setNavigationRef(ref: NavigationContainerRef<any>): void {
+    this.detachNavigationRefListeners();
     this.navigationRef = ref;
+    // The container emits 'ready' at the same moment it calls its onReady
+    // prop (@react-navigation/core BaseNavigationContainer: `onReadyRef.current?.()`
+    // then `emitter.emit({ type: 'ready' })`). 'state' covers a root navigator
+    // that unmounts and later remounts, after which 'ready' does not re-fire.
+    if (typeof ref?.addListener === 'function') {
+      this.navigationRefUnsubscribes = [
+        ref.addListener('ready', this.notifyReadiness),
+        ref.addListener('state', this.notifyReadiness),
+      ];
+    }
+    // The container may already be ready (the 'ready' event fired before we
+    // subscribed); let any queued route re-check now.
+    this.notifyReadiness();
+  }
+
+  private createRouteQueue(): PendingRouteQueue {
+    return createPendingRouteQueue({
+      isReady: () => !!this.navigationRef?.isReady(),
+      onReady: (cb) => {
+        this.readyListeners.add(cb);
+        return () => {
+          this.readyListeners.delete(cb);
+        };
+      },
+    });
+  }
+
+  private notifyReadiness = (): void => {
+    for (const cb of Array.from(this.readyListeners)) {
+      cb();
+    }
+  };
+
+  private detachNavigationRefListeners(): void {
+    const unsubscribes = this.navigationRefUnsubscribes;
+    this.navigationRefUnsubscribes = [];
+    for (const unsubscribe of unsubscribes) {
+      try {
+        unsubscribe();
+      } catch {}
+    }
+  }
+
+  /**
+   * Hand a URL to the cold-start queue. Its handler (`handleUrl`, unchanged)
+   * runs once navigation is ready; a repeat of the same URL while it is
+   * queued/running or just finished (getInitialURL + the first 'url' event)
+   * runs once.
+   */
+  private deliverUrl(url: string): Promise<void> {
+    return this.routeQueue.deliver(`url:${url}`, async () => {
+      await this.handleUrl(url);
+    });
+  }
+
+  /**
+   * Run `run` through the same cold-start queue as deep links (TASK-382):
+   * it waits for the navigation container to be ready instead of being
+   * dropped, runs in arrival order, and a repeat `key` while queued, running
+   * or just finished runs once. Keys are never logged.
+   */
+  deliverRoute(key: string, run: RouteRun): Promise<void> {
+    return this.routeQueue.deliver(key, run);
+  }
+
+  /**
+   * Deliver a WalletConnect signing request (or the startup queue drain)
+   * through the same cold-start queue (TASK-382/TASK-257). Each call gets its
+   * own route key: duplicate suppression for signing requests is
+   * TransactionRequestQueue.claim(), not the route key, so a redelivery after
+   * a FAILED delivery (claim released) is not swallowed by the route queue's
+   * completed-key window.
+   */
+  deliverSigningRequest(run: RouteRun): Promise<void> {
+    this.signingDeliverySeq += 1;
+    return this.routeQueue.deliver(
+      `wc:signing:${this.signingDeliverySeq}`,
+      run
+    );
+  }
+
+  /**
+   * Make this service the ONE owner of the v1 client's `call_request`
+   * listener (TASK-257). Both a fresh v1 pairing and a restored v1 session
+   * call this; the listener is removed before it is added, so re-pairing
+   * never stacks a second listener and each request is delivered once.
+   * `fallbackTopic` is the pairing topic used when the session data has no
+   * handshake topic.
+   */
+  attachV1CallRequests(
+    v1Client: WalletConnectV1Client,
+    fallbackTopic: string
+  ): void {
+    if (this.v1CallRequestClient && this.v1CallRequestClient !== v1Client) {
+      this.v1CallRequestClient.off('call_request', this.onV1CallRequest);
+    }
+    this.v1CallRequestClient = v1Client;
+    this.v1CallRequestTopic = fallbackTopic;
+    v1Client.off('call_request', this.onV1CallRequest);
+    v1Client.on('call_request', this.onV1CallRequest);
+  }
+
+  private onV1CallRequest = (callRequest: any): void => {
+    // Transform v1 call_request format to match v2 format
+    // v1 format: { id, method, params: transactions[] }
+    // v2 format: { id, topic, params: { request: { method, params: [transactions[]] }, chainId } }
+    const sessionData = this.v1CallRequestClient?.getSessionData();
+    const transformedRequest = {
+      id: callRequest.id,
+      topic: sessionData?.handshakeTopic || this.v1CallRequestTopic,
+      params: {
+        request: {
+          method: callRequest.method,
+          // Wrap transactions array in another array to match v2 format
+          params: [callRequest.params],
+        },
+        chainId: sessionData?.chainId || 416001, // Default to Algorand mainnet
+      },
+    };
+
+    // A request already queued or shown is not surfaced again (TASK-257).
+    // Same claim lifecycle as the boot's session_request handler: the claim
+    // stays while the request is shown or queued, and a failed delivery
+    // releases it so a redelivery can surface.
+    if (
+      !TransactionRequestQueue.claim(
+        transformedRequest.id,
+        transformedRequest.topic
+      )
+    ) {
+      void RequestCoordinator.getInstance().retryUnpublished(
+        requestRefFor(transformedRequest, 1)
+      );
+      console.log('[DeepLinkService] Duplicate V1 request ignored');
+      return;
+    }
+
+    const coordinator = RequestCoordinator.getInstance();
+    const ref = requestRefFor(transformedRequest, 1);
+    void (async () => {
+      const admission = await coordinator.admit(ref);
+      if (admission.action !== 'show') {
+        TransactionRequestQueue.releaseClaim(
+          transformedRequest.id,
+          transformedRequest.topic
+        );
+        return;
+      }
+      await this.deliverSigningRequest(async () => {
+        let delivered = false;
+        try {
+          if (!this.navigationRef?.isReady()) {
+            console.error(
+              '[DeepLinkService] V1 transaction request not shown: navigation not ready'
+            );
+            return;
+          }
+          // Check if we're already on the TransactionRequestScreen
+          if (
+            this.navigationRef.getCurrentRoute()?.name ===
+            'WalletConnectTransactionRequest'
+          ) {
+            // Enqueue the request instead of navigating immediately; that
+            // screen takes it next. The claim stays: queued.
+            console.log(
+              '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
+            );
+            try {
+              await TransactionRequestQueue.enqueue({
+                id: transformedRequest.id,
+                topic: transformedRequest.topic,
+                params: transformedRequest.params,
+                version: 1,
+              });
+            } catch (error) {
+              if (!(error instanceof QueueFullError)) throw error;
+              // TASK-394: answer it as dropped (marks it displayed, so a
+              // redelivery is not shown) instead of releasing the claim.
+              TransactionRequestQueue.reportDropped(
+                [
+                  {
+                    id: transformedRequest.id,
+                    topic: transformedRequest.topic,
+                    params: transformedRequest.params,
+                    timestamp: Date.now(),
+                    version: 1,
+                  },
+                ],
+                'full'
+              );
+            }
+            delivered = true;
+            return;
+          }
+
+          // Navigate to transaction request screen if not already there
+          delivered = await this.navigateToRoute({
+            screen: 'WalletConnectTransactionRequest',
+            params: {
+              requestEvent: transformedRequest,
+              version: 1,
+            },
+          });
+          if (delivered) {
+            TransactionRequestQueue.markDisplayed(
+              transformedRequest.id,
+              transformedRequest.topic
+            );
+          }
+        } finally {
+          if (!delivered) {
+            // Not shown and not queued: let a redelivery of it through.
+            TransactionRequestQueue.releaseClaim(
+              transformedRequest.id,
+              transformedRequest.topic
+            );
+            coordinator.release(ref);
+          }
+        }
+      });
+    })().catch((error) => {
+      // The route queue never rejects; if it ever did, the handler above
+      // never ran, so the request was not delivered.
+      TransactionRequestQueue.releaseClaim(
+        transformedRequest.id,
+        transformedRequest.topic
+      );
+      coordinator.release(ref);
+      console.error(
+        '[DeepLinkService] Failed to deliver V1 request:',
+        redactError(error)
+      );
+    });
+  };
+
+  /**
+   * Tear down the Linking subscription and the navigation-ready listeners
+   * (unmount). A route still waiting for navigation is NOT dropped: a
+   * cold-start notification has already been marked handled, so dropping it
+   * would lose it for good. It stays queued and is delivered once a remount
+   * calls setNavigationRef() with a ready container.
+   */
+  cleanup(): void {
+    if (this.linkingSubscription) {
+      this.linkingSubscription.remove();
+      this.linkingSubscription = null;
+    }
+    this.detachNavigationRefListeners();
+    this.navigationRef = null;
   }
 
   /**
@@ -166,23 +451,31 @@ export class DeepLinkService {
 
   async initialize(): Promise<void> {
     try {
-      // Handle initial URL if app was opened via deep link
+      // Listen for incoming deep links FIRST, so a 'url' event that fires
+      // while getInitialURL() is pending is not lost. If it is the same URL
+      // as the initial one, the route queue runs it once (dedupe by key).
+      // Idempotent: drop a previous subscription before re-subscribing.
+      this.linkingSubscription?.remove();
+      this.linkingSubscription = Linking.addEventListener('url', ({ url }) => {
+        console.log('Received deep link:', redactSensitiveForLog(url));
+        this.deliverUrl(url).catch((error) => {
+          console.error('Failed to handle deep link:', redactError(error));
+        });
+      });
+
+      // Handle initial URL if app was opened via deep link. Queued until the
+      // navigation container is ready (DR-10), not awaited here: init must
+      // not block on navigation readiness or on a prompt the handler shows.
       const initialUrl = await Linking.getInitialURL();
       if (initialUrl) {
         console.log(
           'Handling initial deep link:',
           redactSensitiveForLog(initialUrl)
         );
-        await this.handleUrl(initialUrl);
-      }
-
-      // Listen for incoming deep links
-      this.linkingSubscription = Linking.addEventListener('url', ({ url }) => {
-        console.log('Received deep link:', redactSensitiveForLog(url));
-        this.handleUrl(url).catch((error) => {
+        this.deliverUrl(initialUrl).catch((error) => {
           console.error('Failed to handle deep link:', redactError(error));
         });
-      });
+      }
 
       // Set up notification tap handler for navigation
       this.setupNotificationHandler();
@@ -200,26 +493,43 @@ export class DeepLinkService {
    */
   private setupNotificationHandler(): void {
     notificationService.setNotificationTapHandler(
-      async (data: NotificationData) => {
-        console.log(
-          '[DeepLink] Notification tap handler called, isAppUnlocked:',
-          this.isAppUnlocked,
-          'data:',
-          redactNotificationData(data)
+      (data: NotificationData, notificationId?: string) => {
+        // Keyed by the notification identifier, so the cold-start response
+        // and a response-listener event for the same tap route once. The
+        // unlock gate below runs inside the queued call, i.e. after
+        // navigation is ready, unchanged.
+        const key = notificationId
+          ? `notification:${notificationId}`
+          : `notification:untracked:${++this.untrackedNotificationCount}`;
+        return this.routeQueue.deliver(key, () =>
+          this.handleNotificationTap(data)
         );
-
-        // If app is locked, store the notification for later processing after unlock
-        if (!this.isAppUnlocked) {
-          console.log(
-            '[DeepLink] App is locked, storing notification for after unlock'
-          );
-          this.pendingNotification = data;
-          return;
-        }
-
-        await this.handleNotificationNavigation(data);
       }
     );
+  }
+
+  /**
+   * The notification-tap handler body: hold the route until unlock, else
+   * navigate. Runs from the route queue once navigation is ready.
+   */
+  private async handleNotificationTap(data: NotificationData): Promise<void> {
+    console.log(
+      '[DeepLink] Notification tap handler called, isAppUnlocked:',
+      this.isAppUnlocked,
+      'data:',
+      redactNotificationData(data)
+    );
+
+    // If app is locked, store the notification for later processing after unlock
+    if (!this.isAppUnlocked) {
+      console.log(
+        '[DeepLink] App is locked, storing notification for after unlock'
+      );
+      this.pendingNotification = data;
+      return;
+    }
+
+    await this.handleNotificationNavigation(data);
   }
 
   /**
@@ -239,20 +549,35 @@ export class DeepLinkService {
         // Navigate to MessagesInbox first (handles initialization), then to Chat
         if (data.sender) {
           // If receiver is provided, switch to that account first
+          let openChat = true;
           if (data.receiver) {
-            const walletStore = useWalletStore.getState();
-            const receiverAccount = walletStore.wallet?.accounts.find(
-              (acc) => acc.address === data.receiver
-            );
-            if (
-              receiverAccount &&
-              walletStore.wallet?.activeAccountId !== receiverAccount.id
-            ) {
-              console.log(
-                'Switching to receiver account:',
-                redactAddress(receiverAccount.address)
+            try {
+              let walletStore = useWalletStore.getState();
+              // A fast cold-start unlock can beat wallet hydration; initialize()
+              // shares the in-flight pass, so await it (TASK-465).
+              if (!walletStore.isInitialized) {
+                await walletStore.initialize();
+                walletStore = useWalletStore.getState();
+              }
+              const receiverAccount = walletStore.wallet?.accounts.find(
+                (acc) => acc.address === data.receiver
               );
-              await walletStore.setActiveAccount(receiverAccount.id);
+              if (!receiverAccount) {
+                // Never open Chat under whichever account happens to be active.
+                openChat = false;
+              } else if (
+                walletStore.wallet?.activeAccountId !== receiverAccount.id
+              ) {
+                console.log(
+                  'Switching to receiver account:',
+                  redactAddress(receiverAccount.address)
+                );
+                await walletStore.setActiveAccount(receiverAccount.id);
+              }
+            } catch (error) {
+              // Hydration or the switch failed: still land on the inbox.
+              console.warn('Receiver account resolution failed:', error);
+              openChat = false;
             }
           }
 
@@ -269,7 +594,17 @@ export class DeepLinkService {
           });
 
           // Small delay to let MessagesInbox initialize, then navigate to Chat
+          if (!openChat) break;
           setTimeout(() => {
+            // The account may have changed during the delay; Chat is only
+            // right under the receiver account.
+            if (data.receiver) {
+              const wallet = useWalletStore.getState().wallet;
+              const active = wallet?.accounts.find(
+                (acc) => acc.id === wallet.activeAccountId
+              );
+              if (active?.address !== data.receiver) return;
+            }
             this.navigateToRoute({
               screen: 'Main',
               params: {
@@ -415,6 +750,27 @@ export class DeepLinkService {
     }
   }
 
+  /**
+   * A v1 pairing blocks a second v1 link only while it can still produce a
+   * proposal: it clears on the proposal, on an error, on a failed connect, and
+   * after a bounded wait, so a dApp that never sends one cannot block v1 links
+   * until the app restarts.
+   */
+  private setV1PairingInFlight(inFlight: boolean): void {
+    if (this.v1PairingTimer) {
+      clearTimeout(this.v1PairingTimer);
+      this.v1PairingTimer = null;
+    }
+    this.v1PairingInFlight = inFlight;
+    if (inFlight) {
+      this.v1PairingTimer = setTimeout(() => {
+        this.v1PairingInFlight = false;
+        this.v1PairingTimer = null;
+      }, V1_PAIRING_WAIT_MS);
+      (this.v1PairingTimer as { unref?: () => void }).unref?.();
+    }
+  }
+
   private async handleWalletConnectV1Uri(url: string): Promise<boolean> {
     try {
       // Parse v1 URI
@@ -423,70 +779,53 @@ export class DeepLinkService {
         throw new Error('Invalid WalletConnect v1 URI format');
       }
 
+      if (
+        this.v1PairingInFlight ||
+        RequestCoordinator.getInstance().hasOpenV1Proposal()
+      ) {
+        Toast.show({ type: 'info', ...V1_BUSY_TOAST });
+        return false;
+      }
+
       // Initialize WalletConnect v1 client
       const v1Client = WalletConnectV1Client.getInstance();
 
       // Set up event handlers
-      v1Client.once('session_request', (sessionRequest) => {
-        // Navigate to session proposal screen
-        this.navigateToRoute({
-          screen: 'WalletConnectSessionProposal',
-          params: {
-            version: 1,
-            sessionRequest,
-          },
-        });
-      });
-
-      // Listen for transaction signing requests (permanent listener)
-      v1Client.on('call_request', async (callRequest) => {
-        // Transform v1 call_request format to match v2 format
-        // v1 format: { id, method, params: transactions[] }
-        // v2 format: { id, topic, params: { request: { method, params: [transactions[]] }, chainId } }
-        const sessionData = v1Client.getSessionData();
-        const transformedRequest = {
-          id: callRequest.id,
-          topic: sessionData?.handshakeTopic || parsed.topic,
-          params: {
-            request: {
-              method: callRequest.method,
-              // Wrap transactions array in another array to match v2 format
-              params: [callRequest.params],
-            },
-            chainId: sessionData?.chainId || 416001, // Default to Algorand mainnet
-          },
-        };
-
-        // Check if we're already on the TransactionRequestScreen
-        if (this.navigationRef?.isReady()) {
-          const currentRoute = this.navigationRef.getCurrentRoute();
-
-          if (currentRoute?.name === 'WalletConnectTransactionRequest') {
-            // Enqueue the request instead of navigating immediately
-            console.log(
-              '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
-            );
-            await TransactionRequestQueue.enqueue({
-              id: transformedRequest.id,
-              topic: transformedRequest.topic,
-              params: transformedRequest.params,
-              version: 1,
-            });
-            return;
-          }
+      v1Client.once(
+        'session_request',
+        (sessionRequest: { id?: number | string }) => {
+          this.setV1PairingInFlight(false);
+          const coordinator = RequestCoordinator.getInstance();
+          const ref = v1ProposalRefFor(sessionRequest);
+          void (async () => {
+            const admission = await coordinator.admit(ref);
+            if (admission.action !== 'show') return;
+            try {
+              const delivered = await this.navigateToRoute(
+                {
+                  screen: 'WalletConnectSessionProposal',
+                  params: { version: 1, sessionRequest },
+                },
+                { push: true }
+              );
+              if (!delivered) coordinator.release(ref);
+            } catch (error) {
+              coordinator.release(ref);
+              console.error(
+                'Failed to deliver WalletConnect v1 proposal:',
+                redactError(error)
+              );
+            }
+          })();
         }
+      );
 
-        // Navigate to transaction request screen if not already there
-        this.navigateToRoute({
-          screen: 'WalletConnectTransactionRequest',
-          params: {
-            requestEvent: transformedRequest,
-            version: 1,
-          },
-        });
-      });
+      // Transaction signing requests: one permanent listener, owned here
+      // and shared with session restore (TASK-257).
+      this.attachV1CallRequests(v1Client, parsed.topic);
 
       v1Client.once('error', (error) => {
+        this.setV1PairingInFlight(false);
         console.error(
           'DeepLinkService: v1 connection error',
           redactError(error)
@@ -502,6 +841,7 @@ export class DeepLinkService {
       });
 
       // Connect to bridge
+      this.setV1PairingInFlight(true);
       await v1Client.connect({
         topic: parsed.topic,
         version: parsed.version,
@@ -511,6 +851,7 @@ export class DeepLinkService {
 
       return true;
     } catch (error) {
+      this.setV1PairingInFlight(false);
       console.error(
         'Failed to handle WalletConnect v1 URI:',
         redactError(error)
@@ -1116,8 +1457,8 @@ export class DeepLinkService {
 
   private async navigateToRoute(
     route: DeepLinkRoute,
-    options?: { replace?: boolean }
-  ): Promise<void> {
+    options?: { replace?: boolean; push?: true }
+  ): Promise<boolean> {
     // Log route name + param keys only; param values can carry
     // recipient addresses, amounts, notes and keyreg key material.
     console.log(
@@ -1137,11 +1478,13 @@ export class DeepLinkService {
 
     if (!this.navigationRef?.isReady()) {
       console.warn('[DeepLink] Navigation not ready, waiting...');
-      // Wait a bit for navigation to be ready
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // DR-10: wait for the navigation container's ready signal instead of a
+      // fixed 100 ms. The wait logs on a timeout but does not give up.
+      await this.routeQueue.whenReady();
       if (!this.navigationRef?.isReady()) {
-        console.error('[DeepLink] Navigation still not ready after waiting');
-        return;
+        // Unreachable in practice: whenReady() resolves only while ready.
+        console.error('[DeepLink] Navigation not ready; route not delivered');
+        return false;
       }
     }
 
@@ -1152,9 +1495,17 @@ export class DeepLinkService {
       );
       // Use type assertion to handle React Navigation's complex generic types
       if (options?.replace) {
-        // Use StackActions.replace to replace current screen in stack
+        const state = this.navigationRef.getRootState();
+        const scanner = state?.routes.find(
+          (entry) => entry.name === 'QRScanner'
+        );
+        this.navigationRef.dispatch({
+          ...StackActions.replace(route.screen, route.params),
+          ...(scanner ? { source: scanner.key, target: state?.key } : {}),
+        });
+      } else if (options?.push) {
         this.navigationRef.dispatch(
-          StackActions.replace(route.screen, route.params)
+          StackActions.push(route.screen, route.params)
         );
       } else {
         (this.navigationRef as any).navigate(route.screen, route.params);
@@ -1162,6 +1513,7 @@ export class DeepLinkService {
       console.log(
         '[DeepLink] navigateToRoute - navigation called successfully'
       );
+      return true;
     } catch (error) {
       console.error(
         '[DeepLink] navigateToRoute - Failed to navigate:',
