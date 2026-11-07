@@ -37,6 +37,7 @@ import { AnimatedQRCode } from '@/components/remoteSigner';
 import algosdk from 'algosdk';
 import { redactError } from '@/utils/logRedaction';
 import { assertSignableKeyreg } from '@/utils/keyregSafety';
+import { isCovered } from '@/utils/lockCover';
 
 type RouteParams = {
   SignatureDisplay: {
@@ -123,6 +124,11 @@ export default function SignatureDisplayScreen() {
               `No signing key found for address: ${signerAddress}`
             );
           }
+
+          // The PIN reached this screen through route params, so a lock that
+          // landed after authentication must stop the signature here, before
+          // each key read (the existing error state offers Retry).
+          if (isCovered()) throw new Error('Signing failed');
 
           // Get the private key
           // If PIN was provided (PIN auth), use it
