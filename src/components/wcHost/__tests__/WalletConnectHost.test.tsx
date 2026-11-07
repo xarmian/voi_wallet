@@ -217,7 +217,7 @@ it.each(
     (['proposal', 'request'] as const).map((kind) => [state, kind] as const)
   )
 )(
-  'DEFECT host refuses drawing %j (%s): a review never drawn is not started, a drawn one is ended as abandoned',
+  'DEFECT host refuses drawing %j (%s): a review never drawn is not started, a drawn one leaves the queue and its review hears the end',
   async (state, kind) => {
     const drawable = { ...mockDraw };
     const session = push(kind);

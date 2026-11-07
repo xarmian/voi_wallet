@@ -668,7 +668,8 @@ const createStyles = (theme: Theme) =>
       marginBottom: theme.spacing.sm,
     },
     // The waiting summary must not push the keypad off a small screen, so the
-    // header gives up most of its bottom margin and the lines stay on one row.
+    // header gives up most of its bottom margin and the detail lines stay on
+    // one row each. The dApp line may wrap, so the host stays readable.
     headerWithSummary: {
       marginBottom: theme.spacing.lg,
     },
