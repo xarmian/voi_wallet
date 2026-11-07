@@ -1,4 +1,4 @@
-import React, { useEffect, useSyncExternalStore } from 'react';
+import React, { useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
 import {
   ActivityIndicator,
   Button,
@@ -50,8 +50,6 @@ function HeadBody({ session }: { session: HeadSession }) {
   );
 }
 
-const styles = StyleSheet.create({ hidden: { display: 'none' } });
-
 export default function WalletConnectHost() {
   const queue = RequestQueue.getInstance();
   const snapshot = useSyncExternalStore(
@@ -62,8 +60,9 @@ export default function WalletConnectHost() {
   const { theme } = useTheme();
   const mayDraw = hostMayDraw(authState);
   // Where the app stack refuses to draw, a review that was never drawn is not
-  // created. One that was drawn stays mounted but hidden: unmounting it would
-  // clear the callbacks its buttons depend on, and nothing registers them again.
+  // created. One that was drawn is ended as abandoned: unmounting it alone would
+  // clear the callbacks its buttons depend on with nothing to register them
+  // again, and keeping it mounted would leave a live review nobody can see.
   const session = snapshot.head
     ? mayDraw
       ? getHeadSession(snapshot.head, {
@@ -72,19 +71,19 @@ export default function WalletConnectHost() {
         })
       : findHeadSession(snapshot.head)
     : null;
-  const hiddenSession = !mayDraw && session?.drawn ? session : null;
-  if (!mayDraw && !hiddenSession) return null;
+  // A layout effect, so the session ends and its review hears it before that
+  // review's own unmount cleanup removes its listener.
+  useLayoutEffect(() => {
+    if (!mayDraw && session?.drawn) session.binding.nav.goBack();
+  }, [mayDraw, session]);
+  if (!mayDraw) return null;
   if (!snapshot.head && !snapshot.result) return null;
   return (
     <View
       style={[
         StyleSheet.absoluteFill,
         { backgroundColor: theme.colors.background },
-        !mayDraw && styles.hidden,
       ]}
-      pointerEvents={mayDraw ? undefined : 'none'}
-      accessibilityElementsHidden={!mayDraw}
-      importantForAccessibility={mayDraw ? undefined : 'no-hide-descendants'}
     >
       {session && (
         <HostNavigation key={headKey(session.item.ref)}>

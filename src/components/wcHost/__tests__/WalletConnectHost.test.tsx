@@ -208,44 +208,47 @@ it('DEFECT request starts once across rerender and lock/unlock before params exi
   expect(session.controller).toBeDefined();
 });
 
-it.each([
-  { authChecked: false },
-  { securityUnavailable: true },
-  { pinSetupResume: true, hasPin: false },
-])(
-  'DEFECT host refuses drawing %s: a review never drawn is not created, a drawn one stays mounted but hidden',
-  async (state) => {
+it.each(
+  [
+    { authChecked: false },
+    { securityUnavailable: true },
+    { pinSetupResume: true, hasPin: false },
+  ].flatMap((state) =>
+    (['proposal', 'request'] as const).map((kind) => [state, kind] as const)
+  )
+)(
+  'DEFECT host refuses drawing %j (%s): a review never drawn is not started, a drawn one is ended as abandoned',
+  async (state, kind) => {
     const drawable = { ...mockDraw };
-    push('proposal');
+    const session = push(kind);
     mockDraw = { ...mockDraw, ...state };
     const view = await render(<WalletConnectHost />);
-    // Never drawn: nothing is rendered or started.
+    // Never drawn: nothing is rendered, started or ended.
     expect(view.toJSON()).toBeNull();
     expect(mockMount).not.toHaveBeenCalled();
-
-    mockDraw = drawable;
-    await view.rerender(<WalletConnectHost />);
-    expect(mockMount).toHaveBeenCalledTimes(1);
-
-    mockDraw = { ...drawable, ...state };
-    await view.rerender(<WalletConnectHost />);
-    // Unmounting would clear the review's callbacks, which nothing re-registers.
-    expect(mockUnmount).not.toHaveBeenCalled();
-    expect(mockClearCallbacks).not.toHaveBeenCalled();
-    const root = view.toJSON()!;
-    expect(StyleSheet.flatten(root.props.style)).toMatchObject({
-      display: 'none',
-    });
-    expect(root.props.pointerEvents).toBe('none');
+    expect(session.drawn).toBe(false);
     expect(queue.getSnapshot().head).not.toBeNull();
 
     mockDraw = drawable;
     await view.rerender(<WalletConnectHost />);
     expect(mockMount).toHaveBeenCalledTimes(1);
-    expect(mockUnmount).not.toHaveBeenCalled();
-    expect(
-      StyleSheet.flatten(view.toJSON()!.props.style).display
-    ).toBeUndefined();
+    expect(session.drawn).toBe(true);
+
+    // The app stack stops drawing: a live review nobody can see must not stay
+    // open, and unmounting it alone would leave its buttons without callbacks.
+    mockDraw = { ...drawable, ...state };
+    await view.rerender(<WalletConnectHost />);
+    expect(view.toJSON()).toBeNull();
+    expect(mockUnmount).toHaveBeenCalledTimes(1);
+    expect(mockLeave).toHaveBeenCalledTimes(1);
+    expect(queue.getSnapshot().head).toBeNull();
+    expect(queue.getSnapshot().result?.title).toBe('fixture result');
+
+    // Drawing again shows the ended request's card, never a second review.
+    mockDraw = drawable;
+    await view.rerender(<WalletConnectHost />);
+    expect(view.getByText('fixture result')).toBeTruthy();
+    expect(mockMount).toHaveBeenCalledTimes(1);
   }
 );
 it('DEFECT host root fills parent with opaque theme background; host never shows waiting summary', async () => {

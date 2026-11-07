@@ -871,6 +871,21 @@ it.each([false, true])(
   }
 );
 
+it('DEFECT a request with no open entry after the account read is ended, not reviewed', async () => {
+  const pending = deferred<(typeof account)[]>();
+  mockAccounts.mockReturnValue(pending.promise);
+  const h = await setup();
+  const loading = h.controller.start();
+  await flush();
+  // ensureOpen answered open for an admission still in progress; its entry
+  // never appeared, so no close listener could fire for it.
+  jest.spyOn(coordinator, 'isOpen').mockReturnValue(false);
+  pending.resolve([account]);
+  await loading;
+  expect(h.surface.presentReview).not.toHaveBeenCalled();
+  expect(h.surface.takeNext).toHaveBeenCalledTimes(1);
+});
+
 it.each([
   ['load-failed', 'Malformed request: missing params'],
   ['sign-failed', 'Failed to sign transactions'],

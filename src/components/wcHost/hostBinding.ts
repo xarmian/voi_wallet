@@ -18,7 +18,11 @@ export function createHostBinding(
     return !!head && headKey(head.ref) === session.key;
   };
   const finish = (approved: boolean) => {
-    if (!isHead()) return false;
+    if (!isHead()) {
+      // The person left while the approval was still in flight and it then
+      // went through: correct the card the early exit wrote.
+      return approved ? queue.amendApproved(session.item.ref) : false;
+    }
     session.closeInQueue(queue, approved);
     session.end();
     return true;

@@ -197,7 +197,7 @@ export class SignRequestController {
         stopWatching();
       }
       if (this.settled) return;
-      if (closedWhileLoading) {
+      if (closedWhileLoading || !coordinator.isOpen(ref)) {
         this.settled = true;
         await this.advanceAfterEnd();
         return;

@@ -169,6 +169,22 @@ export class RequestQueue {
     return this.finish(ref, this.describeClose(reason, ref.kind));
   }
 
+  /**
+   * Correct the current result to approved, for a connection that completed
+   * after the person had already left the review. Only the matching result.
+   */
+  amendApproved(ref: RequestRef): boolean {
+    const approved = this.describeApproved(ref.kind);
+    const current = this.snapshot.result;
+    if (
+      current &&
+      current.title === approved.title &&
+      current.message === approved.message
+    )
+      return false;
+    return this.amendResult(ref, approved);
+  }
+
   /** Finish the head after the person approved it. */
   finishApproved(ref: RequestRef): boolean {
     return this.finish(ref, this.describeApproved(ref.kind));

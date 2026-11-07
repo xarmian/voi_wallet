@@ -569,9 +569,7 @@ export default function LockScreen() {
           {summary && (
             <View style={styles.summary}>
               <Text style={styles.summaryTitle}>{summary.title}</Text>
-              <Text style={styles.summaryLine} numberOfLines={1}>
-                {summary.dappLine}
-              </Text>
+              <Text style={styles.summaryLine}>{summary.dappLine}</Text>
               <Text style={styles.summaryLine} numberOfLines={1}>
                 {summary.detailLine}
               </Text>

@@ -78,10 +78,11 @@ jest.mock('react-native-safe-area-context', () => ({
 }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 let mockLocked = false;
+let mockAuthChecked = true;
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
     authState: {
-      authChecked: true,
+      authChecked: mockAuthChecked,
       securityUnavailable: false,
       hasPin: true,
       pinSetupResume: false,
@@ -151,6 +152,7 @@ let changeState: (state: AppStateStatus) => void;
 let params: { proposal: typeof proposal | undefined };
 beforeEach(async () => {
   mockLocked = false;
+  mockAuthChecked = true;
   reviewGrant.revoke(false);
   AppLockSignal.setUnlocked(true);
   SessionKeyVault.set('fixture', 'pin');
@@ -454,6 +456,20 @@ it.each([
     expect(queue.getSnapshot().result?.title).toBe('abandoned');
   }
 );
+it('DEFECT the host stops drawing a drawn proposal: it settles abandoned once and ends the head', async () => {
+  const view = await render(<WalletConnectHost />);
+  await waitFor(() =>
+    expect(view.getByRole('button', { name: 'Connect' })).toBeEnabled()
+  );
+  const settle = jest.spyOn(coordinator, 'settle');
+  mockAuthChecked = false;
+  await view.rerender(<WalletConnectHost />);
+  expect(view.toJSON()).toBeNull();
+  expect(settle).toHaveBeenCalledTimes(1);
+  expect(settle).toHaveBeenCalledWith(ref, 'abandoned');
+  expect(queue.getSnapshot().head).toBeNull();
+  expect(queue.getSnapshot().result?.title).toBe('abandoned');
+});
 it('DEFECT approval in flight ignores background', async () => {
   const view = await mount();
   let finish!: (won: boolean) => void;

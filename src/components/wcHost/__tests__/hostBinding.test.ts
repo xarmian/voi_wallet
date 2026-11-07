@@ -65,6 +65,20 @@ it.each(['goBack', 'popOrReplace'] as const)(
     expect(leave).toHaveBeenCalledTimes(1);
   }
 );
+it('DEFECT an approval that completes after the person left corrects the card once', () => {
+  const h = setup();
+  expect(h.binding.nav.goBack()).toBe(true);
+  expect(h.queue.getSnapshot().result?.title).toBe('abandoned');
+  expect(h.binding.nav.popOrReplace('Main')).toBe(true);
+  expect(h.queue.getSnapshot().result).toMatchObject({
+    title: 'Success',
+    message: 'Successfully connected to dApp',
+  });
+  expect(h.binding.nav.popOrReplace('Main')).toBe(false);
+  // A plain exit never turns into an approval.
+  expect(h.binding.nav.goBack()).toBe(false);
+  expect(h.queue.getSnapshot().result?.title).toBe('Success');
+});
 it('DEFECT last coordinator reason is scoped to the session', () => {
   const h = setup();
   // Notify the session directly; the queue subscriber ordinarily closes first.
