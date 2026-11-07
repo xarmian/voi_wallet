@@ -1,3 +1,4 @@
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
@@ -46,6 +47,7 @@ import {
 const OLD_PIN_SESSION_MS = 5 * 60 * 1000;
 
 export default function RestoreWalletScreen() {
+  const covered = useCoverPaused();
   const navigation = useNavigation();
   const route = useRoute();
   const isOnboarding = (route.params as { isOnboarding?: boolean } | undefined)
@@ -82,6 +84,19 @@ export default function RestoreWalletScreen() {
   const [showForgottenConsent, setShowForgottenConsent] = useState(false);
   const oldPinEpoch = useRef<number | null>(null);
   const restoreInFlight = useRef(false);
+  const validationGeneration = useRef(0);
+  useEffect(() => {
+    if (covered) {
+      validationGeneration.current += 1;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- A lock must discard the parent password and return confirmation to password entry.
+      setPassword('');
+      setIsValidating(false);
+      setBackupInfo(null);
+      setShowConfirmationModal(false);
+      setShowForgottenConsent(false);
+      setShowPasswordModal(!!selectedFile && !restoreInFlight.current);
+    }
+  }, [covered, selectedFile]);
   // Bumped whenever the screen is left or the app leaves the foreground. A PIN
   // check that started before the bump must not fill the vault when it ends.
   const oldPinGeneration = useRef(0);
@@ -96,8 +111,11 @@ export default function RestoreWalletScreen() {
       if (sessionTimer.current) clearTimeout(sessionTimer.current);
       sessionTimer.current = null;
       // Only a verified session has anything to end. A background event on a
-      // screen with no session (Settings, or before the PIN) changes nothing.
+      // screen with no session (Settings, or before the PIN) only cancels a
+      // pending old-PIN check; it leaves a backup validation running.
       if (oldPinEpoch.current === null) return;
+      validationGeneration.current += 1;
+      setIsValidating(false);
       oldPinEpoch.current = null;
       clearRestoreVault();
       if (backTo) {
@@ -212,6 +230,7 @@ export default function RestoreWalletScreen() {
   const handlePasswordConfirm = useCallback(
     async (enteredPassword: string) => {
       if (!selectedFile) return;
+      const generation = validationGeneration.current;
 
       setPassword(enteredPassword);
       setIsValidating(true);
@@ -224,12 +243,14 @@ export default function RestoreWalletScreen() {
           enteredPassword
         );
 
+        if (generation !== validationGeneration.current) return;
         setBackupInfo(info);
         setShowPasswordModal(false);
         // The forgotten-PIN step has its own consent screen (DOC-507 5.3).
         if (oldPin === 'forgotten') setShowForgottenConsent(true);
         else setShowConfirmationModal(true);
       } catch (err) {
+        if (generation !== validationGeneration.current) return;
         if (err instanceof BackupError) {
           if (err.code === 'INTEGRITY_CHECK_FAILED') {
             setError('Incorrect password or corrupted file');
@@ -240,7 +261,7 @@ export default function RestoreWalletScreen() {
           setError('Failed to validate backup file');
         }
       } finally {
-        setIsValidating(false);
+        if (generation === validationGeneration.current) setIsValidating(false);
       }
     },
     [selectedFile, oldPin]

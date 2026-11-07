@@ -25,6 +25,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import {
@@ -81,6 +82,7 @@ export default function RemoteSignerSettingsScreen() {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const navigation = useNavigation<any>();
+  const covered = useCoverPaused();
 
   const isInitialized = useRemoteSignerInitialized();
   const appMode = useAppMode();
@@ -582,7 +584,7 @@ export default function RemoteSignerSettingsScreen() {
 
       {/* Setup Signer Mode Modal */}
       <Modal
-        visible={showSetupModal}
+        visible={showSetupModal && !covered}
         transparent
         animationType="fade"
         onRequestClose={() => setShowSetupModal(false)}

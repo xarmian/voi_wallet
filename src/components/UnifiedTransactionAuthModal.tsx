@@ -1,3 +1,5 @@
+import { isCovered } from '@/utils/lockCover';
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Modal,
@@ -59,12 +61,18 @@ export default function UnifiedTransactionAuthModal({
   biometricOnOpen = false,
 }: UnifiedTransactionAuthModalProps) {
   const { theme } = useTheme();
+  const covered = useCoverPaused();
   const styles = useThemedStyles(createStyles);
   const [authState, setAuthState] = useState<TransactionAuthState_Interface>(
     controller.getState()
   );
   const [pin, setPin] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- A lock must discard typed digits before the Modal can reopen; this effect only follows the external cover state.
+    if (covered) setPin('');
+  }, [covered]);
 
   // --- Auth-flow latches (TASK-241) --------------------------------------
   // initialized / userCancelled are REFS, not state, so
@@ -92,11 +100,24 @@ export default function UnifiedTransactionAuthModal({
   // This prevents double-submission when the onComplete prop reference changes during re-renders
   const hasCalledOnComplete = useRef(false);
 
+  useEffect(() => {
+    controller.setStartGate?.(() => !isCovered());
+    return () => controller.setStartGate?.(null);
+  }, [controller]);
+
   // Subscribe to controller state changes
   useEffect(() => {
     const unsubscribe = controller.subscribe(setAuthState);
     return unsubscribe;
   }, [controller]);
+
+  const wasCoveredRef = useRef(covered);
+  useEffect(() => {
+    if (wasCoveredRef.current && !covered) {
+      void controller.resumeDeferredStart?.();
+    }
+    wasCoveredRef.current = covered;
+  }, [covered, controller]);
 
   // Visibility-transition effect — the SOLE owner of the auth-flow latches
   // (TASK-241). Declared BEFORE the init effect so that on a genuine open the
@@ -146,6 +167,7 @@ export default function UnifiedTransactionAuthModal({
           request.reviewGrantKey &&
           controller.getState().state === 'authenticating'
         ) {
+          if (isCovered()) return;
           await controller.authenticateWithReviewGrant(request.reviewGrantKey);
         } else if (
           controller.getState().state === 'authenticating' &&
@@ -153,6 +175,7 @@ export default function UnifiedTransactionAuthModal({
           biometricOnOpen &&
           controller.getState().biometricAvailable
         ) {
+          if (isCovered()) return;
           await controller.authenticateWithBiometrics(message);
         }
       })();
@@ -219,6 +242,7 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const handleBiometricAuth = async () => {
+    if (isCovered() || isVerifying) return;
     try {
       await controller.authenticateWithBiometrics(message);
     } catch (error) {
@@ -434,7 +458,9 @@ export default function UnifiedTransactionAuthModal({
                     style={styles.numberButton}
                     onPress={handleBiometricAuth}
                     disabled={
-                      authState.isLocked || authState.state !== 'authenticating'
+                      isVerifying ||
+                      authState.isLocked ||
+                      authState.state !== 'authenticating'
                     }
                   >
                     <Ionicons
@@ -1032,7 +1058,7 @@ export default function UnifiedTransactionAuthModal({
 
   return (
     <Modal
-      visible={visible}
+      visible={visible && !covered}
       transparent
       animationType={useBottomSheet ? 'slide' : 'fade'}
       onRequestClose={() => {

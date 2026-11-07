@@ -1,3 +1,4 @@
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
@@ -35,6 +36,7 @@ interface RouteParams {
 }
 
 export default function ShowRecoveryPhraseScreen() {
+  const covered = useCoverPaused();
   const navigation = useNavigation();
   const route = useRoute();
   const { accountAddress } = (route.params as RouteParams) ?? {};
@@ -153,22 +155,27 @@ export default function ShowRecoveryPhraseScreen() {
     loadMnemonic();
   }, [loadMnemonic]);
 
+  const clearRevealedPhrase = useCallback(() => {
+    loadGenerationRef.current += 1;
+    loadAbortRef.current?.abort();
+    setMnemonic('');
+    setIsBlurred(true);
+    setIsLoading(false);
+    navigation.goBack();
+  }, [navigation]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- A lock must clear revealed secrets and abort pending fresh authentication.
+    if (covered) clearRevealedPhrase();
+  }, [covered, clearRevealedPhrase]);
+
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      // 'background' only (dev lead ruling): on iOS the Face ID sheet that the
-      // fresh-auth prompt opens moves the app to 'inactive', which must not
-      // abort the load it is authorising.
-      if (state === 'background') {
-        loadGenerationRef.current += 1;
-        loadAbortRef.current?.abort();
-        setMnemonic('');
-        setIsBlurred(true);
-        setIsLoading(false);
-        navigation.goBack();
-      }
+      // Face ID can make iOS inactive; only background aborts its own prompt.
+      if (state === 'background') clearRevealedPhrase();
     });
     return () => subscription?.remove?.();
-  }, [navigation]);
+  }, [clearRevealedPhrase]);
 
   const handleCopy = useCallback(async () => {
     if (!mnemonic) return;

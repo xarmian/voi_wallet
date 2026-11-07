@@ -128,6 +128,16 @@ export interface TransactionAuthState_Interface {
  * Manages the complete authentication and signing flow for ALL transaction types
  */
 export class TransactionAuthController {
+  private startGate: (() => boolean) | null = null;
+
+  public setStartGate(gate: (() => boolean) | null): void {
+    this.startGate = gate;
+  }
+
+  private canStartAuth(): boolean {
+    return this.startGate ? this.startGate() : true;
+  }
+
   private unifiedSigner = UnifiedTransactionSigner.getInstance();
   private stateListeners: ((state: TransactionAuthState_Interface) => void)[] =
     [];
@@ -150,6 +160,7 @@ export class TransactionAuthController {
   private pendingStartAfterReady: boolean = false;
   private pendingPinForStart: string | undefined;
   private hasStartedSigning: boolean = false;
+  private startDeferredByCover = false;
   private ledgerListenersSetup: boolean = false;
   private ledgerVerificationCache: {
     deviceId: string;
@@ -504,6 +515,7 @@ export class TransactionAuthController {
     this.pendingStartAfterReady = false;
     this.pendingPinForStart = undefined;
     this.hasStartedSigning = false;
+    this.startDeferredByCover = false;
     this.isSigningInProgress = false;
     this.ledgerCancelRequested = false; // Reset cancel flag for new flow
     this.ledgerVerificationCache = null; // Clear cache on new flow
@@ -1395,8 +1407,10 @@ export class TransactionAuthController {
       );
     }
 
+    const generation = this.cancelledFlowGeneration;
     try {
       const isValid = await AccountSecureStorage.verifyPin(pin);
+      if (generation !== this.cancelledFlowGeneration) return false;
 
       if (isValid) {
         this.reviewFlowEnded = false;
@@ -1461,6 +1475,7 @@ export class TransactionAuthController {
     if (!this.currentState.biometricAvailable) {
       throw new Error('Biometric authentication not available');
     }
+    if (!this.canStartAuth()) return false;
 
     try {
       // LEDGER: biometric is a pure UI gate — the signing key lives on the
@@ -1600,6 +1615,7 @@ export class TransactionAuthController {
   }
 
   public async authenticateWithReviewGrant(key: string): Promise<boolean> {
+    if (!this.canStartAuth()) return false;
     if (
       this.currentState.state !== 'authenticating' ||
       this.reviewAuthorized ||
@@ -1651,6 +1667,40 @@ export class TransactionAuthController {
     return true;
   }
 
+  private deferSigning(pin?: string): void {
+    this.hasStartedSigning = false;
+    // A refused start means the app is covered. If a biometric unlock finished
+    // after the lock and refilled the session vault (wasLocked was read before
+    // the prompt, so its finally would skip the clear), a lock must still drop
+    // the session key material.
+    if (!AppLockSignal.isUnlocked()) clearSessionSecurity();
+    if (this.currentRequest?.reviewGrantKey) {
+      this.settleReviewCapability();
+      this.updateState({
+        state: 'error',
+        error: new ReviewEndedError(
+          'Unlock to review this request again.',
+          'Approval ended'
+        ),
+      });
+      return;
+    }
+    if (this.currentState.state === 'signing') {
+      this.updateState({ state: 'authenticating' });
+    }
+    if (this.currentState.isLedgerFlow) {
+      this.startDeferredByCover = true;
+      this.pendingStartAfterReady = true;
+      this.pendingPinForStart = pin;
+    }
+  }
+
+  public async resumeDeferredStart(): Promise<void> {
+    if (!this.startDeferredByCover) return;
+    this.startDeferredByCover = false;
+    await this.maybeStartSigningIfReady();
+  }
+
   private async startSigning(pin?: string): Promise<void> {
     if (!this.currentRequest) {
       throw new Error('No transaction request to sign');
@@ -1700,6 +1750,11 @@ export class TransactionAuthController {
     if (reviewKey && this.reviewSigningStarted) return;
 
     if (this.refuseWhileSignerAlive()) return;
+
+    if (!this.canStartAuth()) {
+      this.deferSigning(pin);
+      return;
+    }
 
     // Update request with PIN if provided
     if (pin) {
@@ -2448,6 +2503,7 @@ export class TransactionAuthController {
 
     // invalidate current flow; any late async callbacks will be ignored
     this.cancelledFlowGeneration += 1;
+    this.startDeferredByCover = false;
     try {
       ledgerTransportService.cancelConnect();
     } catch {}
@@ -2482,6 +2538,7 @@ export class TransactionAuthController {
     this.pendingStartAfterReady = false;
     this.pendingPinForStart = undefined;
     this.hasStartedSigning = false;
+    this.startDeferredByCover = false;
     this.hasSubmittedToNetwork = false;
     this.ledgerVerificationCache = null;
     this.deviceVerificationInProgress = false;

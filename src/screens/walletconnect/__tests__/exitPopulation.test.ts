@@ -3,13 +3,17 @@ import { resolve } from 'path';
 
 // DEFECT: every request exit must use the coordinator; retain this population gate.
 it('DEFECT TRS has no unrecorded delivery forgetting or direct rejection sends', () => {
-  const source = readFileSync(
-    resolve(__dirname, '../TransactionRequestScreen.tsx'),
-    'utf8'
-  );
-  expect(source).not.toContain('TransactionRequestQueue.forgetDelivery(');
-  expect(source).not.toMatch(/\.rejectRequest\s*\(/);
-  expect(source).not.toMatch(/\.rejectSession\s*\(/);
+  const files = [
+    '../TransactionRequestScreen.tsx',
+    '../../../services/walletconnect/signRequestController.ts',
+  ];
+  expect(files).toHaveLength(2);
+  for (const file of files) {
+    const source = readFileSync(resolve(__dirname, file), 'utf8');
+    expect(source).not.toContain('TransactionRequestQueue.forgetDelivery(');
+    expect(source).not.toMatch(/\.rejectRequest\s*\(/);
+    expect(source).not.toMatch(/\.rejectSession\s*\(/);
+  }
 });
 
 it('DEFECT UTS routes terminal outcomes to its caller', () => {

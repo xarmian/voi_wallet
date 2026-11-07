@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import { useCoverPaused } from '@/hooks/useCoverPaused';
+import React, { useState, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -22,11 +23,16 @@ export default function DeleteAccountModal({
 }) {
   const styles = useThemedStyles(createStyles);
   const [text, setText] = useState('');
+  const covered = useCoverPaused();
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- The external lock must discard typed input before the Modal reopens.
+    if (covered) setText('');
+  }, [covered]);
   const enabled = text.trim() === 'DELETE';
   return (
     <Modal
       testID="delete-account-modal"
-      visible
+      visible={!covered}
       transparent
       animationType="fade"
       onRequestClose={onCancel}

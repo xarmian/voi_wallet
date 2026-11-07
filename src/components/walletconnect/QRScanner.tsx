@@ -1,3 +1,6 @@
+import { redactError } from '@/utils/logRedaction';
+import { useCoverPaused } from '@/hooks/useCoverPaused';
+import { isCovered } from '@/utils/lockCover';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Alert,
@@ -12,11 +15,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { DeepLinkService } from '@/services/deeplink';
 import { isWalletConnectUri, isVoiUri } from '@/services/walletconnect/utils';
-import {
-  isArc0090Uri,
-  getArc0090UriType,
-  isLegacyVoiUri,
-} from '@/utils/arc0090Uri';
+import { isArc0090Uri, isLegacyVoiUri } from '@/utils/arc0090Uri';
 import { parseArc0300AccountImportUri } from '@/utils/arc0300';
 import algosdk from 'algosdk';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -62,7 +61,9 @@ interface Props {
 }
 
 export default function QRScanner({ onClose, onSuccess }: Props) {
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [hasPermission, setHasPermission] = useState<boolean | null>(() =>
+    Platform.OS === 'web' ? true : null
+  );
   const [scanned, setScanned] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
@@ -70,13 +71,28 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
 
+  const requestCameraPermission = async () => {
+    const { status } = await Camera.requestCameraPermissionsAsync();
+    setHasPermission(status === 'granted');
+  };
+
+  const covered = useCoverPaused();
+  const wasCovered = useRef(covered);
+  const scanInFlight = useRef(false);
+  useEffect(() => {
+    if (wasCovered.current && !covered && !scanInFlight.current) {
+      setScanned(false);
+      setIsProcessing(false);
+    }
+    wasCovered.current = covered;
+  }, [covered]);
+
   useEffect(() => {
     // Only request camera permission on native platforms
     if (Platform.OS !== 'web') {
-      requestCameraPermission();
-    } else {
-      // On web, we don't need camera permission - set to true to show web UI
-      setHasPermission(true);
+      void Camera.requestCameraPermissionsAsync().then(({ status }) => {
+        setHasPermission(status === 'granted');
+      });
     }
   }, []);
 
@@ -91,7 +107,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         const code = jsQR?.(imageData.data, imageData.width, imageData.height);
         return code?.data || null;
       } catch (e) {
-        console.error('jsQR error:', e);
+        console.error('jsQR error:', redactError(e));
         return null;
       }
     },
@@ -150,7 +166,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     } catch (error: any) {
       // User cancelled or error occurred
       if (error.name !== 'NotAllowedError' && error.name !== 'AbortError') {
-        console.error('Screen capture error:', error);
+        console.error('Screen capture error:', redactError(error));
         showAlert(
           'Capture Error',
           'Failed to capture screen. Please try again.',
@@ -221,7 +237,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         setIsProcessing(false);
       }
     } catch (error) {
-      console.error('File upload error:', error);
+      console.error('File upload error:', redactError(error));
       showAlert(
         'Upload Error',
         'Failed to process the uploaded image. Please try again.',
@@ -250,11 +266,6 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     }, [])
   );
 
-  const requestCameraPermission = async () => {
-    const { status } = await Camera.requestCameraPermissionsAsync();
-    setHasPermission(status === 'granted');
-  };
-
   const handleBarCodeScanned = async ({
     type,
     data,
@@ -262,15 +273,17 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     type: string;
     data: string;
   }) => {
-    if (scanned || isProcessing) {
+    if (scanInFlight.current || scanned || isProcessing) {
       return;
     }
 
+    scanInFlight.current = true;
     setScanned(true);
     setIsProcessing(true);
 
     const rawValue = typeof data === 'string' ? data.trim() : '';
     if (!rawValue) {
+      scanInFlight.current = false;
       setScanned(false);
       setIsProcessing(false);
       showAlert(
@@ -339,7 +352,16 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         },
         { text: 'Cancel', style: 'cancel', onPress: onClose },
       ]);
+    } finally {
+      scanInFlight.current = false;
     }
+  };
+
+  // The native callback must check the store before touching scan state.
+  // Web uploads and paste keep using the shared processing path directly.
+  const handleCameraScan = (event: { type: string; data: string }) => {
+    if (isCovered()) return;
+    return handleBarCodeScanned(event);
   };
 
   const handleWalletConnectUri = async (uri: string) => {
@@ -370,36 +392,24 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
    */
   const handleArc0090Uri = async (uri: string) => {
     try {
-      const uriType = getArc0090UriType(uri);
-      console.log(
-        '[QRScanner] handleArc0090Uri - uriType:',
-        uriType,
-        'uri:',
-        uri
-      );
-
       const deepLinkService = DeepLinkService.getInstance();
       const handled = await deepLinkService.testDeepLink(uri);
-      console.log('[QRScanner] handleArc0090Uri - handled:', handled);
 
       if (handled) {
         // NOTE: Don't call onSuccess() or onClose() here - the deep link handler
         // has already navigated to a new screen using StackActions.replace.
         // Calling onSuccess() would trigger handleSuccess in QRScannerScreen
         // which has a setTimeout that calls goBack(), dismissing the new screen.
-        console.log(
-          '[QRScanner] handleArc0090Uri - navigation handled by deep link service'
-        );
       } else {
-        console.log(
-          '[QRScanner] handleArc0090Uri - not handled, resetting scanner'
-        );
         // Reset scanner state so user can try again
         setScanned(false);
         setIsProcessing(false);
       }
     } catch (error) {
-      console.error('[QRScanner] handleArc0090Uri - error:', error);
+      console.error(
+        '[QRScanner] handleArc0090Uri - error:',
+        redactError(error)
+      );
       throw new Error(
         `URI processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -438,7 +448,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         return candidate;
       }
     } catch (error) {
-      console.error('Address validation failed:', error);
+      console.error('Address validation failed:', redactError(error));
     }
 
     const upperCandidate = candidate.toUpperCase();
@@ -448,7 +458,10 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
           return upperCandidate;
         }
       } catch (error) {
-        console.error('Uppercase address validation failed:', error);
+        console.error(
+          'Uppercase address validation failed:',
+          redactError(error)
+        );
       }
     }
 
@@ -778,16 +791,18 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
   // Native: Camera scanner
   return (
     <View style={styles.container}>
-      <CameraView
-        style={StyleSheet.absoluteFill}
-        facing="back"
-        onBarcodeScanned={
-          scanned || isProcessing ? undefined : handleBarCodeScanned
-        }
-        barcodeScannerSettings={{
-          barcodeTypes: ['qr'],
-        }}
-      />
+      {!covered && (
+        <CameraView
+          style={StyleSheet.absoluteFill}
+          facing="back"
+          onBarcodeScanned={
+            scanned || isProcessing ? undefined : handleCameraScan
+          }
+          barcodeScannerSettings={{
+            barcodeTypes: ['qr'],
+          }}
+        />
+      )}
       {renderOverlay()}
     </View>
   );

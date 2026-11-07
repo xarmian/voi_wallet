@@ -33,6 +33,10 @@ jest.mock('@/services/wipe/notices', () => ({
   showWipeIncompleteNotice: jest.fn(),
 }));
 jest.mock('@react-navigation/native', () => ({
+  NavigationContext: require('react').createContext({
+    isFocused: () => true,
+    addListener: () => () => {},
+  }),
   useNavigation: () => ({ isFocused: () => true, addListener: () => () => {} }),
 }));
 jest.mock('@/hooks/useThemedStyles', () => ({
@@ -105,4 +109,16 @@ test('a successful unlock shows nothing', async () => {
   await enterPin();
   expect(alert).not.toHaveBeenCalled();
   expect(mockHaptic).toHaveBeenCalledWith('success');
+});
+
+test('DEFECT: rejected unlock clears the entry so another full PIN works', async () => {
+  jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+  mockUnlock.mockRejectedValueOnce(new Error('unlock failed'));
+  const view = await enterPin();
+  mockUnlock.mockResolvedValue(true);
+  for (const digit of ['2', '3', '4', '5', '6', '7'])
+    await fireEvent.press(view.getByText(digit));
+  expect(mockUnlock).toHaveBeenCalledTimes(2);
+  expect(mockUnlock.mock.calls[1][0]).toBe('234567');
 });

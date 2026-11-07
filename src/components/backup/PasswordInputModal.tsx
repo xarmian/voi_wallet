@@ -1,4 +1,5 @@
-import React, { useState, useCallback } from 'react';
+import { useCoverPaused } from '@/hooks/useCoverPaused';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -39,6 +40,7 @@ export default function PasswordInputModal({
   isSubmitting = false,
   error,
 }: PasswordInputModalProps) {
+  const covered = useCoverPaused();
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
   const [password, setPassword] = useState('');
@@ -46,6 +48,17 @@ export default function PasswordInputModal({
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [hasEdited, setHasEdited] = useState(false);
+
+  useEffect(() => {
+    if (covered) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- The external lock must discard typed passwords before the Modal reopens.
+      setPassword('');
+      setConfirmPassword('');
+      setShowPassword(false);
+      setShowConfirmPassword(false);
+      setHasEdited(false);
+    }
+  }, [covered]);
 
   // Reset the editable fields the moment the modal transitions to visible by
   // adjusting state during render off a tracked previous value — the
@@ -102,7 +115,7 @@ export default function PasswordInputModal({
 
   return (
     <Modal
-      visible={visible}
+      visible={visible && !covered}
       transparent
       animationType="fade"
       onRequestClose={onCancel}

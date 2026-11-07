@@ -33,6 +33,7 @@ jest.mock('expo-local-authentication', () => ({
 jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
     hasPin: jest.fn(),
+    getCredentialSource: jest.fn(async () => 'pin'),
     isBiometricEnabled: jest.fn(),
     verifyPin: jest.fn(),
     getBiometricSecret: jest.fn(),
@@ -106,10 +107,23 @@ jest.mock('@/services/network', () => ({
   },
 }));
 let mockApprovedAccounts: string[] = [];
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+// The dApp transports the production WalletConnect outcome handler answers through.
+const mockWcRespond = { v1: jest.fn(), v2: jest.fn() };
 jest.mock('@/services/walletconnect', () => ({
   WalletConnectService: {
     getInstance: () => ({
       getApprovedAccountsForChain: () => mockApprovedAccounts,
+      respondToRequest: (...args: unknown[]) => mockWcRespond.v2(...args),
+    }),
+  },
+}));
+jest.mock('@/services/walletconnect/v1', () => ({
+  WalletConnectV1Client: {
+    getInstance: () => ({
+      approveRequest: (...args: unknown[]) => mockWcRespond.v1(...args),
     }),
   },
 }));
@@ -474,8 +488,8 @@ describe('remote batch submission ownership (TASK-418)', () => {
     txId: 'batch-tx',
     confirmed: true,
   }));
-  const respondV1 = jest.fn();
-  const respondV2 = jest.fn();
+  const respondV1 = mockWcRespond.v1;
+  const respondV2 = mockWcRespond.v2;
   const net = {
     getSuggestedParams: jest.fn(),
     getCurrentNetworkId: () => netId,
@@ -594,26 +608,41 @@ describe('remote batch submission ownership (TASK-418)', () => {
       routeParams: null,
       inputToken: null,
       settledRef: { current: false },
-      requestEvent: { id: 418, topic: 'dapp' },
-      WalletConnectService: {
-        getInstance: () => ({ respondToRequest: respondV2 }),
-      },
-      WalletConnectV1Client: {
-        getInstance: () => ({ approveRequest: respondV1 }),
-      },
-      takeNextRequest: async () => null,
       forgetUnanswered: noop,
-      // The request coordinator the screen records its decision with.
-      coordinator: {
-        decide: jest.fn(async () => true),
-        sendError: jest.fn(async () => {}),
-        settle: jest.fn(async () => 'settled'),
-      },
-      ref: { version: 2, kind: 'request', topic: 'dapp', id: 418 },
-      rejectingRef: { current: false },
-      advanceAfterEnd: jest.fn(async () => {}),
       setShowAuthModal: noop,
       setCurrentRequest: noop,
+    };
+  }
+
+  // The production WalletConnect outcome handler (the controller the request
+  // screen delegates to), with fakes only for the surface and the coordinator.
+  function walletConnectOutcome(version: number) {
+    const {
+      SignRequestController,
+    } = require('@/services/walletconnect/signRequestController');
+    const surface = {
+      presentReview: jest.fn(),
+      presentError: jest.fn(),
+      adoptNavigation: jest.fn(),
+      takeNext: jest.fn(async () => 'empty'),
+      leave: jest.fn(),
+    };
+    const coordinator = {
+      decide: jest.fn(async () => true),
+      sendError: jest.fn(async () => {}),
+      settle: jest.fn(async () => 'settled'),
+    };
+    const controller = new SignRequestController({
+      requestEvent: { id: 418, topic: 'dapp' },
+      version,
+      surface,
+      coordinator,
+    });
+    return {
+      surface,
+      coordinator,
+      handle: (result: unknown) =>
+        (controller as any).handleWalletConnectSuccess(result),
     };
   }
 
@@ -664,12 +693,8 @@ describe('remote batch submission ownership (TASK-418)', () => {
     async (version) => {
       const { controller, response } = await flow('batch_transaction', true);
       await controller.processRemoteSignerResponse(response);
-      const env = { ...scope(), version };
-      await screenHandler(
-        'walletconnect/TransactionRequestScreen',
-        'handleWalletConnectSuccess',
-        env
-      )(controller.getState().result);
+      const outcome = walletConnectOutcome(version);
+      await outcome.handle(controller.getState().result);
       if (version === 1) {
         expect(respondV1).toHaveBeenCalledWith(418, [signed, null]);
         expect(respondV2).not.toHaveBeenCalled();
@@ -678,20 +703,19 @@ describe('remote batch submission ownership (TASK-418)', () => {
         expect(respondV1).not.toHaveBeenCalled();
       }
       expect(submit).not.toHaveBeenCalled();
-      expect(env.navigation.navigate).not.toHaveBeenCalled();
+      expect(outcome.coordinator.decide).toHaveBeenCalledWith(
+        expect.anything(),
+        'approved'
+      );
+      expect(outcome.surface.presentError).not.toHaveBeenCalled();
     }
   );
 
   it('legacy walletconnect_batch returns base64/null through the response callback without broadcasting', async () => {
     const { controller, response } = await flow('walletconnect_batch', true);
     await controller.processRemoteSignerResponse(response);
-    const env = { ...scope(), version: 2 };
-    const handler = screenHandler(
-      'walletconnect/TransactionRequestScreen',
-      'handleWalletConnectSuccess',
-      env
-    );
-    await handler(controller.getState().result);
+    const outcome = walletConnectOutcome(2);
+    await outcome.handle(controller.getState().result);
     expect(respondV2).toHaveBeenCalledWith('dapp', 418, [signed, null]);
     expect(respondV1).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
@@ -1251,4 +1275,384 @@ it('keeps the permission spent after a Sign that entered the signer failed (TASK
   expect(mockSignTransaction).toHaveBeenCalledTimes(1);
   expect(AccountSecureStorage.getBiometricSecret).toHaveBeenCalledTimes(1);
   reviewGrant.revoke();
+});
+
+describe('cover start gate (TASK-518 U3d-9)', () => {
+  it.each([false, true, null])(
+    'DEFECT: valid PIN with gate=%s',
+    async (gate) => {
+      const controller = new TransactionAuthController();
+      await initFlow(controller);
+      controller.setStartGate(gate === null ? null : () => gate);
+      expect(await controller.authenticateWithPin('123456')).toBe(true);
+      expect(mockSignTransaction).toHaveBeenCalledTimes(gate === false ? 0 : 1);
+      if (gate === false)
+        expect(controller.getState()).toMatchObject({
+          state: 'authenticating',
+          pinAttempts: 0,
+          error: null,
+        });
+    }
+  );
+
+  it.each([false, true])(
+    'DEFECT: biometric pre-prompt gate, Ledger=%s',
+    async (ledger) => {
+      const controller = new TransactionAuthController();
+      mockASS.isBiometricEnabled.mockResolvedValue(true);
+      await initFlow(controller);
+      (controller as any).currentState.isLedgerFlow = ledger;
+      controller.setStartGate(() => false);
+      expect(await controller.authenticateWithBiometrics()).toBe(false);
+      expect(mockUnlock).not.toHaveBeenCalled();
+      expect(mockLA.authenticateAsync).not.toHaveBeenCalled();
+      expect(mockSignTransaction).not.toHaveBeenCalled();
+      expect(controller.getState()).toMatchObject({
+        state: 'authenticating',
+        error: null,
+      });
+    }
+  );
+
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    'DEFECT: biometric post-prompt gate, Ledger=%s, cover=%s',
+    async (ledger, cover) => {
+      const { AppLockSignal } = require('@/services/secure/appLockState');
+      const { SessionKeyVault } = require('@/services/secure/SessionKeyVault');
+      AppLockSignal.setUnlocked(false);
+      mockASS.isBiometricEnabled.mockResolvedValue(true);
+      const controller = new TransactionAuthController();
+      await initFlow(controller);
+      (controller as any).currentState.isLedgerFlow = ledger;
+      (controller as any).currentState.ledgerStatus = 'ready';
+      let allowed = true;
+      controller.setStartGate(() => allowed);
+      if (ledger)
+        mockLA.authenticateAsync.mockImplementationOnce(async () => {
+          allowed = !cover;
+          return { success: true };
+        });
+      else
+        mockUnlock.mockImplementationOnce(async () => {
+          SessionKeyVault.set('fixture', 'pin');
+          allowed = !cover;
+          return { status: 'unlocked' };
+        });
+      expect(await controller.authenticateWithBiometrics()).toBe(true);
+      expect(mockSignTransaction).toHaveBeenCalledTimes(cover ? 0 : 1);
+      expect(controller.getState()).toMatchObject({
+        state: cover ? 'authenticating' : 'signing',
+        error: null,
+      });
+      if (!ledger) expect(SessionKeyVault.isUnlocked()).toBe(false);
+    }
+  );
+
+  it.each([true, false])(
+    'DEFECT: software biometric unlocked at the tap, app locks during the prompt (refused=%s): a refused start drops the session vault, an allowed start leaves it',
+    async (refused) => {
+      const { AppLockSignal } = require('@/services/secure/appLockState');
+      const { SessionKeyVault } = require('@/services/secure/SessionKeyVault');
+      AppLockSignal.setUnlocked(true);
+      mockASS.isBiometricEnabled.mockResolvedValue(true);
+      const controller = new TransactionAuthController();
+      await initFlow(controller);
+      let allowed = true;
+      controller.setStartGate(() => allowed);
+      mockUnlock.mockImplementationOnce(async () => {
+        // The lock lands while the OS prompt is open, then the prompt succeeds
+        // and refills the vault.
+        if (refused) {
+          AppLockSignal.setUnlocked(false);
+          allowed = false;
+        }
+        SessionKeyVault.set('fixture', 'pin');
+        return { status: 'unlocked' };
+      });
+      expect(await controller.authenticateWithBiometrics()).toBe(true);
+      expect(mockSignTransaction).toHaveBeenCalledTimes(refused ? 0 : 1);
+      expect(SessionKeyVault.isUnlocked()).toBe(!refused);
+    }
+  );
+
+  it('REGRESSION: unit-level controller gate denial preserves a grant for a later allowed call', async () => {
+    const { reviewGrant } = require('../reviewGrant');
+    const { AppLockSignal } = require('@/services/secure/appLockState');
+    AppLockSignal.setUnlocked(false);
+    expect(await reviewGrant.unlock('topic:cover', { pin: '123456' })).toBe(
+      true
+    );
+    const controller = new TransactionAuthController();
+    await initFlow(controller);
+    bindReviewedRequest(controller, 'topic:cover');
+    controller.setStartGate(() => false);
+    expect(await controller.authenticateWithReviewGrant('topic:cover')).toBe(
+      false
+    );
+    expect(mockSignTransaction).not.toHaveBeenCalled();
+    expect(controller.getState()).toMatchObject({
+      state: 'authenticating',
+      error: null,
+    });
+    controller.setStartGate(() => true);
+    expect(await controller.authenticateWithReviewGrant('topic:cover')).toBe(
+      true
+    );
+    expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+    reviewGrant.revoke();
+  });
+});
+
+describe('choke-point cover gate (U3d-10)', () => {
+  it.each([true, false])(
+    'DEFECT: cover=%s during the software PIN-presence check (covered: returns to the PIN pad without keeping the PIN; uncovered: signs)',
+    async (cover) => {
+      const controller = new TransactionAuthController();
+      await controller.initializeSigningFlow({
+        ...softwareRequest,
+        reviewGrantKey: undefined,
+        pin: undefined,
+      });
+      let allowed = true;
+      controller.setStartGate(() => allowed);
+      let finish!: (present: boolean) => void;
+      mockASS.hasPin.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          })
+      );
+      const pending = controller.authenticateWithPin('123456');
+      await flush();
+      expect(finish).toBeDefined();
+      allowed = !cover;
+      finish(true);
+      await pending;
+      expect(mockSignTransaction).toHaveBeenCalledTimes(cover ? 0 : 1);
+      expect(controller.getState()).toMatchObject({
+        state: cover ? 'authenticating' : 'signing',
+        pinAttempts: 0,
+        error: null,
+      });
+      if (cover) {
+        expect((controller as any).currentRequest.pin).toBeUndefined();
+        expect((controller as any).pendingPinForStart).toBeUndefined();
+        allowed = true;
+        await controller.resumeDeferredStart();
+        expect(mockSignTransaction).not.toHaveBeenCalled();
+        await controller.authenticateWithPin('234567');
+        expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+        expect(mockSignTransaction.mock.calls[0][0].pin).toBe('234567');
+      }
+    }
+  );
+
+  it.each([true, false])(
+    'DEFECT: Ledger readiness with cover=%s (covered: start deferred with pending flags and PIN, resumed once on uncover; uncovered: signs at once)',
+    async (cover) => {
+      const controller = new TransactionAuthController();
+      await controller.initializeSigningFlow({
+        ...softwareRequest,
+        reviewGrantKey: undefined,
+        pin: undefined,
+      });
+      const internal = controller as any;
+      internal.currentState.isLedgerFlow = true;
+      internal.currentState.ledgerStatus = 'app_required';
+      internal.currentState.ledgerDevice = { id: 'ledger', connected: true };
+      internal.pendingPinForStart = '123456';
+      internal.pendingStartAfterReady = true;
+      internal.ledgerRecoveryReason = 'app_required';
+      jest
+        .spyOn(internal, 'verifyLedgerDeviceReady')
+        .mockResolvedValue(undefined);
+      let allowed = !cover;
+      controller.setStartGate(() => allowed);
+      await internal.runLedgerAutoRecovery();
+      expect(mockSignTransaction).toHaveBeenCalledTimes(cover ? 0 : 1);
+      if (cover) {
+        expect(controller.getState().ledgerStatus).toBe('ready');
+        expect(internal.hasStartedSigning).toBe(false);
+        expect(internal.pendingStartAfterReady).toBe(true);
+        expect(internal.pendingPinForStart).toBe('123456');
+        expect(internal.currentRequest.pin).toBeUndefined();
+      }
+      allowed = true;
+      await controller.resumeDeferredStart();
+      expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+      expect(mockSignTransaction.mock.calls[0][0].pin).toBe('123456');
+      await controller.resumeDeferredStart();
+      expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+      controller.cancel();
+    }
+  );
+
+  it.each([true, false])(
+    'DEFECT: consumed review grant with cover=%s at the choke point (covered: ends the approval, no retry; uncovered: signs)',
+    async (cover) => {
+      const { reviewGrant } = require('../reviewGrant');
+      const { AppLockSignal } = require('@/services/secure/appLockState');
+      AppLockSignal.setUnlocked(false);
+      expect(await reviewGrant.unlock('topic:choke', { pin: '123456' })).toBe(
+        true
+      );
+      const controller = new TransactionAuthController();
+      await controller.initializeSigningFlow({
+        ...softwareRequest,
+        reviewGrantKey: undefined,
+        pin: undefined,
+      });
+      bindReviewedRequest(controller, 'topic:choke');
+      let allowed = true;
+      controller.setStartGate(() => allowed);
+      let finish!: (present: boolean) => void;
+      mockASS.hasPin.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          })
+      );
+      const pending = controller.authenticateWithReviewGrant('topic:choke');
+      await flush();
+      expect(reviewGrant.isUnspent('topic:choke')).toBe(false);
+      allowed = !cover;
+      finish(true);
+      await pending;
+      expect(mockSignTransaction).toHaveBeenCalledTimes(cover ? 0 : 1);
+      if (cover) {
+        expect(controller.getState()).toMatchObject({
+          state: 'error',
+          error: { message: 'Unlock to review this request again.' },
+        });
+        expect(controller.hasEndedReviewFlow()).toBe(true);
+        expect(reviewGrant.isUnspent('topic:choke')).toBe(false);
+        expect(
+          (controller as any).currentRequest.reviewGrantKey
+        ).toBeUndefined();
+        allowed = true;
+        await controller.resumeDeferredStart();
+        expect(
+          await controller.authenticateWithReviewGrant('topic:choke')
+        ).toBe(false);
+        expect(mockSignTransaction).not.toHaveBeenCalled();
+      }
+      reviewGrant.revoke();
+    }
+  );
+});
+
+describe('PIN verification belongs to its request (U3d-10)', () => {
+  it.each(['cancel', 'dismiss', 'replace', 'none'])(
+    'DEFECT: pending valid PIN after %s cannot sign a cancelled or replacement request (none is the control: it signs)',
+    async (action) => {
+      const controller = new TransactionAuthController();
+      await controller.initializeSigningFlow({
+        ...softwareRequest,
+        reviewGrantKey: undefined,
+        pin: undefined,
+      });
+      let finish!: (valid: boolean) => void;
+      mockASS.verifyPin.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          })
+      );
+      mockSignTransaction.mockImplementation(async (_request, callbacks) => {
+        const result = { success: true, transactionId: 'verified-request' };
+        callbacks.onComplete(result);
+        return result;
+      });
+      const complete = jest.fn();
+      const unsubscribe = controller.subscribe((state) => {
+        if (state.result) complete(state.result);
+      });
+      const pending = controller.authenticateWithPin('123456');
+      if (action !== 'none') {
+        controller.cancel();
+        controller.resetAfterDismiss();
+        if (action === 'replace')
+          await controller.initializeSigningFlow({
+            ...softwareRequest,
+            reviewGrantKey: undefined,
+            pin: undefined,
+            description: 'request B',
+          });
+      }
+      finish(true);
+      expect(await pending).toBe(action === 'none');
+      expect(mockSignTransaction).toHaveBeenCalledTimes(
+        action === 'none' ? 1 : 0
+      );
+      expect(controller.getState().state).not.toBe('error');
+      expect(complete).toHaveBeenCalledTimes(action === 'none' ? 1 : 0);
+      if (action === 'cancel' || action === 'dismiss')
+        expect((controller as any).currentRequest).toBeNull();
+      if (action === 'replace')
+        expect((controller as any).currentRequest.description).toBe(
+          'request B'
+        );
+      unsubscribe();
+    }
+  );
+  it.each([true, false])(
+    'DEFECT: a wrong PIN result after cancel (cancelled=true) changes no controller state; the live twin (cancelled=false) counts and locks out. Proves the controller counter only: the wallet-wide throttle lives in verifyPin and is not exercised with this mock',
+    async (cancelled) => {
+      jest.useFakeTimers();
+      try {
+        const controller = new TransactionAuthController();
+        await controller.initializeSigningFlow({
+          ...softwareRequest,
+          reviewGrantKey: undefined,
+          pin: undefined,
+        });
+        (controller as any).currentState.pinAttempts = 4;
+        let finish!: (valid: boolean) => void;
+        mockASS.verifyPin.mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finish = resolve;
+            })
+        );
+        const pending = controller.authenticateWithPin('000000');
+        if (cancelled) {
+          controller.cancel();
+          controller.resetAfterDismiss();
+        }
+        const before = controller.getState();
+        const timers = jest.getTimerCount();
+        const changes = jest.fn();
+        const unsubscribe = controller.subscribe(changes);
+        changes.mockClear();
+        finish(false);
+        expect(await pending).toBe(false);
+        if (cancelled) {
+          expect(controller.getState()).toEqual(before);
+          expect(changes).not.toHaveBeenCalled();
+          expect(jest.getTimerCount()).toBe(timers);
+          expect((controller as any).currentRequest).toBeNull();
+        } else {
+          expect(controller.getState()).toMatchObject({
+            pinAttempts: 5,
+            isLocked: true,
+          });
+          expect(jest.getTimerCount()).toBe(timers + 1);
+          await jest.advanceTimersByTimeAsync(30000);
+          expect(controller.getState()).toMatchObject({
+            pinAttempts: 0,
+            isLocked: false,
+          });
+        }
+        expect(mockSignTransaction).not.toHaveBeenCalled();
+        unsubscribe();
+      } finally {
+        jest.useRealTimers();
+      }
+    }
+  );
 });
