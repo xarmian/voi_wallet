@@ -999,7 +999,7 @@ describe('admission running (a request the coordinator has not opened yet)', () 
     queue.__resetForTests();
   });
 
-  it('REGRESSION route side (base behaviour, filed): a duplicate admission still running reaches a review that is not live, so the review cannot start signing', async () => {
+  it('REGRESSION route side (base behaviour, filed): a duplicate admission still running reaches a review while the coordinator has not opened the request', async () => {
     const { request, loaded } = await admissionPending();
     const h = fakeSurface();
     const controller = new SignRequestController({
@@ -1010,10 +1010,10 @@ describe('admission running (a request the coordinator has not opened yet)', () 
     await controller.start();
     // The controller treats a duplicate as open and presents the review...
     expect(h.surface.presentReview).toHaveBeenCalledTimes(1);
-    // ...but the coordinator has not opened the request, and TransactionReview
-    // refuses to start signing unless isLive(ref) holds.
+    // ...while the coordinator has not opened the request. Whether the review
+    // then refuses to start signing (isLive) is covered where it is decided, in
+    // UniversalTransactionSigningScreen.outcome.test.tsx.
     expect(coordinator.isLive(ref)).toBe(false);
-    expect(mockRespond).not.toHaveBeenCalled();
     loaded.resolve();
     await flush();
   });

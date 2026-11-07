@@ -995,6 +995,23 @@ describe('entry guard (setup incomplete)', () => {
     expect(calls()).toBe(1);
   });
 
+  it('DEFECT a ref already decided is answered already handled, not refused with no answer', async () => {
+    await store.markHandled(ref, 'approved');
+    store = new HandledStore({ now: () => now });
+    coordinator = new RequestCoordinator({ store, transport, now: () => now });
+    coordinator.setEntryGuard(refuse);
+    expect(await coordinator.admit(ref)).toEqual({
+      action: 'suppressed',
+      reason: 'handled',
+    });
+    expect(transport.rejectRequestV2).toHaveBeenCalledTimes(1);
+    expect(transport.rejectRequestV2).toHaveBeenCalledWith(ref.topic, ref.id, {
+      code: -32000,
+      message: 'Request already handled.',
+    });
+    expect(refuse).not.toHaveBeenCalled();
+  });
+
   it('DEFECT no refusal admits normally', async () => {
     refuse.mockResolvedValue(null);
     expect(await coordinator.admit(ref)).toMatchObject({ action: 'show' });

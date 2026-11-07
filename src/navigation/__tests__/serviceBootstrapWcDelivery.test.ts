@@ -29,6 +29,8 @@ import {
 import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestResponder';
 
 import { HandledStore } from '@/services/walletconnect/handledStore';
+import { MultiAccountWalletService } from '@/services/wallet';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import {
   clearPinSetupPending,
   markPinSetupPending,
@@ -148,7 +150,10 @@ jest.mock('@/services/notifications', () => ({
   },
 }));
 jest.mock('@/services/wallet', () => ({
-  MultiAccountWalletService: { getCurrentWallet: jest.fn(async () => null) },
+  MultiAccountWalletService: {
+    getCurrentWallet: jest.fn(async () => null),
+    hasKeyBearingAccountStrict: jest.fn(async () => false),
+  },
 }));
 jest.mock('@/services/ledger/transport', () => ({
   ledgerTransportService: {
@@ -855,13 +860,20 @@ it('U7 a second proposal over focused Connect dispatches PUSH with the proposal 
 });
 
 describe('setup incomplete is refused at the entry point (S2)', () => {
+  const enterS2 = async (keyBearing = true) => {
+    await markPinSetupPending();
+    jest
+      .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+      .mockResolvedValue(keyBearing);
+    jest.spyOn(AccountSecureStorage, 'hasPinStrict').mockResolvedValue(false);
+  };
   const SETUP_INCOMPLETE = {
     code: -32001,
     message: 'Wallet setup incomplete.',
   };
 
   it('DEFECT a v2 request is answered setup-incomplete before any route or queue, and its claim is released', async () => {
-    await markPinSetupPending();
+    await enterS2();
     mockReady = true;
     await boot();
     const event = request(5301);
@@ -879,7 +891,7 @@ describe('setup incomplete is refused at the entry point (S2)', () => {
   });
 
   it('DEFECT a v2 proposal is answered setup-incomplete before any route', async () => {
-    await markPinSetupPending();
+    await enterS2();
     mockReady = true;
     await boot();
     const proposal = { id: 5302, pairingTopic: 'pairing' };
@@ -895,7 +907,7 @@ describe('setup incomplete is refused at the entry point (S2)', () => {
   });
 
   it('DEFECT a refusal waits for no navigation: it is answered while the container is not ready', async () => {
-    await markPinSetupPending();
+    await enterS2();
     await boot();
     await emit('session_request', request(5303));
     await emit('session_proposal', { id: 5304, pairingTopic: 'pairing' });
@@ -908,7 +920,7 @@ describe('setup incomplete is refused at the entry point (S2)', () => {
   });
 
   it('DEFECT once setup completes the next arrival is shown as usual', async () => {
-    await markPinSetupPending();
+    await enterS2();
     mockReady = true;
     await boot();
     await emit('session_request', request(5305));
@@ -917,6 +929,15 @@ describe('setup incomplete is refused at the entry point (S2)', () => {
     await emit('session_request', request(5306));
     expect(mockNav.navigate).toHaveBeenCalledTimes(1);
     expect(mockTransport.rejectRequestV2).toHaveBeenCalledTimes(1);
+  });
+
+  it('DEFECT a keyless wallet restored with no PIN (breadcrumb set) is not refused', async () => {
+    await enterS2(false);
+    mockReady = true;
+    await boot();
+    await emit('session_request', request(5308));
+    expect(mockNav.navigate).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectRequestV2).not.toHaveBeenCalled();
   });
 
   it('REGRESSION with no setup pending nothing is refused', async () => {

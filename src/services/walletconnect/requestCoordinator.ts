@@ -199,14 +199,6 @@ export class RequestCoordinator {
     }
     this.admitting.set(key, { ...ref });
     try {
-      // Before a first-seen record is written or a deadline armed, so a refused
-      // arrival leaves nothing open and nothing to expire. With no guard
-      // installed this adds no await, so admission timing is unchanged.
-      const refusal = this.entryGuard ? await this.refusalFor(ref) : null;
-      if (refusal) {
-        await this.settle(ref, refusal);
-        return { action: 'refused', reason: refusal };
-      }
       await this.store.load();
       if (this.store.isHandled(ref)) {
         this.closed.add(key);
@@ -218,6 +210,16 @@ export class RequestCoordinator {
           });
         }
         return { action: 'suppressed', reason: 'handled' };
+      }
+      // After the handled check, so a ref already decided is still answered
+      // 'Request already handled.' and not refused with no answer; before a
+      // first-seen record is written or a deadline armed, so a refused arrival
+      // leaves nothing open and nothing to expire. With no guard installed this
+      // adds no await, so admission timing is unchanged.
+      const refusal = this.entryGuard ? await this.refusalFor(ref) : null;
+      if (refusal) {
+        await this.settle(ref, refusal);
+        return { action: 'refused', reason: refusal };
       }
       const firstSeenMs = await this.store.noteSeen(ref);
       // A settle/decide may have closed this ref while storage was awaited.

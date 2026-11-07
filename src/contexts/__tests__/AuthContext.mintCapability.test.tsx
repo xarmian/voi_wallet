@@ -54,6 +54,9 @@ jest.mock('@/services/wipe/notices', () => ({
 jest.mock('@/services/secure/pinSetupPending', () => ({
   isPinSetupPending: jest.fn(),
   clearPinSetupPending: jest.fn(),
+  // The pure predicate stays real: it is the one the app and the guard share.
+  isSetupResumeState: jest.requireActual('@/services/secure/pinSetupPending')
+    .isSetupResumeState,
 }));
 
 jest.mock('@/services/walletconnect/TransactionRequestQueue', () => ({

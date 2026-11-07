@@ -21,6 +21,7 @@ import {
   v1ProposalRefFor,
 } from '@/services/walletconnect/requestRefs';
 import { markPinSetupPending } from '@/services/secure/pinSetupPending';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { setupIncompleteGuard } from '@/services/walletconnect/entryGuard';
 import { EventEmitter } from 'events';
 import type { NavigationContainerRef } from '@react-navigation/native';
@@ -59,6 +60,7 @@ jest.mock('react-native-toast-message', () => ({
 }));
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
+    hasKeyBearingAccountStrict: async () => true,
     getAllAccounts: async () => [
       {
         id: 'account',
@@ -647,6 +649,7 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
     beforeEach(async () => {
       coordinator.setEntryGuard(setupIncompleteGuard);
       await markPinSetupPending();
+      jest.spyOn(AccountSecureStorage, 'hasPinStrict').mockResolvedValue(false);
     });
 
     it('DEFECT a v1 request is answered setup-incomplete without a route, and its claim is released', async () => {

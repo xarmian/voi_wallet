@@ -335,6 +335,16 @@ describe('hardware back', () => {
     expect(queue.getSnapshot()).toBe(snapshot);
     expect(mockLeave).not.toHaveBeenCalled();
   });
+  it('DEFECT back after the wallet locks later is consumed and changes nothing (no stale unlocked handler)', async () => {
+    push('proposal');
+    const view = await render(<WalletConnectHost />);
+    mockLocked = true;
+    await view.rerender(<WalletConnectHost />);
+    const snapshot = queue.getSnapshot();
+    expect(press()).toBe(true);
+    expect(queue.getSnapshot()).toBe(snapshot);
+    expect(mockLeave).not.toHaveBeenCalled();
+  });
   it('DEFECT the handler is removed when the host has nothing to show', async () => {
     const session = push('proposal');
     await render(<WalletConnectHost />);

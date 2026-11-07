@@ -12,6 +12,7 @@ import { reconcileCrossStoreHalfState } from '@/services/wallet/crossStoreReconc
 import { AccountSecureStorage } from '@/services/secure';
 import {
   isPinSetupPending,
+  isSetupResumeState,
   clearPinSetupPending,
 } from '@/services/secure/pinSetupPending';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
@@ -681,7 +682,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           STRICT_READ_TIMEOUT_MS,
           'pin_setup_pending read'
         ).catch(() => false);
-        if (restoreInProgress) {
+        if (
+          isSetupResumeState({
+            pending: restoreInProgress,
+            hasKeyBearingAccount,
+            hasPin,
+          })
+        ) {
           // Resume PIN setup. isLocked/isAuthenticated are set to the FAIL-CLOSED
           // pair (locked, not authenticated) as defense in depth: the navigator
           // routes the initial route to SecuritySetup (never Main) off
