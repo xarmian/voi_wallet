@@ -584,10 +584,22 @@ export function TransactionReview({
   useEffect(
     () =>
       binding.onLeave(() => {
+        // The surface ended this review. After the signer was entered the
+        // person had approved, so the dApp hears the same system exit every
+        // other path uses there ('lapsed'), not the 'User rejected.' that
+        // abandoning sends. An outcome already in flight owns the answer.
+        if (
+          walletConnect &&
+          !endedRef.current &&
+          !handlingOutcome.current &&
+          authController.hasEnteredSigner()
+        ) {
+          void endRequest('lapsed');
+        }
         reviewGrant.leave(requestKey);
         getNavigationCallbacks(callbackId)?.onDismiss?.();
       }),
-    [binding, callbackId, requestKey]
+    [binding, callbackId, requestKey, walletConnect, authController, endRequest]
   );
 
   /**
