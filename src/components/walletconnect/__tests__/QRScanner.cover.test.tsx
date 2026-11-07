@@ -116,3 +116,26 @@ it('DEFECT: cover and uncover cannot process a duplicate while the first scan is
   });
   expect(mockDeepLink).toHaveBeenCalledTimes(1);
 });
+
+it('DEFECT: same tick camera callbacks process once', async () => {
+  let finish!: (handled: boolean) => void;
+  mockDeepLink.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+  );
+  const view = await render(tree());
+  const scan = view.getByTestId('camera').props.onBarcodeScanned;
+  let first!: Promise<void>;
+  let second!: Promise<void>;
+  await act(async () => {
+    first = scan({ type: 'qr', data: 'wc:test' });
+    second = scan({ type: 'qr', data: 'wc:test' });
+  });
+  expect(mockDeepLink).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    finish(true);
+    await Promise.all([first, second]);
+  });
+});

@@ -82,6 +82,13 @@ function navigation(initial: string | null = 'Main') {
         listeners.delete(listener);
       };
     }),
+    resetRoot: jest.fn(
+      (state: { routes: { name: string; params?: object }[] }) => {
+        route = state.routes[0].name;
+        ready = true;
+        listeners.forEach((listener) => listener());
+      }
+    ),
   };
   return {
     ref: { current: value as typeof value | null },
@@ -157,7 +164,7 @@ it('DEFECT all 32 combinations on three routes agree with shouldCover and mount 
       await nav.emit(route);
       await view.rerender(tree(nav));
       expect(view.queryAllByTestId('lock')).toHaveLength(
-        shouldCover(auth, route) ? 1 : 0
+        shouldCover(auth, route) && auth.hasPin ? 1 : 0
       );
     }
   }
@@ -188,7 +195,7 @@ it('DEFECT children retain their instance and all four hiding props apply only w
   }
   expect(mockMounts).toBe(2);
 });
-it('DEFECT S2 waits uncovered then tracks state events to Main and SecuritySetup', async () => {
+it('DEFECT S2 waits uncovered, then a move away from SecuritySetup is sent back to it with no lock screen', async () => {
   auth = {
     ...unlocked,
     isLocked: true,
@@ -199,10 +206,14 @@ it('DEFECT S2 waits uncovered then tracks state events to Main and SecuritySetup
   const nav = navigation(null);
   const view = await render(tree(nav));
   expect(view.queryByTestId('lock')).toBeNull();
+  expect(nav.value.resetRoot).not.toHaveBeenCalled();
   await nav.emit('Main');
-  expect(view.getByTestId('lock')).toBeTruthy();
+  expect(view.queryByTestId('lock')).toBeNull();
+  expect(nav.value.resetRoot).toHaveBeenCalledTimes(1);
+  expect(nav.value.getCurrentRoute()?.name).toBe('SecuritySetup');
   await nav.emit('SecuritySetup');
   expect(view.queryByTestId('lock')).toBeNull();
+  expect(mockMounts).toBe(0);
 });
 it('DEFECT a ref populated after mount is read and subscribed on the next render without a loop', async () => {
   auth = {
@@ -218,7 +229,8 @@ it('DEFECT a ref populated after mount is read and subscribed on the next render
   expect(view.queryByTestId('lock')).toBeNull();
   nav.ref.current = nav.value;
   await view.rerender(tree(nav));
-  expect(view.getByTestId('lock')).toBeTruthy();
+  expect(view.queryByTestId('lock')).toBeNull();
+  expect(nav.value.resetRoot).toHaveBeenCalledTimes(1);
   expect(nav.value.addListener).toHaveBeenCalledTimes(1);
   await nav.emit('SecuritySetup');
   expect(view.queryByTestId('lock')).toBeNull();
@@ -338,24 +350,56 @@ it('REGRESSION uncovered boundary has children and no overlay', async () => {
   expect(view.root?.children).toHaveLength(1);
   expect(content(view).type).toBe('View');
 });
-it('DEFECT S2 on a WalletConnect review route shows no lock screen and keeps the content reachable', async () => {
+// Invariant: whenever the cover shows and no PIN exists it never offers a PIN
+// pad, whatever the route, and in S2 the way out is back to finishing PIN setup.
+it.each([
+  'UniversalTransactionSigning',
+  'WalletConnectSessionProposal',
+  'WalletConnectError',
+  'Main',
+  'SomeRouteAddedLater',
+])(
+  'DEFECT S2 on %s: no PIN pad, sent back to SecuritySetup, content reachable',
+  async (route) => {
+    auth = {
+      ...unlocked,
+      isLocked: true,
+      isAuthenticated: false,
+      hasPin: false,
+      pinSetupResume: true,
+    };
+    const nav = navigation(route);
+    const view = await render(tree(nav));
+    expect(view.queryByTestId('lock')).toBeNull();
+    expect(mockMounts).toBe(0);
+    expect(nav.value.resetRoot).toHaveBeenCalledTimes(1);
+    expect(nav.value.resetRoot).toHaveBeenCalledWith({
+      index: 0,
+      routes: [{ name: 'SecuritySetup', params: { source: 'restore' } }],
+    });
+    expect(nav.value.getCurrentRoute()?.name).toBe('SecuritySetup');
+    expect(content(view).props.pointerEvents).toBeUndefined();
+    // The same route with a PIN present is an ordinary locked wallet: PIN pad.
+    auth = { ...auth, hasPin: true };
+    await nav.emit(route);
+    await view.rerender(tree(nav));
+    expect(view.queryAllByTestId('lock')).toHaveLength(1);
+    expect(content(view).props.pointerEvents).toBe('none');
+  }
+);
+it('DEFECT a covered state with no PIN outside S2 stays hidden with no PIN pad and no redirect', async () => {
   auth = {
     ...unlocked,
     isLocked: true,
     isAuthenticated: false,
     hasPin: false,
-    pinSetupResume: true,
+    pinSetupResume: false,
   };
-  const nav = navigation('WalletConnectSessionProposal');
+  const nav = navigation('Main');
   const view = await render(tree(nav));
   expect(view.queryByTestId('lock')).toBeNull();
-  const props = content(view).props;
-  expect(props.pointerEvents).toBeUndefined();
-  expect(props.accessibilityElementsHidden).toBeFalsy();
-  expect(handlers.size).toBe(0);
-  // The same route with a PIN present is an ordinary locked wallet: covered.
-  auth = { ...auth, hasPin: true };
-  await view.rerender(tree(nav));
-  expect(view.queryAllByTestId('lock')).toHaveLength(1);
+  expect(mockMounts).toBe(0);
+  expect(nav.value.resetRoot).not.toHaveBeenCalled();
   expect(content(view).props.pointerEvents).toBe('none');
+  expect(StyleSheet.flatten(content(view).props.style)?.opacity).toBe(0);
 });

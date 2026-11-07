@@ -131,3 +131,24 @@ it('DEFECT: clears both create-password fields and both reveal controls across c
     expect(view.getByPlaceholderText(field).props.secureTextEntry).toBe(true);
   }
 });
+
+it('DEFECT: cover resets validation history', async () => {
+  mockCovered = false;
+  const tree = () => (
+    <PasswordInputModal
+      visible
+      mode="enter"
+      onConfirm={jest.fn()}
+      onCancel={jest.fn()}
+    />
+  );
+  const view = await render(tree());
+  await fireEvent.changeText(view.getByPlaceholderText('Password'), 'x');
+  await fireEvent.changeText(view.getByPlaceholderText('Password'), '');
+  expect(view.getByText('Please enter your backup password')).toBeTruthy();
+  mockCovered = true;
+  await view.rerender(tree());
+  mockCovered = false;
+  await view.rerender(tree());
+  expect(view.queryByText('Please enter your backup password')).toBeNull();
+});

@@ -56,6 +56,7 @@ export default function PasswordInputModal({
       setConfirmPassword('');
       setShowPassword(false);
       setShowConfirmPassword(false);
+      setHasEdited(false);
     }
   }, [covered]);
 

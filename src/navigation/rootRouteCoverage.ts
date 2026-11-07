@@ -6,8 +6,9 @@
 // inside the React Native root view. Routes with `presentation: 'modal'` are
 // presented by the platform on iOS, possibly outside that view, and are not
 // shown to be covered (TASK-540; a device check is pending).
-// Exempt from the cover in S2 (PIN setup resumed, no PIN): SecuritySetup and
-// the WalletConnect review routes listed in lockCoverCondition.ts.
+// In S2 (PIN setup resumed, no PIN) only SecuritySetup is exempt. Every other
+// route covers, but with no PIN the boundary never mounts a PIN pad and sends
+// the person back to SecuritySetup (RootLockBoundary.tsx).
 export const ROOT_ROUTE_COVERAGE: Record<
   string,
   { group: string; note?: string }

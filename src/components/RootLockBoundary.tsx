@@ -3,13 +3,20 @@ import { BackHandler, StyleSheet, View } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { RootLockFocusProvider } from '@/contexts/LockFocusContext';
 import LockScreen from '@/screens/auth/LockScreen';
-import { shouldCover } from '@/navigation/lockCoverCondition';
+import {
+  SECURITY_SETUP_ROUTE,
+  shouldCover,
+} from '@/navigation/lockCoverCondition';
 import { setCovered } from '@/utils/lockCover';
 
 interface NavigationRefLike {
   isReady(): boolean;
   getCurrentRoute(): { name: string } | undefined;
   addListener(event: 'state', listener: () => void): () => void;
+  resetRoot(state: {
+    index: number;
+    routes: { name: string; params?: object }[];
+  }): void;
 }
 export default function RootLockBoundary({
   navigationRef,
@@ -49,6 +56,19 @@ export default function RootLockBoundary({
   );
 
   const covered = shouldCover(authState, focusedRoute);
+  // With no PIN there is nothing to unlock, so a lock screen would offer a PIN
+  // pad that can never succeed. Whatever the route, a cover without a PIN never
+  // mounts one; in PIN-setup-resume (S2) the person is sent back to finishing
+  // PIN setup, the only route the cover exempts there.
+  const noPin = covered && !authState.hasPin;
+  const resumeSetup = noPin && authState.pinSetupResume;
+  useEffect(() => {
+    if (!resumeSetup) return;
+    navigationRef.current?.resetRoot({
+      index: 0,
+      routes: [{ name: SECURITY_SETUP_ROUTE, params: { source: 'restore' } }],
+    });
+  }, [resumeSetup, navigationRef]);
   useLayoutEffect(() => {
     setCovered(covered);
     return () => setCovered(false);
@@ -75,9 +95,11 @@ export default function RootLockBoundary({
       </View>
       {covered && (
         <View style={styles.lockOverlay}>
-          <RootLockFocusProvider>
-            <LockScreen />
-          </RootLockFocusProvider>
+          {!noPin && (
+            <RootLockFocusProvider>
+              <LockScreen />
+            </RootLockFocusProvider>
+          )}
         </View>
       )}
     </View>

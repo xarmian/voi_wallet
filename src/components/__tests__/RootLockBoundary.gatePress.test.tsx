@@ -44,6 +44,7 @@ const navigationRef = {
     isReady: () => true,
     getCurrentRoute: () => ({ name: 'Main' }),
     addListener: () => () => {},
+    resetRoot: () => {},
   },
 };
 

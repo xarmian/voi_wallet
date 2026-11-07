@@ -7,7 +7,7 @@
  */
 
 import { useCoverPaused } from '@/hooks/useCoverPaused';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal,
   View,
@@ -61,9 +61,13 @@ export default function SignerAuthModal({
   const styles = useThemedStyles(createStyles);
 
   const [pin, setPin] = useState('');
+  const coverEpoch = useRef(0);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- The external lock must discard typed input before the Modal reopens.
-    if (covered) setPin('');
+    if (covered) {
+      coverEpoch.current += 1;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- The external lock must discard typed input before the Modal reopens.
+      setPin('');
+    }
   }, [covered]);
   // The stored credential kind decides the input: numeric keypad for a PIN, a
   // masked text field for a passphrase (PR7). Defaults to 'pin' until the read
@@ -169,12 +173,17 @@ export default function SignerAuthModal({
   };
 
   const handlePinSubmit = async (enteredPin: string) => {
+    const epoch = coverEpoch.current;
     setIsVerifying(true);
     setError(null);
 
     try {
       const isValid = await AccountSecureStorage.verifyPin(enteredPin);
 
+      if (epoch !== coverEpoch.current) {
+        setPin('');
+        return;
+      }
       if (isValid) {
         onSuccess(enteredPin);
       } else {
@@ -211,6 +220,7 @@ export default function SignerAuthModal({
   };
 
   const handleBiometricAuth = async () => {
+    const epoch = coverEpoch.current;
     if (isVerifying) return;
     setIsVerifying(true);
     setError(null);
@@ -224,6 +234,10 @@ export default function SignerAuthModal({
         requireConfirmation: true,
       });
 
+      if (epoch !== coverEpoch.current) {
+        setPin('');
+        return;
+      }
       if (result.success) {
         onSuccess(undefined); // No PIN needed for biometric
       } else if (result.error === 'user_fallback') {
@@ -304,7 +318,7 @@ export default function SignerAuthModal({
     );
   };
 
-  const renderNumberPad = () => (
+  const numberPad = (
     <View style={styles.numberPad}>
       {[
         ['1', '2', '3'],
@@ -420,7 +434,7 @@ export default function SignerAuthModal({
 
             {error && <Text style={styles.error}>{error}</Text>}
 
-            {isPassphrase ? renderPassphraseInput() : renderNumberPad()}
+            {isPassphrase ? renderPassphraseInput() : numberPad}
           </View>
         </View>
       </View>

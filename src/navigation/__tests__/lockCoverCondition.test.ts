@@ -1,12 +1,6 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import {
-  S2_NOT_EXEMPT_ROUTES,
-  S2_REVIEW_ROUTES,
-  shouldCover,
-  type CoverInput,
-} from '../lockCoverCondition';
-import { ROOT_ROUTE_COVERAGE } from '../rootRouteCoverage';
+import { shouldCover, type CoverInput } from '../lockCoverCondition';
 
 // Independent state table: checked, locked, authenticated, PIN, resume, recovery.
 const states: { name: string; flags: boolean[]; routes: boolean[] }[] = [
@@ -170,79 +164,4 @@ it('DEFECT AuthContext feeds the lock signal from the same two fields the cover 
   expect(source).toContain(
     '}, [authState.isAuthenticated, authState.isLocked]);'
   );
-});
-
-// S2 (PIN setup resumed, no PIN): a WalletConnect link can push a review route.
-// The lock screen would ask for a PIN that does not exist, so those routes keep
-// the review's own gate (with Reject) reachable, as before the root boundary.
-it('DEFECT S2 never covers the WalletConnect review routes, in every combination', () => {
-  const s2 = combinations.filter(
-    (input) => input.pinSetupResume && !input.hasPin
-  );
-  expect(s2.length).toBeGreaterThan(0);
-  for (const input of s2)
-    for (const route of S2_REVIEW_ROUTES)
-      expect({ input, route, covered: shouldCover(input, route) }).toEqual({
-        input,
-        route,
-        covered: false,
-      });
-});
-it('DEFECT outside S2 the same routes are covered while locked, and S2 still covers other routes', () => {
-  for (const route of S2_REVIEW_ROUTES) {
-    expect(
-      shouldCover(inputFrom([true, true, false, true, false, false]), route)
-    ).toBe(true);
-    // pinSetupResume with a PIN present is not S2.
-    expect(
-      shouldCover(inputFrom([true, true, false, true, true, false]), route)
-    ).toBe(true);
-  }
-  const s2 = inputFrom([true, true, false, false, true, false]);
-  for (const route of ['Main', 'Onboarding', 'QRScanner'])
-    expect(shouldCover(s2, route)).toBe(true);
-});
-it('DEFECT every S2 review route is a real root route in the census', () => {
-  for (const route of S2_REVIEW_ROUTES)
-    expect(Object.keys(ROOT_ROUTE_COVERAGE)).toContain(route);
-  expect(S2_REVIEW_ROUTES).toHaveLength(3);
-});
-
-// Census: a WalletConnect root route nobody classified for S2 fails here, so a
-// new review route cannot silently fall under the cover (or out of it).
-function unclassified(census: string[]): string[] {
-  return census.filter(
-    (name) =>
-      /^WalletConnect/.test(name) &&
-      !S2_REVIEW_ROUTES.includes(name) &&
-      !(name in S2_NOT_EXEMPT_ROUTES)
-  );
-}
-it('DEFECT every WalletConnect root route is classified for S2, in exactly one list', () => {
-  const census = Object.keys(ROOT_ROUTE_COVERAGE);
-  expect(unclassified(census)).toEqual([]);
-  const wc = census.filter((name) => /^WalletConnect/.test(name));
-  expect(wc.length).toBeGreaterThan(0);
-  for (const name of wc)
-    expect({
-      name,
-      inExactlyOne:
-        S2_REVIEW_ROUTES.includes(name) !== name in S2_NOT_EXEMPT_ROUTES,
-    }).toEqual({ name, inExactlyOne: true });
-  // Both lists name only real root routes, and the shared signing review is
-  // classified on purpose, not by omission.
-  for (const name of [
-    ...S2_REVIEW_ROUTES,
-    ...Object.keys(S2_NOT_EXEMPT_ROUTES),
-  ])
-    expect(census).toContain(name);
-  expect(S2_NOT_EXEMPT_ROUTES).toHaveProperty('UniversalTransactionSigning');
-  for (const reason of Object.values(S2_NOT_EXEMPT_ROUTES))
-    expect(reason.length).toBeGreaterThan(10);
-});
-it('REGRESSION the census matcher reports an unclassified WalletConnect route', () => {
-  expect(unclassified(['Main', 'WalletConnectSessionProposal'])).toEqual([]);
-  expect(unclassified(['Main', 'WalletConnectNewReview'])).toEqual([
-    'WalletConnectNewReview',
-  ]);
 });

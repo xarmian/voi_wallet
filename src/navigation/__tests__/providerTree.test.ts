@@ -23,8 +23,12 @@ function jsxTree() {
     }
     return false;
   };
-  const found: { name: string; inBoundary: boolean; wrapsBoundary: boolean }[] =
-    [];
+  const found: {
+    name: string;
+    inBoundary: boolean;
+    inProvider: boolean;
+    wrapsBoundary: boolean;
+  }[] = [];
   const visit = (node: ts.Node) => {
     const tag = ts.isJsxSelfClosingElement(node)
       ? node.tagName.getText(source)
@@ -35,6 +39,7 @@ function jsxTree() {
       found.push({
         name: tag,
         inBoundary: ancestors(node, 'RootLockBoundary'),
+        inProvider: ancestors(node, 'BottomSheetModalProvider'),
         wrapsBoundary:
           tag === 'BottomSheetModalProvider' &&
           ts.isJsxElement(node) &&
@@ -58,11 +63,12 @@ it('DEFECT the bottom sheet provider is inside the lock boundary and does not wr
   expect(providers[0].inBoundary).toBe(true);
   expect(providers[0].wrapsBoundary).toBe(false);
 });
-it('DEFECT the navigator and the host are inside the provider tree under the boundary', () => {
+it('DEFECT the navigator and the host are inside both the lock boundary and the bottom sheet provider', () => {
   const tree = jsxTree();
   for (const name of ['NavigationActivityWrapper', 'WalletConnectHost']) {
     const rows = tree.filter((row) => row.name === name);
     expect(rows).toHaveLength(1);
     expect(rows[0].inBoundary).toBe(true);
+    expect(rows[0].inProvider).toBe(true);
   }
 });

@@ -347,6 +347,7 @@ export default function LockScreen() {
         );
       }
     } catch (error) {
+      setPin('');
       console.error('Secret verification error:', redactError(error));
       hapticNotify('error');
       showAlert('Error', `Failed to verify ${secretNoun}`);

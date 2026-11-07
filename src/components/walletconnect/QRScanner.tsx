@@ -273,7 +273,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     type: string;
     data: string;
   }) => {
-    if (scanned || isProcessing) {
+    if (scanInFlight.current || scanned || isProcessing) {
       return;
     }
 

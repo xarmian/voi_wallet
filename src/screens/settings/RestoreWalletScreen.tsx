@@ -1,3 +1,4 @@
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
@@ -46,6 +47,7 @@ import {
 const OLD_PIN_SESSION_MS = 5 * 60 * 1000;
 
 export default function RestoreWalletScreen() {
+  const covered = useCoverPaused();
   const navigation = useNavigation();
   const route = useRoute();
   const isOnboarding = (route.params as { isOnboarding?: boolean } | undefined)
@@ -82,6 +84,16 @@ export default function RestoreWalletScreen() {
   const [showForgottenConsent, setShowForgottenConsent] = useState(false);
   const oldPinEpoch = useRef<number | null>(null);
   const restoreInFlight = useRef(false);
+  useEffect(() => {
+    if (covered) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- A lock must discard the parent password and return confirmation to password entry.
+      setPassword('');
+      setBackupInfo(null);
+      setShowConfirmationModal(false);
+      setShowForgottenConsent(false);
+      setShowPasswordModal(!!selectedFile && !restoreInFlight.current);
+    }
+  }, [covered, selectedFile]);
   // Bumped whenever the screen is left or the app leaves the foreground. A PIN
   // check that started before the bump must not fill the vault when it ends.
   const oldPinGeneration = useRef(0);

@@ -80,10 +80,6 @@ export default function UnifiedAuthModal({
   const styles = useThemedStyles(createStyles);
   const { authState } = useAuth();
   const [pin, setPin] = useState('');
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- The external lock must discard typed input before the Modal reopens.
-    if (covered) setPin('');
-  }, [covered]);
   // The stored credential kind decides the input: numeric keypad for a PIN, a
   // masked text field for a passphrase (PR7). Defaults to 'pin' until the read
   // resolves so existing PIN wallets show the keypad immediately.
@@ -99,6 +95,15 @@ export default function UnifiedAuthModal({
   // the modal was closed (an aborted prompt, then a new one) is stale and must
   // not mark the NEW prompt as biometrically authenticated.
   const biometricRunRef = useRef(0);
+  const coverEpoch = useRef(0);
+  useEffect(() => {
+    if (covered) {
+      coverEpoch.current += 1;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- The external lock must discard typed input and fresh-auth proof before the Modal reopens.
+      setPin('');
+      setBiometricAuthenticated(false);
+    }
+  }, [covered]);
 
   const MAX_ATTEMPTS = 5;
   const LOCKOUT_TIME = 30000; // 30 seconds
@@ -212,6 +217,7 @@ export default function UnifiedAuthModal({
 
   const promptBiometric = async () => {
     const run = biometricRunRef.current;
+    const epoch = coverEpoch.current;
     setBiometricAttempted(true);
     setIsAuthenticating(true);
 
@@ -245,6 +251,11 @@ export default function UnifiedAuthModal({
         requireConfirmation: true,
       });
 
+      if (epoch !== coverEpoch.current) {
+        setPin('');
+        setIsAuthenticating(false);
+        return;
+      }
       if (run !== biometricRunRef.current) return; // stale: the modal was reset
       if (result.success) {
         setIsAuthenticating(false);
@@ -278,11 +289,17 @@ export default function UnifiedAuthModal({
   };
 
   const verifyPin = async (enteredPin: string) => {
+    const epoch = coverEpoch.current;
     setIsAuthenticating(true);
 
     try {
       const isValid = await AccountSecureStorage.verifyPin(enteredPin);
 
+      if (epoch !== coverEpoch.current) {
+        setPin('');
+        setIsAuthenticating(false);
+        return;
+      }
       if (isValid) {
         setPin('');
         setAttempts(0);
@@ -404,56 +421,54 @@ export default function UnifiedAuthModal({
     );
   };
 
-  const renderKeypad = () => {
-    const numbers = [
-      ['1', '2', '3'],
-      ['4', '5', '6'],
-      ['7', '8', '9'],
-      ['', '0', 'backspace'],
-    ];
+  const numbers = [
+    ['1', '2', '3'],
+    ['4', '5', '6'],
+    ['7', '8', '9'],
+    ['', '0', 'backspace'],
+  ];
 
-    return (
-      <View style={styles.keypad}>
-        {numbers.map((row, rowIndex) => (
-          <View key={rowIndex} style={styles.keypadRow}>
-            {row.map((item, itemIndex) => {
-              if (item === '') {
-                return <View key={itemIndex} style={styles.keypadButton} />;
-              }
+  const keypad = (
+    <View style={styles.keypad}>
+      {numbers.map((row, rowIndex) => (
+        <View key={rowIndex} style={styles.keypadRow}>
+          {row.map((item, itemIndex) => {
+            if (item === '') {
+              return <View key={itemIndex} style={styles.keypadButton} />;
+            }
 
-              if (item === 'backspace') {
-                return (
-                  <TouchableOpacity
-                    key={itemIndex}
-                    style={styles.keypadButton}
-                    onPress={handleBackspace}
-                    disabled={isLocked || isAuthenticating}
-                  >
-                    <Ionicons
-                      name="backspace-outline"
-                      size={20}
-                      color={theme.colors.text}
-                    />
-                  </TouchableOpacity>
-                );
-              }
-
+            if (item === 'backspace') {
               return (
                 <TouchableOpacity
                   key={itemIndex}
                   style={styles.keypadButton}
-                  onPress={() => handleNumberPress(item)}
+                  onPress={handleBackspace}
                   disabled={isLocked || isAuthenticating}
                 >
-                  <Text style={styles.keypadButtonText}>{item}</Text>
+                  <Ionicons
+                    name="backspace-outline"
+                    size={20}
+                    color={theme.colors.text}
+                  />
                 </TouchableOpacity>
               );
-            })}
-          </View>
-        ))}
-      </View>
-    );
-  };
+            }
+
+            return (
+              <TouchableOpacity
+                key={itemIndex}
+                style={styles.keypadButton}
+                onPress={() => handleNumberPress(item)}
+                disabled={isLocked || isAuthenticating}
+              >
+                <Text style={styles.keypadButtonText}>{item}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ))}
+    </View>
+  );
 
   return (
     <Modal
@@ -574,7 +589,7 @@ export default function UnifiedAuthModal({
                 </TouchableOpacity>
               )}
 
-              {isPassphrase ? renderPassphraseInput() : renderKeypad()}
+              {isPassphrase ? renderPassphraseInput() : keypad}
 
               {isLocked && (
                 <View style={styles.lockoutContainer}>
