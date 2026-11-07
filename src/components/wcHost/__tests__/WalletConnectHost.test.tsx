@@ -130,7 +130,9 @@ it.each(['proposal', 'request'] as const)(
     expect(mockCleanup).not.toHaveBeenCalled();
     expect(mockClearCallbacks).not.toHaveBeenCalled();
     await fireEvent.press(view.getByText('Approve fixture'));
-    expect(queue.getSnapshot().result?.title).toBe('fixture result');
+    expect(queue.getSnapshot().result?.title).toBe(
+      kind === 'request' ? 'Transaction Signed Successfully' : 'Success'
+    );
     expect(mockLeave).toHaveBeenCalledTimes(1);
   }
 );
@@ -211,20 +213,39 @@ it.each([
   { securityUnavailable: true },
   { pinSetupResume: true, hasPin: false },
 ])(
-  'DEFECT host refuses drawing %s and unmounts existing review without settling',
+  'DEFECT host refuses drawing %s: a review never drawn is not created, a drawn one stays mounted but hidden',
   async (state) => {
+    const drawable = { ...mockDraw };
     push('proposal');
-    const view = await render(<WalletConnectHost />);
-    expect(mockMount).toHaveBeenCalledTimes(1);
     mockDraw = { ...mockDraw, ...state };
-    await view.rerender(<WalletConnectHost />);
+    const view = await render(<WalletConnectHost />);
+    // Never drawn: nothing is rendered or started.
     expect(view.toJSON()).toBeNull();
-    expect(mockUnmount).toHaveBeenCalledTimes(1);
-    expect(queue.getSnapshot().head).not.toBeNull();
-    mockMount.mockClear();
-    const fresh = await render(<WalletConnectHost />);
-    expect(fresh.toJSON()).toBeNull();
     expect(mockMount).not.toHaveBeenCalled();
+
+    mockDraw = drawable;
+    await view.rerender(<WalletConnectHost />);
+    expect(mockMount).toHaveBeenCalledTimes(1);
+
+    mockDraw = { ...drawable, ...state };
+    await view.rerender(<WalletConnectHost />);
+    // Unmounting would clear the review's callbacks, which nothing re-registers.
+    expect(mockUnmount).not.toHaveBeenCalled();
+    expect(mockClearCallbacks).not.toHaveBeenCalled();
+    const root = view.toJSON()!;
+    expect(StyleSheet.flatten(root.props.style)).toMatchObject({
+      display: 'none',
+    });
+    expect(root.props.pointerEvents).toBe('none');
+    expect(queue.getSnapshot().head).not.toBeNull();
+
+    mockDraw = drawable;
+    await view.rerender(<WalletConnectHost />);
+    expect(mockMount).toHaveBeenCalledTimes(1);
+    expect(mockUnmount).not.toHaveBeenCalled();
+    expect(
+      StyleSheet.flatten(view.toJSON()!.props.style).display
+    ).toBeUndefined();
   }
 );
 it('DEFECT host root fills parent with opaque theme background; host never shows waiting summary', async () => {

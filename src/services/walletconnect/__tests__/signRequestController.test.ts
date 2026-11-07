@@ -251,6 +251,7 @@ it('REGRESSION reject sent records once and leaves with exact toast', async () =
   await h.controller.reject();
   expectAnswer('declined');
   expect(h.surface.leave).toHaveBeenCalledTimes(1);
+  expect(h.surface.takeNext).toHaveBeenCalledWith(false);
   expect(Toast.show).toHaveBeenCalledWith({
     type: 'walletConnectRejected',
     text1: 'Transaction Request Rejected',
@@ -291,6 +292,8 @@ it('DEFECT approve records durably before publishing and never sends an error', 
   );
   expect(coordinator.sendError).not.toHaveBeenCalled();
   expect(h.surface.takeNext).toHaveBeenCalledTimes(1);
+  // Only a signed answer that reached the dApp counts as approved.
+  expect(h.surface.takeNext).toHaveBeenCalledWith(true);
   expect(Toast.show).toHaveBeenCalledWith({
     type: 'walletConnectSuccess',
     text1: 'Transaction Signed Successfully',
@@ -863,6 +866,8 @@ it.each([false, true])(
     expect(h.surface.presentReview).toHaveBeenCalledTimes(closed ? 0 : 1);
     if (closed) expect(mockCallbacks).toBe(previous);
     else expect(mockCallbacks).not.toBe(previous);
+    // The surface is told, so a route screen is not left on its spinner.
+    expect(h.surface.takeNext).toHaveBeenCalledTimes(closed ? 1 : 0);
   }
 );
 

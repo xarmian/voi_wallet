@@ -554,7 +554,11 @@ export default function LockScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.content}>
-        <View style={styles.header}>
+        <View
+          style={
+            summary ? [styles.header, styles.headerWithSummary] : styles.header
+          }
+        >
           <Ionicons name="lock-closed" size={48} color={theme.colors.primary} />
           <Text style={styles.title}>Wallet Locked</Text>
           <Text style={styles.subtitle}>
@@ -565,11 +569,19 @@ export default function LockScreen() {
           {summary && (
             <View style={styles.summary}>
               <Text style={styles.summaryTitle}>{summary.title}</Text>
-              <Text style={styles.subtitle}>{summary.dappLine}</Text>
-              <Text style={styles.subtitle}>{summary.detailLine}</Text>
-              <Text style={styles.subtitle}>{summary.ageLine}</Text>
+              <Text style={styles.summaryLine} numberOfLines={1}>
+                {summary.dappLine}
+              </Text>
+              <Text style={styles.summaryLine} numberOfLines={1}>
+                {summary.detailLine}
+              </Text>
+              <Text style={styles.summaryLine} numberOfLines={1}>
+                {summary.ageLine}
+              </Text>
               {summary.moreLine && (
-                <Text style={styles.subtitle}>{summary.moreLine}</Text>
+                <Text style={styles.summaryLine} numberOfLines={1}>
+                  {summary.moreLine}
+                </Text>
               )}
             </View>
           )}
@@ -657,9 +669,19 @@ const createStyles = (theme: Theme) =>
       marginTop: theme.spacing.lg,
       marginBottom: theme.spacing.sm,
     },
+    // The waiting summary must not push the keypad off a small screen, so the
+    // header gives up most of its bottom margin and the lines stay on one row.
+    headerWithSummary: {
+      marginBottom: theme.spacing.lg,
+    },
     summary: {
       alignItems: 'center',
-      marginTop: theme.spacing.lg,
+      marginTop: theme.spacing.md,
+    },
+    summaryLine: {
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+      textAlign: 'center',
     },
     summaryTitle: {
       fontSize: 16,

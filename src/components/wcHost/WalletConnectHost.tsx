@@ -14,7 +14,12 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { ConnectReview } from '@/screens/walletconnect/SessionProposalScreen';
 import { TransactionReview } from '@/screens/wallet/UniversalTransactionSigningScreen';
 import type { RootStackParamList } from '@/navigation/AppNavigator';
-import { getHeadSession, headKey, type HeadSession } from './headSession';
+import {
+  findHeadSession,
+  getHeadSession,
+  headKey,
+  type HeadSession,
+} from './headSession';
 import HostNavigation from './HostNavigation';
 import { HOST_DISMISS_LABEL } from './hostCopy';
 
@@ -24,6 +29,7 @@ function HeadBody({ session }: { session: HeadSession }) {
     session.getReviewParams
   );
   useEffect(() => {
+    session.markDrawn();
     session.start();
   }, [session]);
   if (session.item.kind === 'proposal') {
@@ -44,6 +50,8 @@ function HeadBody({ session }: { session: HeadSession }) {
   );
 }
 
+const styles = StyleSheet.create({ hidden: { display: 'none' } });
+
 export default function WalletConnectHost() {
   const queue = RequestQueue.getInstance();
   const snapshot = useSyncExternalStore(
@@ -52,20 +60,31 @@ export default function WalletConnectHost() {
   );
   const { authState } = useAuth();
   const { theme } = useTheme();
-  if (!hostMayDraw(authState)) return null;
+  const mayDraw = hostMayDraw(authState);
+  // Where the app stack refuses to draw, a review that was never drawn is not
+  // created. One that was drawn stays mounted but hidden: unmounting it would
+  // clear the callbacks its buttons depend on, and nothing registers them again.
   const session = snapshot.head
-    ? getHeadSession(snapshot.head, {
-        queue,
-        coordinator: RequestCoordinator.getInstance(),
-      })
+    ? mayDraw
+      ? getHeadSession(snapshot.head, {
+          queue,
+          coordinator: RequestCoordinator.getInstance(),
+        })
+      : findHeadSession(snapshot.head)
     : null;
+  const hiddenSession = !mayDraw && session?.drawn ? session : null;
+  if (!mayDraw && !hiddenSession) return null;
   if (!snapshot.head && !snapshot.result) return null;
   return (
     <View
       style={[
         StyleSheet.absoluteFill,
         { backgroundColor: theme.colors.background },
+        !mayDraw && styles.hidden,
       ]}
+      pointerEvents={mayDraw ? undefined : 'none'}
+      accessibilityElementsHidden={!mayDraw}
+      importantForAccessibility={mayDraw ? undefined : 'no-hide-descendants'}
     >
       {session && (
         <HostNavigation key={headKey(session.item.ref)}>

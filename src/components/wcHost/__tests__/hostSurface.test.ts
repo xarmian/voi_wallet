@@ -14,9 +14,8 @@ function setup() {
       reason: import('@/services/walletconnect/requestCoordinator').ExitReason;
     }) => void
   >();
-  let open = true;
   const coordinator = {
-    isOpen: () => open,
+    isOpen: () => true,
     subscribe: (
       _ref: unknown,
       listener: (info: {
@@ -47,9 +46,6 @@ function setup() {
     queue,
     session,
     listeners,
-    setOpen: (value: boolean) => {
-      open = value;
-    },
     surface: createHostSurface(session, queue),
   };
 }
@@ -100,21 +96,20 @@ it('DEFECT queueSize counts only waiting items', async () => {
   expect(await h.surface.queueSize()).toBe(0);
 });
 it.each([
-  [undefined, true, 'abandoned'],
-  [undefined, false, 'Transaction Signed Successfully'],
-  ['expired', true, 'expired'],
+  [undefined, false, 'abandoned'],
+  [undefined, true, 'Transaction Signed Successfully'],
   ['expired', false, 'expired'],
+  ['expired', true, 'expired'],
 ] as const)(
-  'DEFECT takeNext closes with reason %s (coordinator open %s) as %s, never advances or touches a grant',
-  async (reason, open, title) => {
+  'DEFECT takeNext closes with reason %s (approved %s) as %s, never advances or touches a grant',
+  async (reason, approved, title) => {
     const h = setup();
-    h.setOpen(open);
     h.session.lastReason = reason;
     const advance = jest.spyOn(h.queue, 'advance');
     const leave = jest.fn();
     h.session.binding.onLeave(leave);
     expect(await h.surface.queueSize()).toBe(1);
-    await expect(h.surface.takeNext()).resolves.toEqual({
+    await expect(h.surface.takeNext(approved)).resolves.toEqual({
       request: null,
       remaining: 1,
     });

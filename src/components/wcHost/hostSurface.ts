@@ -14,8 +14,8 @@ export function createHostSurface(
       session.end();
     },
     adoptNavigation: () => {},
-    takeNext: async () => {
-      session.closeInQueue(queue);
+    takeNext: async (approved) => {
+      session.closeInQueue(queue, approved === true);
       session.end();
       return { request: null, remaining: queue.getSnapshot().waiting.length };
     },

@@ -450,6 +450,8 @@ it.each([
     else expect(sendError).not.toHaveBeenCalled();
     expect(Alert.alert).toHaveBeenCalledWith('Error', message);
     expect(queue.getSnapshot().head).toBeNull();
+    // A connection that failed after the decision never reads as a success.
+    expect(queue.getSnapshot().result?.title).toBe('abandoned');
   }
 );
 it('DEFECT approval in flight ignores background', async () => {

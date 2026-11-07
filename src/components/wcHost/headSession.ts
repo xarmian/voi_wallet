@@ -25,6 +25,12 @@ export class HeadSession {
   readonly binding: ReviewBinding;
   readonly controller?: SignRequestController;
   lastReason?: ExitReason;
+  /** True once a review body has been drawn for this head. */
+  drawn = false;
+
+  markDrawn(): void {
+    this.drawn = true;
+  }
   private ended = false;
   private started = false;
   private params: SigningReviewParams | null = null;
@@ -32,13 +38,11 @@ export class HeadSession {
   private readonly listeners = new Set<() => void>();
   private unsubscribeQueue?: () => void;
   private unsubscribeCoordinator?: () => void;
-  private readonly coordinator: QueueCoordinator;
 
   constructor(
     readonly item: QueueItem,
     deps: { queue: RequestQueue; coordinator: QueueCoordinator }
   ) {
-    this.coordinator = deps.coordinator;
     this.key = headKey(item.ref);
     this.binding = createHostBinding(this, deps);
     this.unsubscribeCoordinator = deps.coordinator.subscribe(
@@ -73,17 +77,16 @@ export class HeadSession {
 
   /**
    * Finish this head in the queue with the right description. A coordinator
-   * close tells the session its reason. Approval is the one exit that closes
-   * the request without telling listeners, so a request that is no longer
-   * open and reported no reason was approved. A review that leaves first and
-   * settles afterwards (header back) is still open here, and reads abandoned.
+   * close tells the session its reason. Otherwise the caller says whether the
+   * person's approval went through (the signed answer reached the dApp, or the
+   * connection succeeded); any other exit reads abandoned.
    */
-  closeInQueue(queue: RequestQueue): boolean {
+  closeInQueue(queue: RequestQueue, approved = false): boolean {
     const { ref } = this.item;
     if (this.lastReason) return queue.closeHead(ref, this.lastReason);
-    return this.coordinator.isOpen(ref)
-      ? queue.closeHead(ref, 'abandoned')
-      : queue.finishApproved(ref);
+    return approved
+      ? queue.finishApproved(ref)
+      : queue.closeHead(ref, 'abandoned');
   }
 
   getReviewParams = (): SigningReviewParams | null => this.params;
@@ -123,6 +126,10 @@ export class HeadSession {
       this.controller?.dispose();
     }
   }
+}
+
+export function findHeadSession(item: QueueItem): HeadSession | undefined {
+  return sessions.get(headKey(item.ref));
 }
 
 export function getHeadSession(
