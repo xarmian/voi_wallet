@@ -33,6 +33,7 @@ jest.mock('expo-local-authentication', () => ({
 jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
     hasPin: jest.fn(),
+    getCredentialSource: jest.fn(async () => 'pin'),
     isBiometricEnabled: jest.fn(),
     verifyPin: jest.fn(),
     getBiometricSecret: jest.fn(),
@@ -1274,4 +1275,113 @@ it('keeps the permission spent after a Sign that entered the signer failed (TASK
   expect(mockSignTransaction).toHaveBeenCalledTimes(1);
   expect(AccountSecureStorage.getBiometricSecret).toHaveBeenCalledTimes(1);
   reviewGrant.revoke();
+});
+
+describe('cover start gate (TASK-518 U3d-9)', () => {
+  it.each([false, true, null])(
+    'DEFECT: valid PIN with gate=%s',
+    async (gate) => {
+      const controller = new TransactionAuthController();
+      await initFlow(controller);
+      controller.setStartGate(gate === null ? null : () => gate);
+      expect(await controller.authenticateWithPin('123456')).toBe(
+        gate !== false
+      );
+      expect(mockSignTransaction).toHaveBeenCalledTimes(gate === false ? 0 : 1);
+      if (gate === false)
+        expect(controller.getState()).toMatchObject({
+          state: 'authenticating',
+          pinAttempts: 0,
+          error: null,
+        });
+    }
+  );
+
+  it.each([false, true])(
+    'DEFECT: biometric pre-prompt gate, Ledger=%s',
+    async (ledger) => {
+      const controller = new TransactionAuthController();
+      mockASS.isBiometricEnabled.mockResolvedValue(true);
+      await initFlow(controller);
+      (controller as any).currentState.isLedgerFlow = ledger;
+      controller.setStartGate(() => false);
+      expect(await controller.authenticateWithBiometrics()).toBe(false);
+      expect(mockUnlock).not.toHaveBeenCalled();
+      expect(mockLA.authenticateAsync).not.toHaveBeenCalled();
+      expect(mockSignTransaction).not.toHaveBeenCalled();
+      expect(controller.getState()).toMatchObject({
+        state: 'authenticating',
+        error: null,
+      });
+    }
+  );
+
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    'DEFECT: biometric post-prompt gate, Ledger=%s, cover=%s',
+    async (ledger, cover) => {
+      const { AppLockSignal } = require('@/services/secure/appLockState');
+      const { SessionKeyVault } = require('@/services/secure/SessionKeyVault');
+      AppLockSignal.setUnlocked(false);
+      mockASS.isBiometricEnabled.mockResolvedValue(true);
+      const controller = new TransactionAuthController();
+      await initFlow(controller);
+      (controller as any).currentState.isLedgerFlow = ledger;
+      (controller as any).currentState.ledgerStatus = 'ready';
+      let allowed = true;
+      controller.setStartGate(() => allowed);
+      const start = jest
+        .spyOn(controller as any, 'startSigning')
+        .mockResolvedValue(undefined);
+      if (ledger)
+        mockLA.authenticateAsync.mockImplementationOnce(async () => {
+          allowed = !cover;
+          return { success: true };
+        });
+      else
+        mockUnlock.mockImplementationOnce(async () => {
+          SessionKeyVault.set('fixture', 'pin');
+          allowed = !cover;
+          return { status: 'unlocked' };
+        });
+      expect(await controller.authenticateWithBiometrics()).toBe(!cover);
+      expect(start).toHaveBeenCalledTimes(cover ? 0 : 1);
+      expect(controller.getState()).toMatchObject({
+        state: cover ? 'authenticating' : 'signing',
+        error: null,
+      });
+      if (!ledger) expect(SessionKeyVault.isUnlocked()).toBe(false);
+    }
+  );
+
+  it('DEFECT: denied review gate leaves a valid locked-sitting grant unconsumed', async () => {
+    const { reviewGrant } = require('../reviewGrant');
+    const { AppLockSignal } = require('@/services/secure/appLockState');
+    AppLockSignal.setUnlocked(false);
+    expect(await reviewGrant.unlock('topic:cover', { pin: '123456' })).toBe(
+      true
+    );
+    const controller = new TransactionAuthController();
+    await initFlow(controller);
+    bindReviewedRequest(controller, 'topic:cover');
+    controller.setStartGate(() => false);
+    expect(await controller.authenticateWithReviewGrant('topic:cover')).toBe(
+      false
+    );
+    expect(mockSignTransaction).not.toHaveBeenCalled();
+    expect(controller.getState()).toMatchObject({
+      state: 'authenticating',
+      error: null,
+    });
+    controller.setStartGate(() => true);
+    expect(await controller.authenticateWithReviewGrant('topic:cover')).toBe(
+      true
+    );
+    expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+    reviewGrant.revoke();
+  });
 });

@@ -1,15 +1,30 @@
 import React from 'react';
 import { act, fireEvent, render } from '@testing-library/react-native';
 
+let mockCancelPress: (() => void) | undefined;
 let mockModalVisible: boolean;
+let mockRequestClose: (() => void) | undefined;
 jest.mock('react-native', () => {
   const native = jest.requireActual('react-native');
   const descriptors = Object.getOwnPropertyDescriptors(native);
+  descriptors.TouchableOpacity = {
+    configurable: true,
+    enumerable: true,
+    value: (props: React.ComponentProps<typeof native.TouchableOpacity>) => {
+      if (
+        require('react').isValidElement(props.children) &&
+        props.children.props.children === 'Cancel'
+      )
+        mockCancelPress = props.onPress;
+      return require('react').createElement(native.TouchableOpacity, props);
+    },
+  };
   descriptors.Modal = {
     configurable: true,
     enumerable: true,
     value: (props: React.ComponentProps<typeof native.Modal>) => {
       mockModalVisible = props.visible;
+      mockRequestClose = props.onRequestClose;
       return require('react').createElement(native.Modal, props);
     },
   };
@@ -326,3 +341,129 @@ describe('cover start and synchronous result guards', () => {
     }
   );
 });
+
+describe('cancel invalidates pending authentication (U3d-9)', () => {
+  beforeEach(() => {
+    mockCovered = false;
+    resetCoverForTests();
+    jest.mocked(LocalAuthentication.hasHardwareAsync).mockResolvedValue(true);
+    jest.mocked(LocalAuthentication.isEnrolledAsync).mockResolvedValue(true);
+    jest
+      .mocked(LocalAuthentication.authenticateAsync)
+      .mockResolvedValue({ success: false, error: 'user_cancel' });
+  });
+  afterEach(() => resetCoverForTests());
+  it.each(['PIN', 'biometric'] as const)(
+    'DEFECT: %s cancellation/close discards late success; uncancelled twin succeeds',
+    async (kind) => {
+      for (const action of ['cancel', 'close', 'none']) {
+        let finish!: () => void;
+        const onSuccess = jest.fn();
+        const onCancel = jest.fn();
+        if (kind === 'PIN')
+          jest.mocked(AccountSecureStorage.verifyPin).mockImplementationOnce(
+            () =>
+              new Promise((resolve) => {
+                finish = () => resolve(true);
+              })
+          );
+        else
+          jest
+            .mocked(LocalAuthentication.authenticateAsync)
+            .mockImplementationOnce(
+              () =>
+                new Promise((resolve) => {
+                  finish = () => resolve({ success: true });
+                })
+            );
+        // Capture Cancel before verify disables it: this also covers an already queued tap.
+        const view = await render(
+          <UnifiedAuthModal
+            visible
+            biometricEnabled={kind === 'biometric'}
+            onSuccess={onSuccess}
+            onCancel={onCancel}
+          />
+        );
+        const cancel = mockCancelPress!;
+        if (kind === 'PIN') {
+          for (const digit of ['1', '2', '3', '4', '5', '6'])
+            await fireEvent.press(view.getByText(digit));
+        } else {
+          // Auto-prompt is pending.
+        }
+        expect(finish).toBeDefined();
+        if (action !== 'none')
+          await act(async () => {
+            if (action === 'close') mockRequestClose?.();
+            else cancel();
+          });
+        await act(async () => finish());
+        if (kind === 'biometric') {
+          const confirm = view.queryByText('Confirm');
+          if (action === 'none')
+            await fireEvent.press(view.getByText('Confirm'));
+          else expect(confirm).toBeNull();
+        }
+        expect(onCancel).toHaveBeenCalledTimes(action === 'none' ? 0 : 1);
+        expect(onSuccess).toHaveBeenCalledTimes(action === 'none' ? 1 : 0);
+        await view.unmount();
+      }
+    }
+  );
+});
+
+it.each([true, false])(
+  'DEFECT: availability await cover=%s rechecks before OS prompt and retries after unlock',
+  async (cover) => {
+    mockCovered = false;
+    resetCoverForTests();
+    jest.mocked(LocalAuthentication.hasHardwareAsync).mockResolvedValue(true);
+    let finish!: (value: boolean) => void;
+    jest.mocked(LocalAuthentication.isEnrolledAsync).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    jest
+      .mocked(LocalAuthentication.authenticateAsync)
+      .mockResolvedValue({ success: false, error: 'user_cancel' });
+    const tree = () => (
+      <UnifiedAuthModal
+        visible
+        biometricEnabled
+        onSuccess={jest.fn()}
+        onCancel={jest.fn()}
+      />
+    );
+    const view = await render(tree());
+    if (cover) {
+      setCovered(true);
+    }
+    await act(async () => finish(true));
+    expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledTimes(
+      cover ? 0 : 1
+    );
+    expect(view.queryByText('Authenticating...')).toBeNull();
+    if (cover) {
+      mockCovered = true;
+      await view.rerender(tree());
+      setCovered(false);
+      mockCovered = false;
+      let finishRetry!: (value: boolean) => void;
+      jest.mocked(LocalAuthentication.isEnrolledAsync).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishRetry = resolve;
+          })
+      );
+      await view.rerender(tree());
+      expect(finishRetry).toBeDefined();
+      await act(async () => finishRetry(true));
+      expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledTimes(1);
+    }
+    expect(view.queryByText('Authenticating...')).toBeNull();
+    resetCoverForTests();
+  }
+);

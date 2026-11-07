@@ -1,3 +1,4 @@
+import { isCovered } from '@/utils/lockCover';
 import { useCoverPaused } from '@/hooks/useCoverPaused';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
@@ -99,6 +100,11 @@ export default function UnifiedTransactionAuthModal({
   // This prevents double-submission when the onComplete prop reference changes during re-renders
   const hasCalledOnComplete = useRef(false);
 
+  useEffect(() => {
+    controller.setStartGate?.(() => !isCovered());
+    return () => controller.setStartGate?.(null);
+  }, [controller]);
+
   // Subscribe to controller state changes
   useEffect(() => {
     const unsubscribe = controller.subscribe(setAuthState);
@@ -153,6 +159,7 @@ export default function UnifiedTransactionAuthModal({
           request.reviewGrantKey &&
           controller.getState().state === 'authenticating'
         ) {
+          if (isCovered()) return;
           await controller.authenticateWithReviewGrant(request.reviewGrantKey);
         } else if (
           controller.getState().state === 'authenticating' &&
@@ -160,6 +167,7 @@ export default function UnifiedTransactionAuthModal({
           biometricOnOpen &&
           controller.getState().biometricAvailable
         ) {
+          if (isCovered()) return;
           await controller.authenticateWithBiometrics(message);
         }
       })();
@@ -226,6 +234,7 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const handleBiometricAuth = async () => {
+    if (isCovered()) return;
     try {
       await controller.authenticateWithBiometrics(message);
     } catch (error) {

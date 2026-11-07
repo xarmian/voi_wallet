@@ -9,9 +9,16 @@ jest.mock('@/contexts/ThemeContext', () => ({
 jest.mock('@/services/auth/transactionAuthController', () => ({}));
 jest.mock('@/services/transactions/unifiedSigner', () => ({}));
 
-jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }), {
-  virtual: true,
-});
+jest.mock(
+  '@expo/vector-icons',
+  () => ({
+    Ionicons: ({ name }: { name: string }) =>
+      require('react').createElement(require('react-native').Text, {
+        testID: name,
+      }),
+  }),
+  { virtual: true }
+);
 
 jest.mock('@/components/remoteSigner', () => ({
   AnimatedQRCode: () => null,
@@ -70,6 +77,7 @@ function makeController(initial = idleState()) {
     listeners.forEach((l) => l({ ...state }));
   };
   return {
+    setStartGate: jest.fn<void, [(() => boolean) | null]>(),
     getState: jest.fn(() => ({ ...state })),
     subscribe: jest.fn((fn: (s: unknown) => void) => {
       listeners.add(fn);
@@ -114,13 +122,17 @@ jest.mock('react-native', () => {
 beforeEach(() => {
   mockCovered = false;
 });
-function setup(controller = makeController()) {
+function setup(
+  controller = makeController(),
+  options: { biometricOnOpen?: boolean; reviewGrantKey?: string } = {}
+) {
   const onComplete = jest.fn();
   const onCancel = jest.fn();
-  const request = {} as never;
+  const request = { reviewGrantKey: options.reviewGrantKey } as never;
   const element = (visible = true) => (
     <UnifiedTransactionAuthModal
       visible={visible}
+      biometricOnOpen={options.biometricOnOpen}
       controller={controller as never}
       request={request}
       onComplete={onComplete}
@@ -226,3 +238,119 @@ it('DEFECT 5: no PIN keypad is reachable while covered', async () => {
   await view.rerender(element());
   expect(view.queryByText('1')).toBeNull();
 });
+
+import { isCovered, setCovered, resetCoverForTests } from '@/utils/lockCover';
+
+describe('start policy (U3d-9)', () => {
+  beforeEach(() => resetCoverForTests());
+  afterEach(() => resetCoverForTests());
+  it.each(['biometric', 'review'] as const)(
+    'DEFECT: pending initialization %s checks synchronous cover and uncovered twin starts once',
+    async (kind) => {
+      for (const covered of [true, false]) {
+        resetCoverForTests();
+        const controller = makeController();
+        const sign = jest.fn(() =>
+          controller._emit(
+            idleState({ state: 'completed', result: { success: true } })
+          )
+        );
+        controller.authenticateWithBiometrics.mockImplementation(async () => {
+          sign();
+        });
+        controller.authenticateWithReviewGrant.mockImplementation(async () => {
+          sign();
+          return true;
+        });
+        let finish!: () => void;
+        controller.initializeSigningFlow.mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finish = () => {
+                controller._emit(
+                  idleState({
+                    state: 'authenticating',
+                    biometricAvailable: true,
+                  })
+                );
+                resolve();
+              };
+            })
+        );
+        const { element, onComplete } = setup(controller, {
+          biometricOnOpen: true,
+          reviewGrantKey: kind === 'review' ? 'grant' : undefined,
+        });
+        const view = await render(element());
+        if (covered) setCovered(true);
+        await act(async () => finish());
+        const authenticate =
+          kind === 'review'
+            ? controller.authenticateWithReviewGrant
+            : controller.authenticateWithBiometrics;
+        expect(authenticate).toHaveBeenCalledTimes(covered ? 0 : 1);
+        expect(sign).toHaveBeenCalledTimes(covered ? 0 : 1);
+        expect(onComplete).toHaveBeenCalledTimes(covered ? 0 : 1);
+        if (covered) {
+          setCovered(false);
+          await view.rerender(element());
+          expect(authenticate).not.toHaveBeenCalled();
+          expect(view.getByText('1')).toBeTruthy();
+        }
+        await view.unmount();
+      }
+    }
+  );
+  it.each([true, false])(
+    'DEFECT: pending PIN consults registered cover policy, cover=%s',
+    async (covered) => {
+      const controller = makeController(idleState({ state: 'authenticating' }));
+      let finish!: () => void;
+      const sign = jest.fn();
+      controller.authenticateWithPin.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = () => {
+              const gate = controller.setStartGate.mock.calls.at(-1)?.[0] as
+                (() => boolean) | undefined;
+              const allowed = gate ? gate() : true;
+              if (allowed) sign();
+              resolve(allowed);
+            };
+          })
+      );
+      const { element } = setup(controller);
+      const view = await render(element());
+      for (const digit of ['1', '2', '3', '4', '5', '6'])
+        await fireEvent.press(view.getByText(digit));
+      if (covered) setCovered(true);
+      await act(async () => finish());
+      expect(sign).toHaveBeenCalledTimes(covered ? 0 : 1);
+      const gate = controller.setStartGate.mock.calls.at(-1)?.[0] as
+        (() => boolean) | undefined;
+      expect(gate?.()).toBe(!isCovered());
+      await view.unmount();
+      expect(controller.setStartGate).toHaveBeenLastCalledWith(null);
+    }
+  );
+});
+
+it.each([true, false])(
+  'REGRESSION: manual biometric start observes synchronous cover=%s',
+  async (cover) => {
+    mockCovered = false;
+    resetCoverForTests();
+    const controller = makeController(
+      idleState({ state: 'authenticating', biometricAvailable: true })
+    );
+    const { element } = setup(controller);
+    const view = await render(element());
+    if (cover) setCovered(true);
+    await fireEvent.press(view.getByTestId('finger-print'));
+    expect(controller.authenticateWithBiometrics).toHaveBeenCalledTimes(
+      cover ? 0 : 1
+    );
+    await view.unmount();
+    resetCoverForTests();
+  }
+);

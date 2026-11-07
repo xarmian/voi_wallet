@@ -1,6 +1,6 @@
 // Render the real parent screen; mock native selection and the child modals.
 import React from 'react';
-import { Alert } from 'react-native';
+import { Alert, AppState, type AppStateStatus } from 'react-native';
 import { act, fireEvent, render } from '@testing-library/react-native';
 import RestoreWalletScreen from '../RestoreWalletScreen';
 import { BackupService } from '@/services/backup';
@@ -21,6 +21,7 @@ jest.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ reloadTheme: async () => {} }),
 }));
 
+let mockIsSubmitting = false;
 let mockBackupInfo: unknown;
 let mockConfirmRestore: () => Promise<void> = async () => {};
 const mockUnlockForRestore = jest.fn();
@@ -60,22 +61,41 @@ jest.mock('@/components/common/GlassCard', () => ({
   GlassCard: ({ children }: { children: React.ReactNode }) => children,
 }));
 jest.mock('@/components/backup/BackupProgressModal', () => () => null);
-jest.mock('@/components/backup/PasswordInputModal', () => {
+jest.mock('@/components/backup/OldPinStep', () => {
   const { Button } = require('react-native');
+  return function OldPin({
+    onVerified,
+  }: {
+    onVerified: (epoch: number) => void;
+  }) {
+    return <Button title="Verify old PIN" onPress={() => onVerified(1)} />;
+  };
+});
+jest.mock('@/components/backup/PasswordInputModal', () => {
+  const { Button, Text, View } = require('react-native');
   return function Password({
     visible,
     onConfirm,
+    isSubmitting,
+    error,
   }: {
     visible: boolean;
+    isSubmitting: boolean;
+    error?: string;
     onConfirm: (value: string) => void;
   }) {
+    mockIsSubmitting = isSubmitting;
     return visible ? (
-      <Button
-        title="Confirm password"
-        onPress={() => {
-          void onConfirm('pw');
-        }}
-      />
+      <View>
+        <Text testID="password-error">{error}</Text>
+        <Button
+          disabled={isSubmitting}
+          title="Confirm password"
+          onPress={() => {
+            void onConfirm('pw');
+          }}
+        />
+      </View>
     ) : null;
   };
 });
@@ -190,13 +210,63 @@ it.each([true, false])(
       expect(view.queryByText('Confirm restore')).toBeNull();
       expect(mockBackupInfo).toBeNull();
       expect(view.getByText('Confirm password')).toBeTruthy();
-      expect(BackupService.validateBackupFile).toHaveBeenLastCalledWith(
-        'file:///b.voibackup',
-        'pw'
-      );
       await fireEvent.press(view.getByText('Confirm password'));
     }
     expect(view.getByText('Confirm restore')).toBeTruthy();
     expect(mockBackupInfo).toEqual(info);
+  }
+);
+
+it('REGRESSION: stale validation rejection after cover clears busy state and sets no error', async () => {
+  let reject!: (reason: Error) => void;
+  jest.mocked(BackupService.validateBackupFile).mockImplementationOnce(
+    () =>
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      })
+  );
+  const view = await render(<RestoreWalletScreen />);
+  await fireEvent.press(view.getByText('Select Backup File'));
+  await fireEvent.press(view.getByText('Confirm password'));
+  mockCovered = true;
+  await view.rerender(<RestoreWalletScreen />);
+  mockCovered = false;
+  await view.rerender(<RestoreWalletScreen />);
+  await act(async () => reject(new Error('stale validation')));
+  expect(mockIsSubmitting).toBe(false);
+  expect(view.getByTestId('password-error').props.children).toBeUndefined();
+  expect(view.queryByText('Confirm restore')).toBeNull();
+  await fireEvent.press(view.getByText('Confirm password'));
+  expect(BackupService.validateBackupFile).toHaveBeenCalledTimes(2);
+  expect(view.getByText('Confirm restore')).toBeTruthy();
+});
+
+it.each([true, false])(
+  'DEFECT: ending old-PIN session=%s invalidates pending validation',
+  async (endSession) => {
+    mockParams = { isOnboarding: true };
+    mockHasPin = true;
+    let background!: (state: AppStateStatus) => void;
+    jest
+      .spyOn(AppState, 'addEventListener')
+      .mockImplementation((_event, handler) => {
+        background = handler;
+        return { remove: jest.fn() };
+      });
+    let finish!: (info: never) => void;
+    jest.mocked(BackupService.validateBackupFile).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const view = await render(<RestoreWalletScreen />);
+    await fireEvent.press(view.getByText('Verify old PIN'));
+    await fireEvent.press(view.getByText('Select Backup File'));
+    await fireEvent.press(view.getByText('Confirm password'));
+    if (endSession) await act(async () => background('background'));
+    await act(async () => finish({ accountCount: 1 } as never));
+    if (endSession) expect(view.queryByText('Confirm restore')).toBeNull();
+    else expect(view.getByText('Confirm restore')).toBeTruthy();
   }
 );

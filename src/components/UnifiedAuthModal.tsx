@@ -245,6 +245,11 @@ export default function UnifiedAuthModal({
         return;
       }
 
+      if (isCovered() || epoch !== coverEpoch.current) {
+        setIsAuthenticating(false);
+        setBiometricAttempted(false);
+        return;
+      }
       const result = await LocalAuthentication.authenticateAsync({
         promptMessage: getAuthMessage(purpose),
         fallbackLabel: 'Use PIN',
@@ -367,6 +372,7 @@ export default function UnifiedAuthModal({
   };
 
   const handleCancel = () => {
+    coverEpoch.current += 1;
     setPin('');
     setAttempts(0);
     setBiometricAttempted(false);

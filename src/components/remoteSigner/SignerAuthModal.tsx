@@ -130,11 +130,17 @@ export default function SignerAuthModal({
 
   // Auto-prompt for biometric auth when modal opens
   useEffect(() => {
-    if (visible && biometricAvailable && !isVerifying && !covered) {
+    if (
+      visible &&
+      biometricAvailable &&
+      !isVerifying &&
+      !covered &&
+      !isLocked
+    ) {
       handleBiometricAuth();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt on open; keyed on visible/biometricAvailable/covered. handleBiometricAuth and the isVerifying guard are read at that commit; re-prompting when isVerifying flips is not wanted.
-  }, [visible, biometricAvailable, covered]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt on open; keyed on visible/biometricAvailable/covered/isLocked. handleBiometricAuth and the isVerifying guard are read at that commit; re-prompting when isVerifying flips is not wanted.
+  }, [visible, biometricAvailable, covered, isLocked]);
 
   // Handle lockout timer
   useEffect(() => {
@@ -222,7 +228,7 @@ export default function SignerAuthModal({
 
   const handleBiometricAuth = async () => {
     const epoch = coverEpoch.current;
-    if (isCovered() || isVerifying) return;
+    if (isCovered() || isVerifying || isLocked) return;
     setIsVerifying(true);
     setError(null);
 
@@ -398,13 +404,22 @@ export default function SignerAuthModal({
       visible={visible && !covered}
       animationType="slide"
       transparent={true}
-      onRequestClose={onCancel}
+      onRequestClose={() => {
+        coverEpoch.current += 1;
+        onCancel();
+      }}
     >
       <View style={styles.overlay}>
         <View style={styles.container}>
           {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={() => {
+                coverEpoch.current += 1;
+                onCancel();
+              }}
+            >
               <Text style={styles.cancelText}>Cancel</Text>
             </TouchableOpacity>
             <Text style={styles.title}>Authenticate</Text>

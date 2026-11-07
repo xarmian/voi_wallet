@@ -128,6 +128,16 @@ export interface TransactionAuthState_Interface {
  * Manages the complete authentication and signing flow for ALL transaction types
  */
 export class TransactionAuthController {
+  private startGate: (() => boolean) | null = null;
+
+  public setStartGate(gate: (() => boolean) | null): void {
+    this.startGate = gate;
+  }
+
+  private canStartAuth(): boolean {
+    return this.startGate ? this.startGate() : true;
+  }
+
   private unifiedSigner = UnifiedTransactionSigner.getInstance();
   private stateListeners: ((state: TransactionAuthState_Interface) => void)[] =
     [];
@@ -1399,6 +1409,7 @@ export class TransactionAuthController {
       const isValid = await AccountSecureStorage.verifyPin(pin);
 
       if (isValid) {
+        if (!this.canStartAuth()) return false;
         this.reviewFlowEnded = false;
         // Reset attempts and proceed with signing
         // If ledger flow, wait until device is ready to start signing
@@ -1461,6 +1472,7 @@ export class TransactionAuthController {
     if (!this.currentState.biometricAvailable) {
       throw new Error('Biometric authentication not available');
     }
+    if (!this.canStartAuth()) return false;
 
     try {
       // LEDGER: biometric is a pure UI gate — the signing key lives on the
@@ -1477,6 +1489,7 @@ export class TransactionAuthController {
         if (!result.success) {
           return false;
         }
+        if (!this.canStartAuth()) return false;
         this.reviewFlowEnded = false;
 
         if (this.currentState.ledgerStatus !== 'ready') {
@@ -1506,6 +1519,10 @@ export class TransactionAuthController {
       }
 
       if (outcome.status === 'unlocked') {
+        if (!this.canStartAuth()) {
+          if (!AppLockSignal.isUnlocked()) clearSessionSecurity();
+          return false;
+        }
         this.reviewFlowEnded = false;
         this.updateState({ state: 'signing' });
         try {
@@ -1600,6 +1617,7 @@ export class TransactionAuthController {
   }
 
   public async authenticateWithReviewGrant(key: string): Promise<boolean> {
+    if (!this.canStartAuth()) return false;
     if (
       this.currentState.state !== 'authenticating' ||
       this.reviewAuthorized ||
