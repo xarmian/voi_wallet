@@ -1353,6 +1353,33 @@ describe('cover start gate (TASK-518 U3d-9)', () => {
     }
   );
 
+  it.each([true, false])(
+    'DEFECT: software biometric unlocked at the tap, app locks during the prompt (refused=%s): a refused start drops the session vault, an allowed start leaves it',
+    async (refused) => {
+      const { AppLockSignal } = require('@/services/secure/appLockState');
+      const { SessionKeyVault } = require('@/services/secure/SessionKeyVault');
+      AppLockSignal.setUnlocked(true);
+      mockASS.isBiometricEnabled.mockResolvedValue(true);
+      const controller = new TransactionAuthController();
+      await initFlow(controller);
+      let allowed = true;
+      controller.setStartGate(() => allowed);
+      mockUnlock.mockImplementationOnce(async () => {
+        // The lock lands while the OS prompt is open, then the prompt succeeds
+        // and refills the vault.
+        if (refused) {
+          AppLockSignal.setUnlocked(false);
+          allowed = false;
+        }
+        SessionKeyVault.set('fixture', 'pin');
+        return { status: 'unlocked' };
+      });
+      expect(await controller.authenticateWithBiometrics()).toBe(true);
+      expect(mockSignTransaction).toHaveBeenCalledTimes(refused ? 0 : 1);
+      expect(SessionKeyVault.isUnlocked()).toBe(!refused);
+    }
+  );
+
   it('REGRESSION: unit-level controller gate denial preserves a grant for a later allowed call', async () => {
     const { reviewGrant } = require('../reviewGrant');
     const { AppLockSignal } = require('@/services/secure/appLockState');
@@ -1383,7 +1410,7 @@ describe('cover start gate (TASK-518 U3d-9)', () => {
 
 describe('choke-point cover gate (U3d-10)', () => {
   it.each([true, false])(
-    'DEFECT: cover=%s during software PIN-presence check defers without retaining PIN; fresh entry signs',
+    'DEFECT: cover=%s during the software PIN-presence check (covered: returns to the PIN pad without keeping the PIN; uncovered: signs)',
     async (cover) => {
       const controller = new TransactionAuthController();
       await controller.initializeSigningFlow({
@@ -1426,7 +1453,7 @@ describe('choke-point cover gate (U3d-10)', () => {
   );
 
   it.each([true, false])(
-    'DEFECT: Ledger readiness under cover=%s retries once on uncover with pending flags and PIN',
+    'DEFECT: Ledger readiness with cover=%s (covered: start deferred with pending flags and PIN, resumed once on uncover; uncovered: signs at once)',
     async (cover) => {
       const controller = new TransactionAuthController();
       await controller.initializeSigningFlow({
@@ -1466,7 +1493,7 @@ describe('choke-point cover gate (U3d-10)', () => {
   );
 
   it.each([true, false])(
-    'DEFECT: consumed review grant with cover=%s at choke point ends approval instead of retrying',
+    'DEFECT: consumed review grant with cover=%s at the choke point (covered: ends the approval, no retry; uncovered: signs)',
     async (cover) => {
       const { reviewGrant } = require('../reviewGrant');
       const { AppLockSignal } = require('@/services/secure/appLockState');
@@ -1521,7 +1548,7 @@ describe('choke-point cover gate (U3d-10)', () => {
 
 describe('PIN verification belongs to its request (U3d-10)', () => {
   it.each(['cancel', 'dismiss', 'replace', 'none'])(
-    'DEFECT: pending valid PIN after %s cannot sign a cancelled or replacement request',
+    'DEFECT: pending valid PIN after %s cannot sign a cancelled or replacement request (none is the control: it signs)',
     async (action) => {
       const controller = new TransactionAuthController();
       await controller.initializeSigningFlow({
@@ -1574,7 +1601,7 @@ describe('PIN verification belongs to its request (U3d-10)', () => {
     }
   );
   it.each([true, false])(
-    'DEFECT: stale wrong PIN cancelled=%s does not count attempts or arm lockout',
+    'DEFECT: a wrong PIN result after cancel (cancelled=true) changes no controller state; the live twin (cancelled=false) counts and locks out. Proves the controller counter only: the wallet-wide throttle lives in verifyPin and is not exercised with this mock',
     async (cancelled) => {
       jest.useFakeTimers();
       try {

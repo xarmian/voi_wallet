@@ -1669,6 +1669,11 @@ export class TransactionAuthController {
 
   private deferSigning(pin?: string): void {
     this.hasStartedSigning = false;
+    // A refused start means the app is covered. If a biometric unlock finished
+    // after the lock and refilled the session vault (wasLocked was read before
+    // the prompt, so its finally would skip the clear), a lock must still drop
+    // the session key material.
+    if (!AppLockSignal.isUnlocked()) clearSessionSecurity();
     if (this.currentRequest?.reviewGrantKey) {
       this.settleReviewCapability();
       this.updateState({

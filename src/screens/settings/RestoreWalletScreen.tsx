@@ -111,7 +111,8 @@ export default function RestoreWalletScreen() {
       if (sessionTimer.current) clearTimeout(sessionTimer.current);
       sessionTimer.current = null;
       // Only a verified session has anything to end. A background event on a
-      // screen with no session (Settings, or before the PIN) changes nothing.
+      // screen with no session (Settings, or before the PIN) only cancels a
+      // pending old-PIN check; it leaves a backup validation running.
       if (oldPinEpoch.current === null) return;
       validationGeneration.current += 1;
       setIsValidating(false);
