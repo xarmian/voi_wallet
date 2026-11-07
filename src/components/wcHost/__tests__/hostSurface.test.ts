@@ -3,7 +3,10 @@ import { getHeadSession } from '../headSession';
 import { createHostSurface } from '../hostSurface';
 import type { SigningReviewParams } from '@/services/walletconnect/signRequestController';
 jest.mock('@/services/walletconnect/signRequestController', () => ({
-  SignRequestController: jest.fn(() => ({ dispose: jest.fn() })),
+  SignRequestController: jest.fn(() => ({
+    dispose: jest.fn(),
+    leave: jest.fn(),
+  })),
 }));
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')

@@ -67,6 +67,7 @@ jest.mock('@/services/walletconnect/signRequestController', () => ({
   SignRequestController: jest.fn(() => ({
     start: jest.fn(),
     dispose: jest.fn(),
+    leave: jest.fn(),
   })),
 }));
 import LockScreen from '../LockScreen';

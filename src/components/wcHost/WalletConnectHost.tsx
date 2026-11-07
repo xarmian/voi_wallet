@@ -1,11 +1,13 @@
 import React, { useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   Button,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/AuthContext';
 import { RequestQueue } from '@/services/walletconnect/requestQueue';
 import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
@@ -50,6 +52,12 @@ function HeadBody({ session }: { session: HeadSession }) {
   );
 }
 
+/** The OK action: show the next waiting request, or clear the card. */
+function dismissResultCard(queue: RequestQueue): void {
+  if (queue.getSnapshot().waiting.length > 0) queue.advance();
+  else queue.dismissResult();
+}
+
 export default function WalletConnectHost() {
   const queue = RequestQueue.getInstance();
   const snapshot = useSyncExternalStore(
@@ -76,6 +84,26 @@ export default function WalletConnectHost() {
   useLayoutEffect(() => {
     if (!mayDraw && session?.drawn) session.binding.nav.goBack();
   }, [mayDraw, session]);
+  const locked = authState.isLocked || !authState.isAuthenticated;
+  const showing = mayDraw && (!!snapshot.head || !!snapshot.result);
+  // While anything is shown, hardware back must not act on the app stack
+  // beneath it. It does what the screen's own back or OK does; under the lock
+  // cover it does nothing, as the cover's own handler does.
+  useEffect(() => {
+    if (!showing) return;
+    const subscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => {
+        if (locked) return true;
+        const current = queue.getSnapshot();
+        if (current.result) dismissResultCard(queue);
+        else if (current.head)
+          findHeadSession(current.head)?.binding.nav.goBack();
+        return true;
+      }
+    );
+    return () => subscription.remove();
+  }, [showing, locked, queue]);
   if (!mayDraw) return null;
   if (!snapshot.head && !snapshot.result) return null;
   return (
@@ -91,7 +119,7 @@ export default function WalletConnectHost() {
         </HostNavigation>
       )}
       {snapshot.result && (
-        <View>
+        <SafeAreaView edges={['top', 'bottom']} style={styles.card}>
           <Text style={{ color: theme.colors.text }}>
             {snapshot.result.title}
           </Text>
@@ -102,13 +130,14 @@ export default function WalletConnectHost() {
           )}
           <Button
             title={HOST_DISMISS_LABEL}
-            onPress={() => {
-              if (snapshot.waiting.length > 0) queue.advance();
-              else queue.dismissResult();
-            }}
+            onPress={() => dismissResultCard(queue)}
           />
-        </View>
+        </SafeAreaView>
       )}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  card: { padding: 16 },
+});
