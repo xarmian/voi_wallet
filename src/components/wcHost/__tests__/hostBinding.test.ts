@@ -54,8 +54,10 @@ it.each(['goBack', 'popOrReplace'] as const)(
     // Main/params are ignored: approval reveals the app beneath the host.
     // behaviour question for product at cutover.
     expect(h.binding.nav[method]('Main', { screen: 'Home' })).toBe(true);
-    expect(h.describeClose).toHaveBeenCalledWith('abandoned');
-    expect(h.queue.getSnapshot().result?.title).toBe('abandoned');
+    // goBack is an exit without approval; popOrReplace is the success path.
+    expect(h.queue.getSnapshot().result?.title).toBe(
+      method === 'goBack' ? 'abandoned' : 'Success'
+    );
     expect(leave).toHaveBeenCalledTimes(1);
     expect(h.binding.nav[method]('Main')).toBe(false);
     expect(h.binding.nav.canGoBack()).toBe(false);
@@ -63,12 +65,26 @@ it.each(['goBack', 'popOrReplace'] as const)(
     expect(leave).toHaveBeenCalledTimes(1);
   }
 );
+it('DEFECT an approval that completes after the person left corrects the card once', () => {
+  const h = setup();
+  expect(h.binding.nav.goBack()).toBe(true);
+  expect(h.queue.getSnapshot().result?.title).toBe('abandoned');
+  expect(h.binding.nav.popOrReplace('Main')).toBe(true);
+  expect(h.queue.getSnapshot().result).toMatchObject({
+    title: 'Success',
+    message: 'Successfully connected to dApp',
+  });
+  expect(h.binding.nav.popOrReplace('Main')).toBe(false);
+  // A plain exit never turns into an approval.
+  expect(h.binding.nav.goBack()).toBe(false);
+  expect(h.queue.getSnapshot().result?.title).toBe('Success');
+});
 it('DEFECT last coordinator reason is scoped to the session', () => {
   const h = setup();
   // Notify the session directly; the queue subscriber ordinarily closes first.
   [...h.listeners].at(-1)!({ reason: 'background' });
   h.binding.nav.goBack();
-  expect(h.describeClose).toHaveBeenLastCalledWith('background');
+  expect(h.describeClose).toHaveBeenLastCalledWith('background', 'proposal');
 });
 it('DEFECT replace refuses without changing the queue', () => {
   const h = setup();

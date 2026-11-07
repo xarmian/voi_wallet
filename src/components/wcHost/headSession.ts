@@ -25,6 +25,12 @@ export class HeadSession {
   readonly binding: ReviewBinding;
   readonly controller?: SignRequestController;
   lastReason?: ExitReason;
+  /** True once a review body has been drawn for this head. */
+  drawn = false;
+
+  markDrawn(): void {
+    this.drawn = true;
+  }
   private ended = false;
   private started = false;
   private params: SigningReviewParams | null = null;
@@ -69,6 +75,20 @@ export class HeadSession {
     void this.controller?.start();
   }
 
+  /**
+   * Finish this head in the queue with the right description. A coordinator
+   * close tells the session its reason. Otherwise the caller says whether the
+   * person's approval went through (the signed answer reached the dApp, or the
+   * connection succeeded); any other exit reads abandoned.
+   */
+  closeInQueue(queue: RequestQueue, approved = false): boolean {
+    const { ref } = this.item;
+    if (this.lastReason) return queue.closeHead(ref, this.lastReason);
+    return approved
+      ? queue.finishApproved(ref)
+      : queue.closeHead(ref, 'abandoned');
+  }
+
   getReviewParams = (): SigningReviewParams | null => this.params;
 
   presentReview(params: SigningReviewParams): void {
@@ -106,6 +126,10 @@ export class HeadSession {
       this.controller?.dispose();
     }
   }
+}
+
+export function findHeadSession(item: QueueItem): HeadSession | undefined {
+  return sessions.get(headKey(item.ref));
 }
 
 export function getHeadSession(

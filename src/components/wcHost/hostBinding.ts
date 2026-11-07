@@ -17,16 +17,21 @@ export function createHostBinding(
     const head = queue.getSnapshot().head;
     return !!head && headKey(head.ref) === session.key;
   };
-  const finish = () => {
-    if (!isHead()) return false;
-    queue.closeHead(session.item.ref, session.lastReason ?? 'abandoned');
+  const finish = (approved: boolean) => {
+    if (!isHead()) {
+      // The person left while the approval was still in flight and it then
+      // went through: correct the card the early exit wrote.
+      return approved ? queue.amendApproved(session.item.ref) : false;
+    }
+    session.closeInQueue(queue, approved);
     session.end();
     return true;
   };
   const binding: ReviewBinding = {
     nav: {
-      goBack: finish,
-      popOrReplace: finish,
+      goBack: () => finish(false),
+      // Only the connect review's success path pops to Main.
+      popOrReplace: () => finish(true),
       replace: () => false,
       canGoBack: isHead,
       navigate: refuse,

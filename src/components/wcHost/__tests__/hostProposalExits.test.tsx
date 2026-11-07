@@ -78,9 +78,14 @@ jest.mock('react-native-safe-area-context', () => ({
 }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 let mockLocked = false;
+let mockAuthChecked = true;
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
     authState: {
+      authChecked: mockAuthChecked,
+      securityUnavailable: false,
+      hasPin: true,
+      pinSetupResume: false,
       isLocked: mockLocked,
       isAuthenticated: !mockLocked,
       biometricEnabled: false,
@@ -147,6 +152,7 @@ let changeState: (state: AppStateStatus) => void;
 let params: { proposal: typeof proposal | undefined };
 beforeEach(async () => {
   mockLocked = false;
+  mockAuthChecked = true;
   reviewGrant.revoke(false);
   AppLockSignal.setUnlocked(true);
   SessionKeyVault.set('fixture', 'pin');
@@ -216,9 +222,13 @@ it('DEFECT approve finishes the head and ignores Main (behaviour question for pr
   const settle = jest.spyOn(coordinator, 'settle');
   await approve(view);
   expect(decide).toHaveBeenCalledWith(ref, 'approved');
+  expect(session.lastReason).toBeUndefined();
   expect(mockApprove).toHaveBeenCalledWith(proposal, [account]);
   expect(settle).not.toHaveBeenCalled();
-  expect(queue.getSnapshot().result?.title).toBe('abandoned');
+  expect(queue.getSnapshot().result).toMatchObject({
+    title: 'Success',
+    message: 'Successfully connected to dApp',
+  });
 });
 it('DEFECT reject settles declined and finishes once', async () => {
   const view = await mount();
@@ -227,6 +237,7 @@ it('DEFECT reject settles declined and finishes once', async () => {
   expect(settle).toHaveBeenCalledTimes(1);
   expect(settle).toHaveBeenCalledWith(ref, 'declined');
   expect(queue.getSnapshot().result?.title).toBe('declined');
+  expect(session.lastReason).toBe('declined');
 });
 it('DEFECT header back settles abandoned and finishes once', async () => {
   const view = await mount();
@@ -235,6 +246,7 @@ it('DEFECT header back settles abandoned and finishes once', async () => {
   expect(settle).toHaveBeenCalledTimes(1);
   expect(settle).toHaveBeenCalledWith(ref, 'abandoned');
   expect(queue.getSnapshot().result?.title).toBe('abandoned');
+  expect(session.lastReason).toBe('abandoned');
 });
 it('DEFECT beforeRemove equivalent: onLeave at real finish abandons once', async () => {
   await mount();
@@ -245,6 +257,7 @@ it('DEFECT beforeRemove equivalent: onLeave at real finish abandons once', async
   expect(settle).toHaveBeenCalledTimes(1);
   expect(settle).toHaveBeenCalledWith(ref, 'abandoned');
   expect(queue.getSnapshot().result?.title).toBe('abandoned');
+  expect(session.lastReason).toBeUndefined();
 });
 it('DEFECT background closes; inactive keeps the head', async () => {
   await mount();
@@ -347,6 +360,7 @@ it('DEFECT locked gate rejection needs no account reads', async () => {
   expect(settle).toHaveBeenCalledWith(ref, 'declined');
   expect(MultiAccountWalletService.getAllAccounts).not.toHaveBeenCalled();
   expect(queue.getSnapshot().result?.title).toBe('declined');
+  expect(session.lastReason).toBe('declined');
 });
 it('DEFECT already settled rejection keeps the first result', async () => {
   const view = await mount();
@@ -419,6 +433,7 @@ it('DEFECT proposal before signer survives active lock/unlock then reaches the r
   await approve(view);
   expect(decide).toHaveBeenCalledTimes(1);
   expect(decide).toHaveBeenCalledWith(ref, 'approved');
+  expect(session.lastReason).toBeUndefined();
   expect(mockApprove).toHaveBeenCalledTimes(1);
 });
 
@@ -437,8 +452,24 @@ it.each([
     else expect(sendError).not.toHaveBeenCalled();
     expect(Alert.alert).toHaveBeenCalledWith('Error', message);
     expect(queue.getSnapshot().head).toBeNull();
+    // A connection that failed after the decision never reads as a success.
+    expect(queue.getSnapshot().result?.title).toBe('abandoned');
   }
 );
+it('DEFECT the host stops drawing a drawn proposal: it settles abandoned once and ends the head', async () => {
+  const view = await render(<WalletConnectHost />);
+  await waitFor(() =>
+    expect(view.getByRole('button', { name: 'Connect' })).toBeEnabled()
+  );
+  const settle = jest.spyOn(coordinator, 'settle');
+  mockAuthChecked = false;
+  await view.rerender(<WalletConnectHost />);
+  expect(view.toJSON()).toBeNull();
+  expect(settle).toHaveBeenCalledTimes(1);
+  expect(settle).toHaveBeenCalledWith(ref, 'abandoned');
+  expect(queue.getSnapshot().head).toBeNull();
+  expect(queue.getSnapshot().result?.title).toBe('abandoned');
+});
 it('DEFECT approval in flight ignores background', async () => {
   const view = await mount();
   let finish!: (won: boolean) => void;

@@ -9,7 +9,25 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 function setup() {
-  const coordinator = { isOpen: () => true, subscribe: () => () => {} };
+  const listeners = new Set<
+    (info: {
+      reason: import('@/services/walletconnect/requestCoordinator').ExitReason;
+    }) => void
+  >();
+  const coordinator = {
+    isOpen: () => true,
+    subscribe: (
+      _ref: unknown,
+      listener: (info: {
+        reason: import('@/services/walletconnect/requestCoordinator').ExitReason;
+      }) => void
+    ) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
   const queue = new RequestQueue({
     coordinator,
     describeClose: (reason) => ({ title: reason }),
@@ -24,7 +42,12 @@ function setup() {
     queue,
     coordinator,
   });
-  return { queue, session, surface: createHostSurface(session, queue) };
+  return {
+    queue,
+    session,
+    listeners,
+    surface: createHostSurface(session, queue),
+  };
 }
 it('DEFECT presentReview stores exact params and notifies subscribers', () => {
   const h = setup();
@@ -72,22 +95,37 @@ it('DEFECT queueSize counts only waiting items', async () => {
   h.queue.__resetForTests();
   expect(await h.surface.queueSize()).toBe(0);
 });
-it.each([undefined, 'expired'] as const)(
-  'DEFECT takeNext closes with %s, never advances or touches a grant',
-  async (reason) => {
+it.each([
+  [undefined, false, 'abandoned'],
+  [undefined, true, 'Transaction Signed Successfully'],
+  ['expired', false, 'expired'],
+  ['expired', true, 'expired'],
+] as const)(
+  'DEFECT takeNext closes with reason %s (approved %s) as %s, never advances or touches a grant',
+  async (reason, approved, title) => {
     const h = setup();
     h.session.lastReason = reason;
     const advance = jest.spyOn(h.queue, 'advance');
     const leave = jest.fn();
     h.session.binding.onLeave(leave);
     expect(await h.surface.queueSize()).toBe(1);
-    await expect(h.surface.takeNext()).resolves.toEqual({
+    await expect(h.surface.takeNext(approved)).resolves.toEqual({
       request: null,
       remaining: 1,
     });
-    expect(h.queue.getSnapshot().result?.title).toBe(reason ?? 'declined');
+    expect(h.queue.getSnapshot().result?.title).toBe(title);
     expect(h.queue.getSnapshot().waiting).toHaveLength(1);
     expect(advance).not.toHaveBeenCalled();
     expect(leave).toHaveBeenCalledTimes(1);
+  }
+);
+
+it.each(['load-failed', 'sign-failed', 'lapsed'] as const)(
+  'DEFECT synchronous coordinator close %s preserves controller error',
+  (reason) => {
+    const h = setup();
+    for (const listener of [...h.listeners]) listener({ reason });
+    h.surface.presentError('controller error');
+    expect(h.queue.getSnapshot().result?.title).toBe('controller error');
   }
 );

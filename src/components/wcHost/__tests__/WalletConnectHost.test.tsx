@@ -1,9 +1,8 @@
 import React from 'react';
-import { Text, Pressable } from 'react-native';
+import { Text, Pressable, StyleSheet } from 'react-native';
 import { act, render, fireEvent } from '@testing-library/react-native';
 import { RequestQueue } from '@/services/walletconnect/requestQueue';
 import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
-import { buildWaitingSummary } from '@/services/walletconnect/waitingSummary';
 import type { ReviewBinding } from '@/services/walletconnect/reviewBinding';
 import type { SigningReviewParams } from '@/services/walletconnect/signRequestController';
 import { getHeadSession } from '../headSession';
@@ -13,9 +12,22 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 let mockLocked = false;
+let mockDraw = {
+  authChecked: true,
+  securityUnavailable: false,
+  hasPin: true,
+  pinSetupResume: false,
+};
+jest.mock('@/contexts/ThemeContext', () => ({
+  useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
+}));
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
-    authState: { isLocked: mockLocked, isAuthenticated: !mockLocked },
+    authState: {
+      ...mockDraw,
+      isLocked: mockLocked,
+      isAuthenticated: !mockLocked,
+    },
   }),
 }));
 const mockMount = jest.fn();
@@ -62,6 +74,12 @@ let queue: RequestQueue;
 const coordinator = { isOpen: () => true, subscribe: () => () => {} };
 beforeEach(() => {
   mockLocked = false;
+  mockDraw = {
+    authChecked: true,
+    securityUnavailable: false,
+    hasPin: true,
+    pinSetupResume: false,
+  };
   queue = new RequestQueue({
     coordinator,
     describeClose: () => ({
@@ -112,7 +130,9 @@ it.each(['proposal', 'request'] as const)(
     expect(mockCleanup).not.toHaveBeenCalled();
     expect(mockClearCallbacks).not.toHaveBeenCalled();
     await fireEvent.press(view.getByText('Approve fixture'));
-    expect(queue.getSnapshot().result?.title).toBe('fixture result');
+    expect(queue.getSnapshot().result?.title).toBe(
+      kind === 'request' ? 'Transaction Signed Successfully' : 'Success'
+    );
     expect(mockLeave).toHaveBeenCalledTimes(1);
   }
 );
@@ -166,27 +186,6 @@ it('DEFECT empty, head, result, dismiss, empty; result advances only with waitin
   expect(dismiss).toHaveBeenCalledTimes(1);
   expect(queue.getSnapshot().head?.ref.id).toBe(2);
 });
-it.each(['proposal', 'request'] as const)(
-  'DEFECT %s locked summary uses only waiting summary fields with two items',
-  async (kind) => {
-    push(kind);
-    push('proposal', 2);
-    mockLocked = true;
-    const summary = buildWaitingSummary(queue.getSnapshot(), Date.now())!;
-    const view = await render(<WalletConnectHost />);
-    for (const value of [
-      summary.title,
-      summary.dappLine,
-      summary.detailLine,
-      summary.ageLine,
-      summary.moreLine!,
-    ])
-      expect(view.getByText(value)).toBeTruthy();
-    expect(JSON.stringify(view.toJSON())).not.toContain(
-      'address amount note asset'
-    );
-  }
-);
 it('DEFECT request starts once across rerender and lock/unlock before params exist', async () => {
   queue.push({
     ref: { version: 2, kind: 'request', topic: 'fixture', id: 1 },
@@ -207,4 +206,59 @@ it('DEFECT request starts once across rerender and lock/unlock before params exi
   await view.rerender(<WalletConnectHost />);
   expect(mockStart).toHaveBeenCalledTimes(1);
   expect(session.controller).toBeDefined();
+});
+
+it.each(
+  [
+    { authChecked: false },
+    { securityUnavailable: true },
+    { pinSetupResume: true, hasPin: false },
+  ].flatMap((state) =>
+    (['proposal', 'request'] as const).map((kind) => [state, kind] as const)
+  )
+)(
+  'DEFECT host refuses drawing %j (%s): a review never drawn is not started, a drawn one leaves the queue and its review hears the end',
+  async (state, kind) => {
+    const drawable = { ...mockDraw };
+    const session = push(kind);
+    mockDraw = { ...mockDraw, ...state };
+    const view = await render(<WalletConnectHost />);
+    // Never drawn: nothing is rendered, started or ended.
+    expect(view.toJSON()).toBeNull();
+    expect(mockMount).not.toHaveBeenCalled();
+    expect(session.drawn).toBe(false);
+    expect(queue.getSnapshot().head).not.toBeNull();
+
+    mockDraw = drawable;
+    await view.rerender(<WalletConnectHost />);
+    expect(mockMount).toHaveBeenCalledTimes(1);
+    expect(session.drawn).toBe(true);
+
+    // The app stack stops drawing: a live review nobody can see must not stay
+    // open, and unmounting it alone would leave its buttons without callbacks.
+    mockDraw = { ...drawable, ...state };
+    await view.rerender(<WalletConnectHost />);
+    expect(view.toJSON()).toBeNull();
+    expect(mockUnmount).toHaveBeenCalledTimes(1);
+    expect(mockLeave).toHaveBeenCalledTimes(1);
+    expect(queue.getSnapshot().head).toBeNull();
+    expect(queue.getSnapshot().result?.title).toBe('fixture result');
+
+    // Drawing again shows the ended request's card, never a second review.
+    mockDraw = drawable;
+    await view.rerender(<WalletConnectHost />);
+    expect(view.getByText('fixture result')).toBeTruthy();
+    expect(mockMount).toHaveBeenCalledTimes(1);
+  }
+);
+it('DEFECT host root fills parent with opaque theme background; host never shows waiting summary', async () => {
+  push('proposal');
+  mockLocked = true;
+  const view = await render(<WalletConnectHost />);
+  const root = view.toJSON()!;
+  expect(StyleSheet.flatten(root.props.style)).toMatchObject({
+    ...StyleSheet.absoluteFill,
+    backgroundColor: require('@/constants/themes').lightTheme.colors.background,
+  });
+  expect(view.queryByText('WalletConnect request waiting')).toBeNull();
 });

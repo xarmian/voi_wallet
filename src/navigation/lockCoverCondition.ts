@@ -26,3 +26,16 @@ export function shouldCover(
     !resumingSetup
   );
 }
+
+export function hostMayDraw(input: {
+  authChecked: boolean;
+  securityUnavailable: boolean;
+  hasPin: boolean;
+  pinSetupResume: boolean;
+}): boolean {
+  return (
+    input.authChecked &&
+    !input.securityUnavailable &&
+    !(input.pinSetupResume && !input.hasPin)
+  );
+}

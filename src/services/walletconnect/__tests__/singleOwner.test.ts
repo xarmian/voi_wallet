@@ -5,7 +5,11 @@ import ts from 'typescript';
 const queueModule = 'src/services/walletconnect/requestQueue.ts';
 const screen = 'src/screens/walletconnect/TransactionRequestScreen.tsx';
 // Repository scan before extraction: no production value importers exist yet.
-const queueImporters = ['src/components/wcHost/WalletConnectHost.tsx'];
+const lockScreen = 'src/screens/auth/LockScreen.tsx';
+const queueImporters = [
+  'src/components/wcHost/WalletConnectHost.tsx',
+  lockScreen,
+];
 const hostImporter = 'src/navigation/AppNavigator.tsx';
 const hostController = 'src/components/wcHost/headSession.ts';
 
@@ -80,6 +84,7 @@ function inspect(text: string) {
   };
   collect(source);
   let pushes = 0;
+  const mutations: string[] = [];
   const visit = (node: ts.Node) => {
     if (
       (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) &&
@@ -96,11 +101,28 @@ function inspect(text: string) {
         instances.has(node.expression.expression.getText(source)))
     )
       pushes++;
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      [
+        'push',
+        'finish',
+        'closeHead',
+        'advance',
+        'dismissResult',
+        'amendResult',
+        'finishApproved',
+      ].includes(node.expression.name.text) &&
+      (isInstance(node.expression.expression) ||
+        instances.has(node.expression.expression.getText(source)))
+    )
+      mutations.push(node.expression.name.text);
     ts.forEachChild(node, visit);
   };
   visit(source);
   return {
     pushes,
+    mutations,
     importsQueue,
     importsController,
     importsHost,
@@ -222,4 +244,8 @@ it('REGRESSION host matcher counts actual JSX attributes including spread and al
   expect(inspect("import Host from './WalletConnectHost';").importsHost).toBe(
     true
   );
+});
+
+it('DEFECT LockScreen is a read-only queue subscriber with no queue mutations', () => {
+  expect(inspect(fs.readFileSync(lockScreen, 'utf8')).mutations).toEqual([]);
 });

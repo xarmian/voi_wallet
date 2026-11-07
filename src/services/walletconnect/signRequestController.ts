@@ -73,6 +73,12 @@ export interface TakenRequest {
 }
 
 export interface SignRequestSurface {
+  /**
+   * False when the surface leaves the next request waiting until the person
+   * dismisses the result, so a toast must not say the next one is processing.
+   * Absent means true.
+   */
+  readonly advancesToNext?: boolean;
   /** Show the signing review for this request. */
   presentReview(params: SigningReviewParams): void;
   /** Show a terminal error. */
@@ -83,9 +89,10 @@ export interface SignRequestSurface {
    * Take and present the next waiting request through the surface's queue.
    * Throws NavigationTargetGoneError when it cannot be shown because its place
    * is gone (the request then stays queued). It never touches reviewGrant: the
-   * controller decides whether a signing permission survives.
+   * controller decides whether a signing permission survives. `approved` is
+   * true only when the signed answer reached the dApp.
    */
-  takeNext(): Promise<TakenRequest>;
+  takeNext(approved?: boolean): Promise<TakenRequest>;
   /** Number of requests queued, for the toast after a failed take. */
   queueSize(): Promise<number>;
   /** Leave the finished request when no successor is waiting. */
@@ -155,6 +162,15 @@ export class SignRequestController {
         requestExpiryOf(requestEvent)
       );
       if (this.settled) return;
+      // A close that lands while accounts load must end this request on the
+      // surface, or it would wait on a review that never comes.
+      let closedWhileLoading = false;
+      const stopWatching =
+        state === 'open'
+          ? coordinator.subscribe(ref, () => {
+              closedWhileLoading = true;
+            })
+          : () => {};
       if (state !== 'open') {
         this.settled = true;
         if (state === 'expired' || state === 'handled') {
@@ -174,8 +190,18 @@ export class SignRequestController {
         return;
       }
       // Load accounts
-      const allAccounts = await MultiAccountWalletService.getAllAccounts();
+      let allAccounts: AccountMetadata[];
+      try {
+        allAccounts = await MultiAccountWalletService.getAllAccounts();
+      } finally {
+        stopWatching();
+      }
       if (this.settled) return;
+      if (closedWhileLoading) {
+        this.settled = true;
+        await this.advanceAfterEnd();
+        return;
+      }
 
       const eventParams = (requestEvent as any).params;
       if (!eventParams) {
@@ -446,19 +472,26 @@ export class SignRequestController {
         responseSent = true;
         this.rejecting = true;
 
-        await this.advanceAfterEnd(undefined, (queueSize) => {
-          // Show non-blocking toast with queue info
-          Toast.show({
-            type: 'walletConnectSuccess',
-            text1: 'Transaction Signed Successfully',
-            text2: `Your transaction has been signed and sent back to the dApp. ${queueSize > 0 ? 'Processing next request...' : 'You can now return to the dApp.'}`,
-            visibilityTime: 5000,
-            position: 'top',
-            props: {
-              queueSize,
-            },
-          });
-        });
+        await this.advanceAfterEnd(
+          undefined,
+          (queueSize) => {
+            // Show non-blocking toast with queue info
+            Toast.show({
+              type: 'walletConnectSuccess',
+              text1: 'Transaction Signed Successfully',
+              text2:
+                surface.advancesToNext === false
+                  ? 'Your transaction has been signed and sent back to the dApp.'
+                  : `Your transaction has been signed and sent back to the dApp. ${queueSize > 0 ? 'Processing next request...' : 'You can now return to the dApp.'}`,
+              visibilityTime: 5000,
+              position: 'top',
+              props: {
+                queueSize,
+              },
+            });
+          },
+          true
+        );
       } catch (error) {
         if (!responseSent) {
           await coordinator.sendError(ref, 'lapsed');
@@ -508,12 +541,13 @@ export class SignRequestController {
    * counted), except when the target is gone; the error still propagates.
    */
   private takeNextRequest = async (
-    toast: (queueSize: number) => void
+    toast: (queueSize: number) => void,
+    approved = false
   ): Promise<'advanced' | 'empty' | 'target-gone'> => {
     const { surface, requestKey } = this;
     let taken: TakenRequest;
     try {
-      taken = await surface.takeNext();
+      taken = await surface.takeNext(approved);
       if (!taken.request) reviewGrant.leave(requestKey);
     } catch (error) {
       reviewGrant.revoke();
@@ -527,7 +561,8 @@ export class SignRequestController {
 
   private advanceAfterEnd = async (
     reason?: ExitReason,
-    toast?: (queueSize: number) => void
+    toast?: (queueSize: number) => void,
+    approved = false
   ) => {
     const { surface } = this;
     if (this.advanced) return;
@@ -540,18 +575,22 @@ export class SignRequestController {
           Toast.show({
             type: 'walletConnectRejected',
             text1: 'Transaction Request Rejected',
-            text2: `You declined to sign this transaction. ${
-              queueSize > 0
-                ? 'Processing next request...'
-                : 'You can return to the dApp.'
-            }`,
+            text2:
+              surface.advancesToNext === false
+                ? 'You declined to sign this transaction.'
+                : `You declined to sign this transaction. ${
+                    queueSize > 0
+                      ? 'Processing next request...'
+                      : 'You can return to the dApp.'
+                  }`,
             visibilityTime: 4000,
             position: 'top',
             props: {
               queueSize,
             },
           });
-        })
+        }),
+      approved
     );
     if (nextRequest === 'target-gone') return;
     if (nextRequest === 'empty') {

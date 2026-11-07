@@ -23,10 +23,13 @@ let mockBiometricEnabled = false;
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
     authState: {
+      authChecked: true,
+      securityUnavailable: false,
+      hasPin: true,
+      pinSetupResume: false,
       isLocked: mockLocked,
       isAuthenticated: !mockLocked,
       biometricEnabled: mockBiometricEnabled,
-      hasPin: true,
     },
   }),
 }));

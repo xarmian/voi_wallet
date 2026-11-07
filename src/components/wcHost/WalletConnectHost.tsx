@@ -1,13 +1,25 @@
-import React, { useEffect, useSyncExternalStore } from 'react';
-import { ActivityIndicator, Button, Text, View } from 'react-native';
+import React, { useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
+import {
+  ActivityIndicator,
+  Button,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { RequestQueue } from '@/services/walletconnect/requestQueue';
 import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
-import { buildWaitingSummary } from '@/services/walletconnect/waitingSummary';
+import { hostMayDraw } from '@/navigation/lockCoverCondition';
+import { useTheme } from '@/contexts/ThemeContext';
 import { ConnectReview } from '@/screens/walletconnect/SessionProposalScreen';
 import { TransactionReview } from '@/screens/wallet/UniversalTransactionSigningScreen';
 import type { RootStackParamList } from '@/navigation/AppNavigator';
-import { getHeadSession, headKey, type HeadSession } from './headSession';
+import {
+  findHeadSession,
+  getHeadSession,
+  headKey,
+  type HeadSession,
+} from './headSession';
 import HostNavigation from './HostNavigation';
 import { HOST_DISMISS_LABEL } from './hostCopy';
 
@@ -17,6 +29,7 @@ function HeadBody({ session }: { session: HeadSession }) {
     session.getReviewParams
   );
   useEffect(() => {
+    session.markDrawn();
     session.start();
   }, [session]);
   if (session.item.kind === 'proposal') {
@@ -44,37 +57,49 @@ export default function WalletConnectHost() {
     () => queue.getSnapshot()
   );
   const { authState } = useAuth();
-  const locked = authState.isLocked || !authState.isAuthenticated;
+  const { theme } = useTheme();
+  const mayDraw = hostMayDraw(authState);
+  // Where the app stack refuses to draw, a review that was never drawn is not
+  // created. One that was drawn is ended as abandoned: unmounting it alone would
+  // clear the callbacks its buttons depend on with nothing to register them
+  // again, and keeping it mounted would leave a live review nobody can see.
   const session = snapshot.head
-    ? getHeadSession(snapshot.head, {
-        queue,
-        coordinator: RequestCoordinator.getInstance(),
-      })
+    ? mayDraw
+      ? getHeadSession(snapshot.head, {
+          queue,
+          coordinator: RequestCoordinator.getInstance(),
+        })
+      : findHeadSession(snapshot.head)
     : null;
-  // eslint-disable-next-line react-hooks/purity -- the host specification requires the summary age at this render, without persisting time.
-  const summary = locked ? buildWaitingSummary(snapshot, Date.now()) : null;
-  if (!snapshot.head && !snapshot.result && !snapshot.waiting.length)
-    return null;
+  // A layout effect, so the session ends and its review hears it before that
+  // review's own unmount cleanup removes its listener.
+  useLayoutEffect(() => {
+    if (!mayDraw && session?.drawn) session.binding.nav.goBack();
+  }, [mayDraw, session]);
+  if (!mayDraw) return null;
+  if (!snapshot.head && !snapshot.result) return null;
   return (
-    <View>
+    <View
+      style={[
+        StyleSheet.absoluteFill,
+        { backgroundColor: theme.colors.background },
+      ]}
+    >
       {session && (
         <HostNavigation key={headKey(session.item.ref)}>
           <HeadBody key={headKey(session.item.ref)} session={session} />
         </HostNavigation>
       )}
-      {summary && (
-        <View>
-          <Text>{summary.title}</Text>
-          <Text>{summary.dappLine}</Text>
-          <Text>{summary.detailLine}</Text>
-          <Text>{summary.ageLine}</Text>
-          {summary.moreLine && <Text>{summary.moreLine}</Text>}
-        </View>
-      )}
       {snapshot.result && (
         <View>
-          <Text>{snapshot.result.title}</Text>
-          {snapshot.result.message && <Text>{snapshot.result.message}</Text>}
+          <Text style={{ color: theme.colors.text }}>
+            {snapshot.result.title}
+          </Text>
+          {snapshot.result.message && (
+            <Text style={{ color: theme.colors.text }}>
+              {snapshot.result.message}
+            </Text>
+          )}
           <Button
             title={HOST_DISMISS_LABEL}
             onPress={() => {

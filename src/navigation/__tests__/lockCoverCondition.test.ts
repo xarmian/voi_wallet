@@ -1,3 +1,4 @@
+import { hostMayDraw } from '../lockCoverCondition';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { shouldCover, type CoverInput } from '../lockCoverCondition';
@@ -163,5 +164,20 @@ it('DEFECT AuthContext feeds the lock signal from the same two fields the cover 
   expect(source).toContain('AppLockSignal.setUnlocked(isUnlocked);');
   expect(source).toContain(
     '}, [authState.isAuthenticated, authState.isLocked]);'
+  );
+});
+
+it.each(
+  Array.from({ length: 16 }, (_, flags) => ({
+    authChecked: !!(flags & 1),
+    securityUnavailable: !!(flags & 2),
+    hasPin: !!(flags & 4),
+    pinSetupResume: !!(flags & 8),
+  }))
+)('DEFECT hostMayDraw follows AppStack drawing rule %s', (input) => {
+  expect(hostMayDraw(input)).toBe(
+    input.authChecked &&
+      !input.securityUnavailable &&
+      !(input.pinSetupResume && !input.hasPin)
   );
 });
