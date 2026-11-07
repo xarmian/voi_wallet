@@ -902,3 +902,119 @@ it.each([
     queue.__resetForTests();
   }
 );
+
+describe('the host ends a head whose request the controller still owns', () => {
+  async function hostHead() {
+    const request = event();
+    ref = requestRefFor(request, 2);
+    await coordinator.admit(ref);
+    const queue = new RequestQueue({ coordinator });
+    queue.push({ ref, payload: request, firstSeenMs: Date.now() });
+    const session = getHeadSession(queue.getSnapshot().head!, {
+      queue,
+      coordinator,
+    });
+    // TransactionReview reports its departure to the controller like this.
+    session.binding.onLeave(() => mockCallbacks?.onDismiss?.());
+    return { queue, session };
+  }
+
+  it('DEFECT a head ended while its accounts load settles abandoned and answers the dApp once', async () => {
+    const pending = deferred<(typeof account)[]>();
+    mockAccounts.mockReturnValue(pending.promise);
+    const { queue, session } = await hostHead();
+    const loading = session.controller!.start();
+    await flush();
+    const previous = mockCallbacks;
+    expect(session.binding.nav.goBack()).toBe(true);
+    await flush();
+    expect(coordinator.isOpen(ref)).toBe(false);
+    expectAnswer('abandoned');
+    pending.resolve([account]);
+    await loading;
+    expect(mockCallbacks).toBe(previous);
+    expect(queue.getSnapshot().result?.title).toBe('Request ended');
+    expectAnswer('abandoned');
+    queue.__resetForTests();
+  });
+
+  it('DEFECT a head ended while presented abandons through the review departure once', async () => {
+    const { queue, session } = await hostHead();
+    await session.controller!.start();
+    expect(session.binding.nav.goBack()).toBe(true);
+    await flush();
+    expectAnswer('abandoned');
+    expect(queue.getSnapshot().result?.title).toBe('Request ended');
+    queue.__resetForTests();
+  });
+
+  it('DEFECT a signed answer that reaches the dApp after the host ended the review corrects the card', async () => {
+    const { queue, session } = await hostHead();
+    await session.controller!.start();
+    const pending = deferred<void>();
+    mockRespond.mockImplementationOnce(() => pending.promise);
+    const answering = mockCallbacks.onSuccess(signed);
+    await flush();
+    expect(session.binding.nav.goBack()).toBe(true);
+    expect(queue.getSnapshot().result?.title).toBe('Request ended');
+    pending.resolve();
+    await answering;
+    expect(mockRespond).toHaveBeenCalledTimes(1);
+    expect(answers).toEqual([]);
+    expect(queue.getSnapshot().result).toMatchObject({
+      title: 'Transaction Signed Successfully',
+      message: 'You can now return to the dApp.',
+    });
+    queue.__resetForTests();
+  });
+});
+
+describe('admission running (a request the coordinator has not opened yet)', () => {
+  async function admissionPending() {
+    const request = event();
+    ref = requestRefFor(request, 2);
+    const loaded = deferred<void>();
+    const load = store.load.bind(store);
+    jest.spyOn(store, 'load').mockImplementation(async () => {
+      await loaded.promise;
+      return load();
+    });
+    const admitting = coordinator.admit(ref);
+    await flush();
+    expect(coordinator.isOpen(ref)).toBe(false);
+    return { request, loaded, admitting };
+  }
+
+  it('DEFECT host side: the queue refuses the ref until the coordinator opens it, so the host never draws it', async () => {
+    const { request, loaded, admitting } = await admissionPending();
+    const queue = new RequestQueue({ coordinator });
+    expect(queue.push({ ref, payload: request, firstSeenMs: 0 })).toBe(
+      'not-open'
+    );
+    expect(queue.getSnapshot().head).toBeNull();
+    loaded.resolve();
+    await admitting;
+    expect(coordinator.isOpen(ref)).toBe(true);
+    expect(queue.push({ ref, payload: request, firstSeenMs: 0 })).toBe('head');
+    queue.__resetForTests();
+  });
+
+  it('REGRESSION route side (base behaviour, filed): a duplicate admission still running reaches a review while the coordinator has not opened the request', async () => {
+    const { request, loaded } = await admissionPending();
+    const h = fakeSurface();
+    const controller = new SignRequestController({
+      requestEvent: request,
+      surface: h.surface,
+      coordinator,
+    });
+    await controller.start();
+    // The controller treats a duplicate as open and presents the review...
+    expect(h.surface.presentReview).toHaveBeenCalledTimes(1);
+    // ...while the coordinator has not opened the request. Whether the review
+    // then refuses to start signing (isLive) is covered where it is decided, in
+    // UniversalTransactionSigningScreen.outcome.test.tsx.
+    expect(coordinator.isLive(ref)).toBe(false);
+    loaded.resolve();
+    await flush();
+  });
+});

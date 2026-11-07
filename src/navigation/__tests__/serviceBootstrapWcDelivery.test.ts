@@ -29,6 +29,12 @@ import {
 import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestResponder';
 
 import { HandledStore } from '@/services/walletconnect/handledStore';
+import { MultiAccountWalletService } from '@/services/wallet';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import {
+  clearPinSetupPending,
+  markPinSetupPending,
+} from '@/services/secure/pinSetupPending';
 import {
   RequestCoordinator,
   CoordinatorTransport,
@@ -144,7 +150,10 @@ jest.mock('@/services/notifications', () => ({
   },
 }));
 jest.mock('@/services/wallet', () => ({
-  MultiAccountWalletService: { getCurrentWallet: jest.fn(async () => null) },
+  MultiAccountWalletService: {
+    getCurrentWallet: jest.fn(async () => null),
+    hasKeyBearingAccountStrict: jest.fn(async () => false),
+  },
 }));
 jest.mock('@/services/ledger/transport', () => ({
   ledgerTransportService: {
@@ -153,6 +162,7 @@ jest.mock('@/services/ledger/transport', () => ({
 }));
 jest.mock('@/platform/detection', () => ({
   detectPlatform: jest.fn(() => 'mobile'),
+  isMobile: jest.fn(() => true),
 }));
 
 const { createPendingRouteQueue } = jest.requireActual(
@@ -847,4 +857,94 @@ it('U7 a second proposal over focused Connect dispatches PUSH with the proposal 
     })
   );
   expect(mockNav.navigate).not.toHaveBeenCalled();
+});
+
+describe('setup incomplete is refused at the entry point (S2)', () => {
+  const enterS2 = async (keyBearing = true) => {
+    await markPinSetupPending();
+    jest
+      .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+      .mockResolvedValue(keyBearing);
+    jest.spyOn(AccountSecureStorage, 'hasPinStrict').mockResolvedValue(false);
+  };
+  const SETUP_INCOMPLETE = {
+    code: -32001,
+    message: 'Wallet setup incomplete.',
+  };
+
+  it('DEFECT a v2 request is answered setup-incomplete before any route or queue, and its claim is released', async () => {
+    await enterS2();
+    mockReady = true;
+    await boot();
+    const event = request(5301);
+    await emit('session_request', event);
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    expect(mockNav.dispatch).not.toHaveBeenCalled();
+    expect(mockTransport.rejectRequestV2).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectRequestV2).toHaveBeenCalledWith(
+      event.topic,
+      event.id,
+      SETUP_INCOMPLETE
+    );
+    expect(coordinator.isOpen(requestRefFor(event))).toBe(false);
+    expect(TransactionRequestQueue.claim(event.id, event.topic)).toBe(true);
+  });
+
+  it('DEFECT a v2 proposal is answered setup-incomplete before any route', async () => {
+    await enterS2();
+    mockReady = true;
+    await boot();
+    const proposal = { id: 5302, pairingTopic: 'pairing' };
+    await emit('session_proposal', proposal);
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    expect(mockNav.dispatch).not.toHaveBeenCalled();
+    expect(mockTransport.rejectProposalV2).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectProposalV2).toHaveBeenCalledWith(
+      proposal.id,
+      proposal.pairingTopic,
+      SETUP_INCOMPLETE
+    );
+  });
+
+  it('DEFECT a refusal waits for no navigation: it is answered while the container is not ready', async () => {
+    await enterS2();
+    await boot();
+    await emit('session_request', request(5303));
+    await emit('session_proposal', { id: 5304, pairingTopic: 'pairing' });
+    expect(mockTransport.rejectRequestV2).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectProposalV2).toHaveBeenCalledTimes(1);
+    becomeReady();
+    await flush();
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    expect(mockNav.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('DEFECT once setup completes the next arrival is shown as usual', async () => {
+    await enterS2();
+    mockReady = true;
+    await boot();
+    await emit('session_request', request(5305));
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    await clearPinSetupPending();
+    await emit('session_request', request(5306));
+    expect(mockNav.navigate).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectRequestV2).toHaveBeenCalledTimes(1);
+  });
+
+  it('DEFECT a keyless wallet restored with no PIN (breadcrumb set) is not refused', async () => {
+    await enterS2(false);
+    mockReady = true;
+    await boot();
+    await emit('session_request', request(5308));
+    expect(mockNav.navigate).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectRequestV2).not.toHaveBeenCalled();
+  });
+
+  it('REGRESSION with no setup pending nothing is refused', async () => {
+    mockReady = true;
+    await boot();
+    await emit('session_request', request(5307));
+    expect(mockNav.navigate).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectRequestV2).not.toHaveBeenCalled();
+  });
 });

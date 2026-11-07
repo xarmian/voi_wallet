@@ -157,3 +157,20 @@ export async function isPinSetupPending(): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * The unfinished-PIN-setup state ("S2"): the restore-before-PIN breadcrumb is
+ * set, a locally key-bearing account exists, and there is no PIN. This is the
+ * one predicate behind both AuthContext's resume-setup branch and the
+ * WalletConnect entry guard, so the two cannot drift. The breadcrumb alone is
+ * not the state: a wallet restored with only Ledger, remote-signer or
+ * watch-only accounts has the breadcrumb and no PIN, boots unlocked, and is
+ * usable.
+ */
+export function isSetupResumeState(input: {
+  pending: boolean;
+  hasKeyBearingAccount: boolean;
+  hasPin: boolean;
+}): boolean {
+  return input.pending && input.hasKeyBearingAccount && !input.hasPin;
+}

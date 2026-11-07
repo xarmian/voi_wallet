@@ -26,6 +26,7 @@ import {
 import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestResponder';
 import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
 import { createCoordinatorTransport } from '@/services/walletconnect/coordinatorTransport';
+import { setupIncompleteGuard } from '@/services/walletconnect/entryGuard';
 import {
   requestRefFor,
   proposalRefFor,
@@ -141,6 +142,11 @@ export const initializeServices = async ({
         RequestCoordinator.getInstance().setTransport(
           createCoordinatorTransport()
         );
+        // Every new request and proposal, v2 here and v1 through DeepLinkService,
+        // is admitted by this one coordinator, so one guard covers all of them.
+        // While PIN setup is unfinished the dApp is answered at once and no
+        // route, queue entry or review is created.
+        RequestCoordinator.getInstance().setEntryGuard(setupIncompleteGuard);
         // TASK-394: answer requests the transaction queue drops unshown (full
         // queue, stale entry) so the dApp is not left waiting. Installed
         // before v2 init so v1 requests (DeepLinkService) are covered even if

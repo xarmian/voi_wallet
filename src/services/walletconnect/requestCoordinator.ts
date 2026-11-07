@@ -97,10 +97,19 @@ export type Admission =
       source: DeadlineSource;
     }
   | { action: 'suppressed'; reason: 'duplicate' | 'handled' }
+  | { action: 'refused'; reason: Exclude<ExitReason, 'session-ended'> }
   | { action: 'expired' }
   | { action: 'unavailable' };
 
 export type ClosedListener = (info: { reason: ExitReason }) => void;
+
+/**
+ * Asked once per new request or proposal, before anything is stored or shown.
+ * A reason refuses it: the dApp is answered and nothing opens. Null admits it.
+ */
+export type EntryGuard = (
+  ref: RequestRef
+) => Promise<Exclude<ExitReason, 'session-ended'> | null>;
 
 interface OpenRequest {
   ref: RequestRef;
@@ -134,6 +143,7 @@ export class RequestCoordinator {
   private static instance: RequestCoordinator | undefined;
   private readonly store: HandledStore;
   private transport: CoordinatorTransport;
+  private entryGuard: EntryGuard | undefined;
   private readonly now: () => number;
   private readonly setTimer: typeof setTimeout;
   private readonly clearTimer: typeof clearTimeout;
@@ -174,6 +184,10 @@ export class RequestCoordinator {
     this.transport = transport;
   }
 
+  setEntryGuard(guard: EntryGuard | undefined): void {
+    this.entryGuard = guard;
+  }
+
   async admit(ref: RequestRef, expiryTimestamp?: unknown): Promise<Admission> {
     const key = keyOf(ref);
     if (this.closed.has(key)) {
@@ -196,6 +210,16 @@ export class RequestCoordinator {
           });
         }
         return { action: 'suppressed', reason: 'handled' };
+      }
+      // After the handled check, so a ref already decided is still answered
+      // 'Request already handled.' and not refused with no answer; before a
+      // first-seen record is written or a deadline armed, so a refused arrival
+      // leaves nothing open and nothing to expire. With no guard installed this
+      // adds no await, so admission timing is unchanged.
+      const refusal = this.entryGuard ? await this.refusalFor(ref) : null;
+      if (refusal) {
+        await this.settle(ref, refusal);
+        return { action: 'refused', reason: refusal };
       }
       const firstSeenMs = await this.store.noteSeen(ref);
       // A settle/decide may have closed this ref while storage was awaited.
@@ -229,6 +253,20 @@ export class RequestCoordinator {
       return { action: 'unavailable' };
     } finally {
       this.admitting.delete(key);
+    }
+  }
+
+  private async refusalFor(
+    ref: RequestRef
+  ): Promise<Exclude<ExitReason, 'session-ended'> | null> {
+    if (!this.entryGuard) return null;
+    try {
+      return await this.entryGuard(ref);
+    } catch {
+      // Guard errors can embed topics the redactor cannot recognise, so only a
+      // fixed message is logged. An unreadable guard admits the request.
+      warn('Entry guard could not be read');
+      return null;
     }
   }
 
@@ -287,6 +325,7 @@ export class RequestCoordinator {
     if (admission.action === 'show') return 'open';
     if (admission.action === 'suppressed')
       return admission.reason === 'duplicate' ? 'open' : 'handled';
+    if (admission.action === 'refused') return 'handled';
     return admission.action;
   }
 

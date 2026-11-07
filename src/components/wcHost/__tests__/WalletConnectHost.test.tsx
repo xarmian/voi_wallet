@@ -1,6 +1,6 @@
 import React from 'react';
-import { Text, Pressable, StyleSheet } from 'react-native';
-import { act, render, fireEvent } from '@testing-library/react-native';
+import { Text, Pressable, StyleSheet, BackHandler } from 'react-native';
+import { act, render, fireEvent, within } from '@testing-library/react-native';
 import { RequestQueue } from '@/services/walletconnect/requestQueue';
 import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
 import type { ReviewBinding } from '@/services/walletconnect/reviewBinding';
@@ -68,6 +68,7 @@ jest.mock('@/services/walletconnect/signRequestController', () => ({
   SignRequestController: jest.fn(() => ({
     start: mockStart,
     dispose: mockDispose,
+    leave: jest.fn(),
   })),
 }));
 let queue: RequestQueue;
@@ -261,4 +262,121 @@ it('DEFECT host root fills parent with opaque theme background; host never shows
     backgroundColor: require('@/constants/themes').lightTheme.colors.background,
   });
   expect(view.queryByText('WalletConnect request waiting')).toBeNull();
+});
+
+describe('hardware back', () => {
+  type BackListener = Parameters<typeof BackHandler.addEventListener>[1];
+  let handlers: BackListener[];
+  let removed: jest.Mock;
+  beforeEach(() => {
+    handlers = [];
+    removed = jest.fn();
+    jest
+      .spyOn(BackHandler, 'addEventListener')
+      .mockImplementation((_event, handler) => {
+        handlers.push(handler);
+        return { remove: removed };
+      });
+  });
+  const press = () =>
+    handlers[handlers.length - 1]({} as Parameters<BackListener>[0]);
+
+  it('DEFECT nothing shown registers no handler, so back keeps acting on the app stack', async () => {
+    await render(<WalletConnectHost />);
+    expect(handlers).toHaveLength(0);
+  });
+  it.each(['proposal', 'request'] as const)(
+    "DEFECT back on a live %s review takes the review's own leave path and is consumed",
+    async (kind) => {
+      push(kind);
+      const view = await render(<WalletConnectHost />);
+      expect(handlers.length).toBeGreaterThan(0);
+      let handled: boolean | undefined;
+      await act(async () => {
+        handled = press();
+      });
+      expect(handled).toBe(true);
+      expect(mockLeave).toHaveBeenCalledTimes(1);
+      expect(queue.getSnapshot().head).toBeNull();
+      expect(queue.getSnapshot().result?.title).toBe('fixture result');
+      expect(view.getByText('fixture result')).toBeTruthy();
+    }
+  );
+  it('DEFECT back on a result card acts as OK: it advances when others wait, else dismisses', async () => {
+    let session!: ReturnType<typeof push>;
+    await act(async () => {
+      session = push('proposal');
+      push('proposal', 2);
+      queue.closeHead(session.item.ref, 'declined');
+    });
+    const view = await render(<WalletConnectHost />);
+    const advance = jest.spyOn(queue, 'advance');
+    const dismiss = jest.spyOn(queue, 'dismissResult');
+    await act(async () => {
+      expect(press()).toBe(true);
+    });
+    expect(advance).toHaveBeenCalledTimes(1);
+    expect(queue.getSnapshot().head?.ref.id).toBe(2);
+    await act(async () => {
+      queue.closeHead(queue.getSnapshot().head!.ref, 'declined');
+    });
+    await act(async () => {
+      expect(press()).toBe(true);
+    });
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(view.toJSON()).toBeNull();
+  });
+  it('DEFECT back while locked is consumed and changes nothing', async () => {
+    push('proposal');
+    mockLocked = true;
+    await render(<WalletConnectHost />);
+    const snapshot = queue.getSnapshot();
+    expect(press()).toBe(true);
+    expect(queue.getSnapshot()).toBe(snapshot);
+    expect(mockLeave).not.toHaveBeenCalled();
+  });
+  it('DEFECT back after the wallet locks later is consumed and changes nothing (no stale unlocked handler)', async () => {
+    push('proposal');
+    const view = await render(<WalletConnectHost />);
+    mockLocked = true;
+    await view.rerender(<WalletConnectHost />);
+    const snapshot = queue.getSnapshot();
+    expect(press()).toBe(true);
+    expect(queue.getSnapshot()).toBe(snapshot);
+    expect(mockLeave).not.toHaveBeenCalled();
+  });
+  it('DEFECT the handler is removed when the host has nothing to show', async () => {
+    const session = push('proposal');
+    await render(<WalletConnectHost />);
+    await act(async () => {
+      queue.closeHead(session.item.ref, 'declined');
+      queue.dismissResult();
+    });
+    expect(removed).toHaveBeenCalled();
+  });
+});
+it('DEFECT the result card keeps clear of the status bar and home indicator', async () => {
+  const session = push('proposal');
+  const view = await render(<WalletConnectHost />);
+  await act(async () => {
+    queue.closeHead(session.item.ref, 'declined');
+  });
+  type Node = ReturnType<typeof view.toJSON>;
+  const find = (node: Node): Node | null => {
+    if (!node || Array.isArray(node) || typeof node === 'string') return null;
+    const edges = (node.props as { edges?: unknown }).edges;
+    if (edges) return node;
+    for (const child of node.children ?? []) {
+      const found = find(child as Node);
+      if (found) return found;
+    }
+    return null;
+  };
+  const safe = find(view.toJSON());
+  expect(safe).not.toBeNull();
+  expect((safe!.props as { edges: unknown }).edges).toMatchObject({
+    top: 'additive',
+    bottom: 'additive',
+  });
+  expect(within(view.root!).getByText('fixture result')).toBeTruthy();
 });

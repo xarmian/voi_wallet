@@ -84,9 +84,10 @@ export class HeadSession {
   closeInQueue(queue: RequestQueue, approved = false): boolean {
     const { ref } = this.item;
     if (this.lastReason) return queue.closeHead(ref, this.lastReason);
-    return approved
-      ? queue.finishApproved(ref)
-      : queue.closeHead(ref, 'abandoned');
+    if (!approved) return queue.closeHead(ref, 'abandoned');
+    // The signed answer can reach the dApp after the host already ended the
+    // review and wrote its card: correct that card, as presentError does.
+    return queue.finishApproved(ref) || queue.amendApproved(ref);
   }
 
   getReviewParams = (): SigningReviewParams | null => this.params;
@@ -123,6 +124,10 @@ export class HeadSession {
     try {
       for (const listener of listeners) listener();
     } finally {
+      // A request still loading has no review to report its departure, so the
+      // controller settles it here. Once handed off, the review's own
+      // onDismiss decides, and leave() does nothing.
+      this.controller?.leave();
       this.controller?.dispose();
     }
   }
