@@ -1,3 +1,5 @@
+import { RequestQueue } from '../requestQueue';
+import { getHeadSession } from '@/components/wcHost/headSession';
 import { readFileSync } from 'fs';
 import { Alert } from 'react-native';
 import type { WalletTransaction } from '@/services/walletconnect';
@@ -299,6 +301,36 @@ it('DEFECT approve records durably before publishing and never sends an error', 
     props: { queueSize: 0 },
   });
 });
+it.each([0, 2])(
+  'DEFECT a surface that does not advance never says the next request is processing (queue %s)',
+  async (waiting) => {
+    const h = await handOff();
+    (h.surface as { advancesToNext?: boolean }).advancesToNext = false;
+    h.surface.takeNext.mockResolvedValue({ request: null, remaining: waiting });
+    await mockCallbacks.onSuccess(signed);
+    expect(Toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'walletConnectSuccess',
+        text2: 'Your transaction has been signed and sent back to the dApp.',
+      })
+    );
+  }
+);
+it.each([0, 2])(
+  'DEFECT a surface that does not advance keeps the decline toast to its first sentence (queue %s)',
+  async (waiting) => {
+    const h = await setup();
+    (h.surface as { advancesToNext?: boolean }).advancesToNext = false;
+    h.surface.takeNext.mockResolvedValue({ request: null, remaining: waiting });
+    await h.controller.reject();
+    expect(Toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'walletConnectRejected',
+        text2: 'You declined to sign this transaction.',
+      })
+    );
+  }
+);
 it('REGRESSION approve record fails shows one error and sends lapsed once', async () => {
   const h = await handOff();
   jest
@@ -801,3 +833,67 @@ it('REGRESSION signing account follows sender order among approved owned account
   await h.controller.start();
   expect(h.surface.presentReview.mock.calls[0][0].account).toEqual(account);
 });
+
+it('REGRESSION real coordinator approved signing leaves lastReason undefined', async () => {
+  await handOff();
+  const queue = new RequestQueue({ coordinator });
+  queue.push({ ref, payload: event(), firstSeenMs: Date.now() });
+  const session = getHeadSession(queue.getSnapshot().head!, {
+    queue,
+    coordinator,
+  });
+  await mockCallbacks.onSuccess(signed);
+  expect(coordinator.isOpen(ref)).toBe(false);
+  expect(session.lastReason).toBeUndefined();
+  session.end();
+  queue.__resetForTests();
+});
+it.each([false, true])(
+  'DEFECT close during accounts await closed=%s prevents callback registration and review',
+  async (closed) => {
+    const pending = deferred<(typeof account)[]>();
+    mockAccounts.mockReturnValue(pending.promise);
+    const h = await setup();
+    const loading = h.controller.start();
+    await flush();
+    const previous = mockCallbacks;
+    if (closed) await coordinator.settle(ref, 'expired');
+    pending.resolve([account]);
+    await loading;
+    expect(h.surface.presentReview).toHaveBeenCalledTimes(closed ? 0 : 1);
+    if (closed) expect(mockCallbacks).toBe(previous);
+    else expect(mockCallbacks).not.toBe(previous);
+  }
+);
+
+it.each([
+  ['load-failed', 'Malformed request: missing params'],
+  ['sign-failed', 'Failed to sign transactions'],
+  ['decide-threw', 'Failed to record the approval'],
+] as const)(
+  'DEFECT real coordinator and controller %s preserve error after synchronous close',
+  async (path, message) => {
+    const request =
+      path === 'load-failed' ? { id: 42, topic: 'fixture' } : event();
+    ref = requestRefFor(request, 2);
+    await coordinator.admit(ref);
+    const queue = new RequestQueue({ coordinator });
+    queue.push({ ref, payload: request, firstSeenMs: Date.now() });
+    const session = getHeadSession(queue.getSnapshot().head!, {
+      queue,
+      coordinator,
+    });
+    await session.controller!.start();
+    if (path === 'sign-failed') await mockCallbacks.onSuccess({});
+    if (path === 'decide-threw') {
+      jest
+        .spyOn(store, 'markHandled')
+        .mockRejectedValueOnce(new Error('storage unavailable'));
+      await mockCallbacks.onSuccess(signed);
+    }
+    await flush();
+    expect(queue.getSnapshot().result?.title).toBe(message);
+    expect(queue.getSnapshot().head).toBeNull();
+    queue.__resetForTests();
+  }
+);

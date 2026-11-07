@@ -1,3 +1,9 @@
+jest.mock('@/store/walletStore', () => ({
+  useWalletStore: { getState: () => ({ wallet: undefined }) },
+}));
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
 /**
  * TASK-469: Delete Everything on the lock screen.
  *  - It resolves "Everything is deleted" ONLY after the wipe reports complete.

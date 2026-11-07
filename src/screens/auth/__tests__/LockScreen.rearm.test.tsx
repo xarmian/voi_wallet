@@ -1,3 +1,9 @@
+jest.mock('@/store/walletStore', () => ({
+  useWalletStore: { getState: () => ({ wallet: undefined }) },
+}));
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
 import React from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 import { act, render, fireEvent } from '@testing-library/react-native';

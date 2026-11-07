@@ -4,6 +4,7 @@ import React, {
   useCallback,
   useMemo,
   useRef,
+  useSyncExternalStore,
 } from 'react';
 import {
   Alert,
@@ -17,6 +18,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { RequestQueue } from '@/services/walletconnect/requestQueue';
+import { buildWaitingSummary } from '@/services/walletconnect/waitingSummary';
 import { useLockFocus } from '@/contexts/LockFocusContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -86,6 +89,23 @@ const formatCountdown = (ms: number): string => {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 };
 
+function useWaitingSummary(visible: boolean) {
+  const queue = RequestQueue.getInstance();
+  const subscribe = useCallback(
+    (listener: () => void) => queue.subscribe(listener),
+    [queue]
+  );
+  const getSnapshot = useCallback(() => queue.getSnapshot(), [queue]);
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!visible) return;
+    const interval = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(interval);
+  }, [visible]);
+  return visible ? buildWaitingSummary(snapshot, now) : null;
+}
+
 export default function LockScreen() {
   const focus = useLockFocus();
   const { theme } = useTheme();
@@ -97,6 +117,9 @@ export default function LockScreen() {
     recheckAuthState,
     consumeUnlockRefusal,
   } = useAuth();
+  const summary = useWaitingSummary(
+    authState.isLocked || !authState.isAuthenticated
+  );
   const [pin, setPin] = useState('');
   // The stored credential kind decides the input: numeric keypad for a PIN, a
   // masked text field for a passphrase (PR7). Defaults to 'pin' until the read
@@ -539,6 +562,17 @@ export default function LockScreen() {
               ? `Enter your ${secretNoun} to unlock`
               : 'Checking status…'}
           </Text>
+          {summary && (
+            <View style={styles.summary}>
+              <Text style={styles.summaryTitle}>{summary.title}</Text>
+              <Text style={styles.subtitle}>{summary.dappLine}</Text>
+              <Text style={styles.subtitle}>{summary.detailLine}</Text>
+              <Text style={styles.subtitle}>{summary.ageLine}</Text>
+              {summary.moreLine && (
+                <Text style={styles.subtitle}>{summary.moreLine}</Text>
+              )}
+            </View>
+          )}
         </View>
 
         {!isPassphrase && renderPinDots()}
@@ -622,6 +656,16 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
       marginTop: theme.spacing.lg,
       marginBottom: theme.spacing.sm,
+    },
+    summary: {
+      alignItems: 'center',
+      marginTop: theme.spacing.lg,
+    },
+    summaryTitle: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: theme.colors.text,
+      textAlign: 'center',
     },
     subtitle: {
       fontSize: 16,

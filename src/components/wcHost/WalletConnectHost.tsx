@@ -1,9 +1,16 @@
 import React, { useEffect, useSyncExternalStore } from 'react';
-import { ActivityIndicator, Button, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Button,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { RequestQueue } from '@/services/walletconnect/requestQueue';
 import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
-import { buildWaitingSummary } from '@/services/walletconnect/waitingSummary';
+import { hostMayDraw } from '@/navigation/lockCoverCondition';
+import { useTheme } from '@/contexts/ThemeContext';
 import { ConnectReview } from '@/screens/walletconnect/SessionProposalScreen';
 import { TransactionReview } from '@/screens/wallet/UniversalTransactionSigningScreen';
 import type { RootStackParamList } from '@/navigation/AppNavigator';
@@ -44,37 +51,37 @@ export default function WalletConnectHost() {
     () => queue.getSnapshot()
   );
   const { authState } = useAuth();
-  const locked = authState.isLocked || !authState.isAuthenticated;
+  const { theme } = useTheme();
+  if (!hostMayDraw(authState)) return null;
   const session = snapshot.head
     ? getHeadSession(snapshot.head, {
         queue,
         coordinator: RequestCoordinator.getInstance(),
       })
     : null;
-  // eslint-disable-next-line react-hooks/purity -- the host specification requires the summary age at this render, without persisting time.
-  const summary = locked ? buildWaitingSummary(snapshot, Date.now()) : null;
-  if (!snapshot.head && !snapshot.result && !snapshot.waiting.length)
-    return null;
+  if (!snapshot.head && !snapshot.result) return null;
   return (
-    <View>
+    <View
+      style={[
+        StyleSheet.absoluteFill,
+        { backgroundColor: theme.colors.background },
+      ]}
+    >
       {session && (
         <HostNavigation key={headKey(session.item.ref)}>
           <HeadBody key={headKey(session.item.ref)} session={session} />
         </HostNavigation>
       )}
-      {summary && (
-        <View>
-          <Text>{summary.title}</Text>
-          <Text>{summary.dappLine}</Text>
-          <Text>{summary.detailLine}</Text>
-          <Text>{summary.ageLine}</Text>
-          {summary.moreLine && <Text>{summary.moreLine}</Text>}
-        </View>
-      )}
       {snapshot.result && (
         <View>
-          <Text>{snapshot.result.title}</Text>
-          {snapshot.result.message && <Text>{snapshot.result.message}</Text>}
+          <Text style={{ color: theme.colors.text }}>
+            {snapshot.result.title}
+          </Text>
+          {snapshot.result.message && (
+            <Text style={{ color: theme.colors.text }}>
+              {snapshot.result.message}
+            </Text>
+          )}
           <Button
             title={HOST_DISMISS_LABEL}
             onPress={() => {

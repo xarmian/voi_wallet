@@ -1,3 +1,9 @@
+jest.mock('@/store/walletStore', () => ({
+  useWalletStore: { getState: () => ({ wallet: undefined }) },
+}));
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
 /**
  * TASK-469: an unlock refused because a wipe is pending is NOT an incorrect PIN.
  * A user with the right PIN mid-Delete-Everything must not be told it is wrong,

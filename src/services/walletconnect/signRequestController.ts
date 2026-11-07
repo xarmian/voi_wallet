@@ -73,6 +73,12 @@ export interface TakenRequest {
 }
 
 export interface SignRequestSurface {
+  /**
+   * False when the surface leaves the next request waiting until the person
+   * dismisses the result, so a toast must not say the next one is processing.
+   * Absent means true.
+   */
+  readonly advancesToNext?: boolean;
   /** Show the signing review for this request. */
   presentReview(params: SigningReviewParams): void;
   /** Show a terminal error. */
@@ -175,7 +181,7 @@ export class SignRequestController {
       }
       // Load accounts
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
-      if (this.settled) return;
+      if (this.settled || !coordinator.isOpen(ref)) return;
 
       const eventParams = (requestEvent as any).params;
       if (!eventParams) {
@@ -451,7 +457,10 @@ export class SignRequestController {
           Toast.show({
             type: 'walletConnectSuccess',
             text1: 'Transaction Signed Successfully',
-            text2: `Your transaction has been signed and sent back to the dApp. ${queueSize > 0 ? 'Processing next request...' : 'You can now return to the dApp.'}`,
+            text2:
+              surface.advancesToNext === false
+                ? 'Your transaction has been signed and sent back to the dApp.'
+                : `Your transaction has been signed and sent back to the dApp. ${queueSize > 0 ? 'Processing next request...' : 'You can now return to the dApp.'}`,
             visibilityTime: 5000,
             position: 'top',
             props: {
@@ -540,11 +549,14 @@ export class SignRequestController {
           Toast.show({
             type: 'walletConnectRejected',
             text1: 'Transaction Request Rejected',
-            text2: `You declined to sign this transaction. ${
-              queueSize > 0
-                ? 'Processing next request...'
-                : 'You can return to the dApp.'
-            }`,
+            text2:
+              surface.advancesToNext === false
+                ? 'You declined to sign this transaction.'
+                : `You declined to sign this transaction. ${
+                    queueSize > 0
+                      ? 'Processing next request...'
+                      : 'You can return to the dApp.'
+                  }`,
             visibilityTime: 4000,
             position: 'top',
             props: {

@@ -1,5 +1,6 @@
 import { redactError } from '@/utils/logRedaction';
 import { RequestCoordinator } from './requestCoordinator';
+import { describeApproved, describeClose } from './resultCopy';
 import type { ExitReason, RequestRef } from './requestCoordinator';
 
 export interface QueueDapp {
@@ -46,7 +47,14 @@ const keyOf = (ref: RequestRef): string =>
 export class RequestQueue {
   private static instance: RequestQueue | undefined;
   private readonly coordinator: QueueCoordinator;
-  private readonly describeClose: (reason: ExitReason) => {
+  private readonly describeClose: (
+    reason: ExitReason,
+    kind: 'request' | 'proposal'
+  ) => {
+    title: string;
+    message?: string;
+  };
+  private readonly describeApproved: (kind: 'request' | 'proposal') => {
     title: string;
     message?: string;
   };
@@ -63,15 +71,22 @@ export class RequestQueue {
   constructor(
     deps: {
       coordinator?: QueueCoordinator;
-      describeClose?: (reason: ExitReason) => {
+      describeClose?: (
+        reason: ExitReason,
+        kind: 'request' | 'proposal'
+      ) => {
+        title: string;
+        message?: string;
+      };
+      describeApproved?: (kind: 'request' | 'proposal') => {
         title: string;
         message?: string;
       };
     } = {}
   ) {
     this.coordinator = deps.coordinator ?? RequestCoordinator.getInstance();
-    this.describeClose =
-      deps.describeClose ?? (() => ({ title: 'Request ended' }));
+    this.describeClose = deps.describeClose ?? describeClose;
+    this.describeApproved = deps.describeApproved ?? describeApproved;
   }
 
   static getInstance(): RequestQueue {
@@ -133,8 +148,30 @@ export class RequestQueue {
     return true;
   }
 
+  amendResult(
+    ref: RequestRef,
+    result: { title: string; message?: string }
+  ): boolean {
+    const current = this.snapshot.result;
+    if (!current || keyOf(current.ref) !== keyOf(ref)) return false;
+    this.update({
+      ...this.snapshot,
+      result: Object.freeze({
+        ref: current.ref,
+        title: result.title,
+        message: result.message,
+      }),
+    });
+    return true;
+  }
+
   closeHead(ref: RequestRef, reason: ExitReason): boolean {
-    return this.finish(ref, this.describeClose(reason));
+    return this.finish(ref, this.describeClose(reason, ref.kind));
+  }
+
+  /** Finish the head after the person approved it. */
+  finishApproved(ref: RequestRef): boolean {
+    return this.finish(ref, this.describeApproved(ref.kind));
   }
 
   advance(): boolean {
@@ -167,7 +204,7 @@ export class RequestQueue {
   private onClose(ref: RequestRef, reason: ExitReason): void {
     const key = keyOf(ref);
     if (this.snapshot.head && keyOf(this.snapshot.head.ref) === key) {
-      this.finish(ref, this.describeClose(reason));
+      this.finish(ref, this.describeClose(reason, ref.kind));
       return;
     }
     const waiting = this.snapshot.waiting.filter(

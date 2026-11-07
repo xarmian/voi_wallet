@@ -281,7 +281,7 @@ it('finishes a closed head with the supplied close description', () => {
   queue = new RequestQueue({ coordinator, describeClose });
   push(refFor(1));
   coordinator.close(refFor(1), 'session-ended');
-  expect(describeClose).toHaveBeenCalledWith('session-ended');
+  expect(describeClose).toHaveBeenCalledWith('session-ended', 'request');
   expect(queue.getSnapshot().result).toEqual({
     ref: refFor(1),
     title: 'Request ended',
@@ -303,7 +303,10 @@ it('DEFECT closeHead delegates to finish with the queue close description', () =
   expect(queue.closeHead(waiting, 'expired')).toBe(false);
   expect(queue.getSnapshot()).toBe(before);
   expect(queue.closeHead(head, 'abandoned')).toBe(true);
-  expect(describeClose.mock.calls).toEqual([['expired'], ['abandoned']]);
+  expect(describeClose.mock.calls).toEqual([
+    ['expired', 'request'],
+    ['abandoned', 'request'],
+  ]);
   expect(finish.mock.calls).toEqual([
     [waiting, description],
     [head, description],
@@ -474,4 +477,69 @@ it('preserves both invariants after 200 deterministic randomized operations', ()
     }
     assertInvariants(queue.getSnapshot());
   }
+});
+
+it.each(['matching', 'other', 'empty', 'head'] as const)(
+  'DEFECT amendResult %s changes only matching current result',
+  (state) => {
+    const ref = refFor(1);
+    if (state !== 'empty') push(ref);
+    if (state === 'matching' || state === 'other') queue.finish(ref, result);
+    const before = queue.getSnapshot();
+    const listener = jest.fn();
+    queue.subscribe(listener);
+    const matches = state === 'matching';
+    expect(
+      queue.amendResult(state === 'other' ? refFor(2) : ref, {
+        title: 'Connect',
+        message: 'Sign transactions',
+      })
+    ).toBe(matches);
+    if (matches) {
+      const after = queue.getSnapshot();
+      expect(after.result).toEqual({
+        ref,
+        title: 'Connect',
+        message: 'Sign transactions',
+      });
+      expect(after.result).not.toBe(before.result);
+      expect(Object.isFrozen(after.result)).toBe(true);
+      expect(after.revision).toBe(before.revision + 1);
+      expect(listener).toHaveBeenCalledTimes(1);
+    } else {
+      expect(queue.getSnapshot()).toBe(before);
+      expect(listener).not.toHaveBeenCalled();
+    }
+  }
+);
+
+describe('result copy defaults (product ruling: by kind and reason)', () => {
+  const proposalRef = refFor(9, 'proposal');
+  it.each([
+    ['request', 'declined', 'Transaction Request Rejected'],
+    ['request', 'abandoned', 'Request ended'],
+    ['request', 'expired', 'Request ended'],
+    ['proposal', 'declined', 'Request ended'],
+    ['proposal', 'abandoned', 'Request ended'],
+  ] as const)('%s closed as %s reads %s', (kind, reason, title) => {
+    queue = new RequestQueue({ coordinator });
+    const ref = kind === 'request' ? refFor(1) : proposalRef;
+    push(ref);
+    expect(queue.closeHead(ref, reason)).toBe(true);
+    expect(queue.getSnapshot().result?.title).toBe(title);
+  });
+  it.each([
+    [
+      'request',
+      'Transaction Signed Successfully',
+      'You can now return to the dApp.',
+    ],
+    ['proposal', 'Success', 'Successfully connected to dApp'],
+  ] as const)('%s approved reads %s', (kind, title, message) => {
+    queue = new RequestQueue({ coordinator });
+    const ref = kind === 'request' ? refFor(1) : proposalRef;
+    push(ref);
+    expect(queue.finishApproved(ref)).toBe(true);
+    expect(queue.getSnapshot().result).toMatchObject({ title, message });
+  });
 });

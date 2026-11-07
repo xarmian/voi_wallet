@@ -81,6 +81,10 @@ let mockLocked = false;
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
     authState: {
+      authChecked: true,
+      securityUnavailable: false,
+      hasPin: true,
+      pinSetupResume: false,
       isLocked: mockLocked,
       isAuthenticated: !mockLocked,
       biometricEnabled: false,
@@ -216,9 +220,13 @@ it('DEFECT approve finishes the head and ignores Main (behaviour question for pr
   const settle = jest.spyOn(coordinator, 'settle');
   await approve(view);
   expect(decide).toHaveBeenCalledWith(ref, 'approved');
+  expect(session.lastReason).toBeUndefined();
   expect(mockApprove).toHaveBeenCalledWith(proposal, [account]);
   expect(settle).not.toHaveBeenCalled();
-  expect(queue.getSnapshot().result?.title).toBe('abandoned');
+  expect(queue.getSnapshot().result).toMatchObject({
+    title: 'Success',
+    message: 'Successfully connected to dApp',
+  });
 });
 it('DEFECT reject settles declined and finishes once', async () => {
   const view = await mount();
@@ -227,6 +235,7 @@ it('DEFECT reject settles declined and finishes once', async () => {
   expect(settle).toHaveBeenCalledTimes(1);
   expect(settle).toHaveBeenCalledWith(ref, 'declined');
   expect(queue.getSnapshot().result?.title).toBe('declined');
+  expect(session.lastReason).toBe('declined');
 });
 it('DEFECT header back settles abandoned and finishes once', async () => {
   const view = await mount();
@@ -235,6 +244,7 @@ it('DEFECT header back settles abandoned and finishes once', async () => {
   expect(settle).toHaveBeenCalledTimes(1);
   expect(settle).toHaveBeenCalledWith(ref, 'abandoned');
   expect(queue.getSnapshot().result?.title).toBe('abandoned');
+  expect(session.lastReason).toBe('abandoned');
 });
 it('DEFECT beforeRemove equivalent: onLeave at real finish abandons once', async () => {
   await mount();
@@ -245,6 +255,7 @@ it('DEFECT beforeRemove equivalent: onLeave at real finish abandons once', async
   expect(settle).toHaveBeenCalledTimes(1);
   expect(settle).toHaveBeenCalledWith(ref, 'abandoned');
   expect(queue.getSnapshot().result?.title).toBe('abandoned');
+  expect(session.lastReason).toBeUndefined();
 });
 it('DEFECT background closes; inactive keeps the head', async () => {
   await mount();
@@ -347,6 +358,7 @@ it('DEFECT locked gate rejection needs no account reads', async () => {
   expect(settle).toHaveBeenCalledWith(ref, 'declined');
   expect(MultiAccountWalletService.getAllAccounts).not.toHaveBeenCalled();
   expect(queue.getSnapshot().result?.title).toBe('declined');
+  expect(session.lastReason).toBe('declined');
 });
 it('DEFECT already settled rejection keeps the first result', async () => {
   const view = await mount();
@@ -419,6 +431,7 @@ it('DEFECT proposal before signer survives active lock/unlock then reaches the r
   await approve(view);
   expect(decide).toHaveBeenCalledTimes(1);
   expect(decide).toHaveBeenCalledWith(ref, 'approved');
+  expect(session.lastReason).toBeUndefined();
   expect(mockApprove).toHaveBeenCalledTimes(1);
 });
 

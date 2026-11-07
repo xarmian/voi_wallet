@@ -1,9 +1,8 @@
 import React from 'react';
-import { Text, Pressable } from 'react-native';
+import { Text, Pressable, StyleSheet } from 'react-native';
 import { act, render, fireEvent } from '@testing-library/react-native';
 import { RequestQueue } from '@/services/walletconnect/requestQueue';
 import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
-import { buildWaitingSummary } from '@/services/walletconnect/waitingSummary';
 import type { ReviewBinding } from '@/services/walletconnect/reviewBinding';
 import type { SigningReviewParams } from '@/services/walletconnect/signRequestController';
 import { getHeadSession } from '../headSession';
@@ -13,9 +12,22 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 let mockLocked = false;
+let mockDraw = {
+  authChecked: true,
+  securityUnavailable: false,
+  hasPin: true,
+  pinSetupResume: false,
+};
+jest.mock('@/contexts/ThemeContext', () => ({
+  useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
+}));
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
-    authState: { isLocked: mockLocked, isAuthenticated: !mockLocked },
+    authState: {
+      ...mockDraw,
+      isLocked: mockLocked,
+      isAuthenticated: !mockLocked,
+    },
   }),
 }));
 const mockMount = jest.fn();
@@ -62,6 +74,12 @@ let queue: RequestQueue;
 const coordinator = { isOpen: () => true, subscribe: () => () => {} };
 beforeEach(() => {
   mockLocked = false;
+  mockDraw = {
+    authChecked: true,
+    securityUnavailable: false,
+    hasPin: true,
+    pinSetupResume: false,
+  };
   queue = new RequestQueue({
     coordinator,
     describeClose: () => ({
@@ -166,27 +184,6 @@ it('DEFECT empty, head, result, dismiss, empty; result advances only with waitin
   expect(dismiss).toHaveBeenCalledTimes(1);
   expect(queue.getSnapshot().head?.ref.id).toBe(2);
 });
-it.each(['proposal', 'request'] as const)(
-  'DEFECT %s locked summary uses only waiting summary fields with two items',
-  async (kind) => {
-    push(kind);
-    push('proposal', 2);
-    mockLocked = true;
-    const summary = buildWaitingSummary(queue.getSnapshot(), Date.now())!;
-    const view = await render(<WalletConnectHost />);
-    for (const value of [
-      summary.title,
-      summary.dappLine,
-      summary.detailLine,
-      summary.ageLine,
-      summary.moreLine!,
-    ])
-      expect(view.getByText(value)).toBeTruthy();
-    expect(JSON.stringify(view.toJSON())).not.toContain(
-      'address amount note asset'
-    );
-  }
-);
 it('DEFECT request starts once across rerender and lock/unlock before params exist', async () => {
   queue.push({
     ref: { version: 2, kind: 'request', topic: 'fixture', id: 1 },
@@ -207,4 +204,37 @@ it('DEFECT request starts once across rerender and lock/unlock before params exi
   await view.rerender(<WalletConnectHost />);
   expect(mockStart).toHaveBeenCalledTimes(1);
   expect(session.controller).toBeDefined();
+});
+
+it.each([
+  { authChecked: false },
+  { securityUnavailable: true },
+  { pinSetupResume: true, hasPin: false },
+])(
+  'DEFECT host refuses drawing %s and unmounts existing review without settling',
+  async (state) => {
+    push('proposal');
+    const view = await render(<WalletConnectHost />);
+    expect(mockMount).toHaveBeenCalledTimes(1);
+    mockDraw = { ...mockDraw, ...state };
+    await view.rerender(<WalletConnectHost />);
+    expect(view.toJSON()).toBeNull();
+    expect(mockUnmount).toHaveBeenCalledTimes(1);
+    expect(queue.getSnapshot().head).not.toBeNull();
+    mockMount.mockClear();
+    const fresh = await render(<WalletConnectHost />);
+    expect(fresh.toJSON()).toBeNull();
+    expect(mockMount).not.toHaveBeenCalled();
+  }
+);
+it('DEFECT host root fills parent with opaque theme background; host never shows waiting summary', async () => {
+  push('proposal');
+  mockLocked = true;
+  const view = await render(<WalletConnectHost />);
+  const root = view.toJSON()!;
+  expect(StyleSheet.flatten(root.props.style)).toMatchObject({
+    ...StyleSheet.absoluteFill,
+    backgroundColor: require('@/constants/themes').lightTheme.colors.background,
+  });
+  expect(view.queryByText('WalletConnect request waiting')).toBeNull();
 });

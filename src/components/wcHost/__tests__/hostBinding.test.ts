@@ -54,7 +54,7 @@ it.each(['goBack', 'popOrReplace'] as const)(
     // Main/params are ignored: approval reveals the app beneath the host.
     // behaviour question for product at cutover.
     expect(h.binding.nav[method]('Main', { screen: 'Home' })).toBe(true);
-    expect(h.describeClose).toHaveBeenCalledWith('abandoned');
+    expect(h.describeClose).toHaveBeenCalledWith('abandoned', 'proposal');
     expect(h.queue.getSnapshot().result?.title).toBe('abandoned');
     expect(leave).toHaveBeenCalledTimes(1);
     expect(h.binding.nav[method]('Main')).toBe(false);
@@ -68,7 +68,7 @@ it('DEFECT last coordinator reason is scoped to the session', () => {
   // Notify the session directly; the queue subscriber ordinarily closes first.
   [...h.listeners].at(-1)!({ reason: 'background' });
   h.binding.nav.goBack();
-  expect(h.describeClose).toHaveBeenLastCalledWith('background');
+  expect(h.describeClose).toHaveBeenLastCalledWith('background', 'proposal');
 });
 it('DEFECT replace refuses without changing the queue', () => {
   const h = setup();

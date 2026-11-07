@@ -6,14 +6,16 @@ export function createHostSurface(
   queue: RequestQueue
 ): SignRequestSurface {
   return {
+    advancesToNext: false,
     presentReview: (params) => session.presentReview(params),
     presentError: (message) => {
-      queue.finish(session.item.ref, { title: message });
+      if (!queue.finish(session.item.ref, { title: message }))
+        queue.amendResult(session.item.ref, { title: message });
       session.end();
     },
     adoptNavigation: () => {},
     takeNext: async () => {
-      queue.closeHead(session.item.ref, session.lastReason ?? 'declined');
+      session.closeInQueue(queue);
       session.end();
       return { request: null, remaining: queue.getSnapshot().waiting.length };
     },

@@ -19,7 +19,7 @@ export function createHostBinding(
   };
   const finish = () => {
     if (!isHead()) return false;
-    queue.closeHead(session.item.ref, session.lastReason ?? 'abandoned');
+    session.closeInQueue(queue);
     session.end();
     return true;
   };

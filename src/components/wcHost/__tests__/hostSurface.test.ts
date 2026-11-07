@@ -9,7 +9,26 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 function setup() {
-  const coordinator = { isOpen: () => true, subscribe: () => () => {} };
+  const listeners = new Set<
+    (info: {
+      reason: import('@/services/walletconnect/requestCoordinator').ExitReason;
+    }) => void
+  >();
+  let open = true;
+  const coordinator = {
+    isOpen: () => open,
+    subscribe: (
+      _ref: unknown,
+      listener: (info: {
+        reason: import('@/services/walletconnect/requestCoordinator').ExitReason;
+      }) => void
+    ) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
   const queue = new RequestQueue({
     coordinator,
     describeClose: (reason) => ({ title: reason }),
@@ -24,7 +43,15 @@ function setup() {
     queue,
     coordinator,
   });
-  return { queue, session, surface: createHostSurface(session, queue) };
+  return {
+    queue,
+    session,
+    listeners,
+    setOpen: (value: boolean) => {
+      open = value;
+    },
+    surface: createHostSurface(session, queue),
+  };
 }
 it('DEFECT presentReview stores exact params and notifies subscribers', () => {
   const h = setup();
@@ -72,10 +99,16 @@ it('DEFECT queueSize counts only waiting items', async () => {
   h.queue.__resetForTests();
   expect(await h.surface.queueSize()).toBe(0);
 });
-it.each([undefined, 'expired'] as const)(
-  'DEFECT takeNext closes with %s, never advances or touches a grant',
-  async (reason) => {
+it.each([
+  [undefined, true, 'abandoned'],
+  [undefined, false, 'Transaction Signed Successfully'],
+  ['expired', true, 'expired'],
+  ['expired', false, 'expired'],
+] as const)(
+  'DEFECT takeNext closes with reason %s (coordinator open %s) as %s, never advances or touches a grant',
+  async (reason, open, title) => {
     const h = setup();
+    h.setOpen(open);
     h.session.lastReason = reason;
     const advance = jest.spyOn(h.queue, 'advance');
     const leave = jest.fn();
@@ -85,9 +118,19 @@ it.each([undefined, 'expired'] as const)(
       request: null,
       remaining: 1,
     });
-    expect(h.queue.getSnapshot().result?.title).toBe(reason ?? 'declined');
+    expect(h.queue.getSnapshot().result?.title).toBe(title);
     expect(h.queue.getSnapshot().waiting).toHaveLength(1);
     expect(advance).not.toHaveBeenCalled();
     expect(leave).toHaveBeenCalledTimes(1);
+  }
+);
+
+it.each(['load-failed', 'sign-failed', 'lapsed'] as const)(
+  'DEFECT synchronous coordinator close %s preserves controller error',
+  (reason) => {
+    const h = setup();
+    for (const listener of [...h.listeners]) listener({ reason });
+    h.surface.presentError('controller error');
+    expect(h.queue.getSnapshot().result?.title).toBe('controller error');
   }
 );
