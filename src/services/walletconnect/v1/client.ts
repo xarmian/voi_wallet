@@ -62,6 +62,10 @@ export class WalletConnectV1Client extends EventEmitter {
   private handshakeId: number = 0;
   private handshakeTopic: string | null = null;
   private connecting: Promise<void> | null = null;
+  // Answers (and disconnects) in progress. The coordinator stops counting a
+  // request once it is decided, so this keeps the link guard closed until the
+  // answer, and any disconnect it ends in, has finished.
+  private answering = 0;
 
   static getInstance(): WalletConnectV1Client {
     if (!WalletConnectV1Client.instance) {
@@ -205,6 +209,14 @@ export class WalletConnectV1Client extends EventEmitter {
       }
     } catch (error) {
       console.error('WC v1 Client: Connection failed');
+      // A connection that failed holds nothing: leaving its config set would
+      // keep the client reading as in use, and skip every later restore.
+      if (this.config === config) {
+        this.socket?.destroy();
+        this.socket = null;
+        this.config = null;
+        this.sessionData = null;
+      }
       this.emit(WalletConnectV1Event.ERROR, error);
       throw error;
     }
@@ -214,7 +226,16 @@ export class WalletConnectV1Client extends EventEmitter {
    * Approve session with accounts
    * Note: chainId parameter is optional - if not provided, uses the chainId from session request
    */
-  async approveSession(accounts: string[], chainId?: number): Promise<void> {
+  approveSession(accounts: string[], chainId?: number): Promise<void> {
+    return this.whileAnswering(() =>
+      this.answerApproveSession(accounts, chainId)
+    );
+  }
+
+  private async answerApproveSession(
+    accounts: string[],
+    chainId?: number
+  ): Promise<void> {
     if (!this.config || !this.socket || !this.clientId) {
       throw new Error('Client not connected');
     }
@@ -306,7 +327,11 @@ export class WalletConnectV1Client extends EventEmitter {
   /**
    * Reject session
    */
-  async rejectSession(): Promise<void> {
+  rejectSession(): Promise<void> {
+    return this.whileAnswering(() => this.answerRejectSession());
+  }
+
+  private async answerRejectSession(): Promise<void> {
     if (!this.config || !this.socket || !this.clientId) {
       throw new Error('Client not connected');
     }
@@ -384,6 +409,20 @@ export class WalletConnectV1Client extends EventEmitter {
     }
   }
 
+  /** Whether an answer or a disconnect is still running. */
+  isAnswering(): boolean {
+    return this.answering > 0;
+  }
+
+  private async whileAnswering<T>(run: () => Promise<T>): Promise<T> {
+    this.answering += 1;
+    try {
+      return await run();
+    } finally {
+      this.answering -= 1;
+    }
+  }
+
   /**
    * Throws when the connection captured before an await is no longer the
    * client's: a link replaced it, and publishing or disconnecting now would act
@@ -424,7 +463,17 @@ export class WalletConnectV1Client extends EventEmitter {
    * stringifying a null would break the dApp's positional reassembly of the
    * group (and reintroduce the `apaa` class of failure).
    */
-  async approveRequest(
+  approveRequest(
+    requestId: number,
+    signedTxns: (string | null)[],
+    requestTopic?: string
+  ): Promise<void> {
+    return this.whileAnswering(() =>
+      this.answerApproveRequest(requestId, signedTxns, requestTopic)
+    );
+  }
+
+  private async answerApproveRequest(
     requestId: number,
     signedTxns: (string | null)[],
     requestTopic?: string
@@ -458,7 +507,17 @@ export class WalletConnectV1Client extends EventEmitter {
   /**
    * Reject transaction signing request
    */
-  async rejectRequest(
+  rejectRequest(
+    requestId: number,
+    reason?: string,
+    requestTopic?: string
+  ): Promise<void> {
+    return this.whileAnswering(() =>
+      this.answerRejectRequest(requestId, reason, requestTopic)
+    );
+  }
+
+  private async answerRejectRequest(
     requestId: number,
     reason?: string,
     requestTopic?: string
@@ -495,19 +554,28 @@ export class WalletConnectV1Client extends EventEmitter {
   /**
    * Disconnect and kill session
    */
-  async disconnect(): Promise<void> {
+  disconnect(): Promise<void> {
+    return this.whileAnswering(() => this.disconnectNow());
+  }
+
+  private async disconnectNow(): Promise<void> {
+    const config = this.config;
     if (this.socket) {
       this.socket.destroy();
       this.socket = null;
     }
 
     // Clear session from storage
-    if (this.config) {
+    if (config) {
       await this.clearSession();
     }
 
-    this.config = null;
-    this.sessionData = null;
+    // The storage delete awaits, and a link may have started a connection
+    // meanwhile: its config and socket are not this disconnect's to clear.
+    if (this.config === config) {
+      this.config = null;
+      this.sessionData = null;
+    }
     this.emit(WalletConnectV1Event.DISCONNECT);
   }
 
@@ -549,11 +617,17 @@ export class WalletConnectV1Client extends EventEmitter {
       }
 
       // Decrypt request
-      const request = await decryptRequest(encryptedPayload, this.config.key);
+      const config = this.config;
+      const socket = this.socket;
+      const request = await decryptRequest(encryptedPayload, config.key);
       if (!request) {
         // Silently ignore - could be a response message or invalid data
         return;
       }
+      // A link replaced the session while this decrypted: the message belongs
+      // to a session this client no longer holds, so it is dropped rather than
+      // handled (or answered) as the new session's.
+      if (this.config !== config || this.socket !== socket) return;
 
       // Handle different request types
       if (isSessionRequest(request)) {

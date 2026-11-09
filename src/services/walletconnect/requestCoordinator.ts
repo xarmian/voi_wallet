@@ -162,6 +162,10 @@ export class RequestCoordinator {
     { ref: RequestRef; error: AnswerError }
   >();
   private retrying = new Map<string, Promise<boolean>>();
+  // Refs between their close and the end of their answer. A ref leaves `open`
+  // when it closes, but its answer (and, for a v1 proposal, the client's
+  // disconnect) runs after that, so occupancy keeps counting it until then.
+  private answering = new Map<string, { ref: RequestRef; count: number }>();
 
   constructor(
     deps: {
@@ -299,7 +303,24 @@ export class RequestCoordinator {
         (entry) => entry.ref
       ),
       ...this.admitting.values(),
+      ...[...this.answering.values()].map((entry) => entry.ref),
     ].some((ref) => ref.version === 1);
+  }
+
+  private async whileAnswering<T>(
+    ref: RequestRef,
+    run: () => Promise<T>
+  ): Promise<T> {
+    const key = keyOf(ref);
+    const entry = this.answering.get(key) ?? { ref: { ...ref }, count: 0 };
+    entry.count += 1;
+    this.answering.set(key, entry);
+    try {
+      return await run();
+    } finally {
+      entry.count -= 1;
+      if (entry.count === 0) this.answering.delete(key);
+    }
   }
 
   describe(ref: RequestRef): {
@@ -353,18 +374,20 @@ export class RequestCoordinator {
       }
     }
     if (this.closed.has(key)) return 'already-settled';
-    this.close(ref, reason);
-    let recorded = true;
-    try {
-      recorded = await this.store.markHandled(ref, OUTCOMES[reason]);
-    } catch {
-      // Still answer when durability is unavailable.
-      warn('Request decision could not be recorded');
-    }
-    if (recorded && reason !== 'session-ended') {
-      await this.sendError(ref, reason);
-    }
-    return 'settled';
+    return this.whileAnswering(ref, async () => {
+      this.close(ref, reason);
+      let recorded = true;
+      try {
+        recorded = await this.store.markHandled(ref, OUTCOMES[reason]);
+      } catch {
+        // Still answer when durability is unavailable.
+        warn('Request decision could not be recorded');
+      }
+      if (recorded && reason !== 'session-ended') {
+        await this.sendError(ref, reason);
+      }
+      return 'settled' as const;
+    });
   }
 
   async decide(
@@ -402,8 +425,10 @@ export class RequestCoordinator {
     const key = keyOf(ref);
     if (this.answered.has(key)) return;
     this.answered.add(key);
-    this.close(ref, reason);
-    await this.answer(ref, EXIT_ANSWERS[reason]);
+    await this.whileAnswering(ref, async () => {
+      this.close(ref, reason);
+      await this.answer(ref, EXIT_ANSWERS[reason]);
+    });
   }
 
   private close(ref: RequestRef, reason: ExitReason): void {

@@ -74,6 +74,10 @@ class FakeV1Client extends EventEmitter {
   constructor(private handshakeTopic: string) {
     super();
   }
+  answering = false;
+  isAnswering() {
+    return this.answering;
+  }
   connect = jest.fn(async (_config: unknown) => {});
   getSessionData() {
     return { handshakeTopic: this.handshakeTopic, chainId: 416101 };
@@ -426,6 +430,29 @@ describe('v1 producers feed the review queue', () => {
       });
       expect(queue.getSnapshot().head?.ref.id).toBe(1);
       noRouteWasUsed();
+    });
+
+    it('a link is refused while the client is still answering a closed item', async () => {
+      await service.testDeepLink(link('A'));
+      const proposal = sessionRequest(8101);
+      client.emit('session_request', proposal);
+      await flush();
+      await coordinator.settle(v1ProposalRefFor(proposal), 'declined');
+      await flush();
+      expect(coordinator.hasOpenV1Item()).toBe(false);
+      client.answering = true;
+
+      expect(await service.testDeepLink(link('B'))).toBe(false);
+
+      expect(client.connect).toHaveBeenCalledTimes(1);
+      expect(Toast.show).toHaveBeenCalledWith({
+        type: 'info',
+        ...V1_BUSY_TOAST,
+      });
+
+      client.answering = false;
+      expect(await service.testDeepLink(link('C'))).toBe(true);
+      expect(client.connect).toHaveBeenCalledTimes(2);
     });
 
     it('a link while a v1 request is waiting is refused with the busy toast', async () => {

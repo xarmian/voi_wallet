@@ -70,6 +70,10 @@ class FakeV1Client extends EventEmitter {
   constructor(private handshakeTopic: string) {
     super();
   }
+  answering = false;
+  isAnswering() {
+    return this.answering;
+  }
   connect = jest.fn(async (_config: unknown) => {});
   approveSession = jest.fn(async (_accounts: string[]) => {});
   getSessionData() {

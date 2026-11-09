@@ -713,16 +713,20 @@ export class DeepLinkService {
         throw new Error('Invalid WalletConnect v1 URI format');
       }
 
+      // Initialize WalletConnect v1 client
+      const v1Client = WalletConnectV1Client.getInstance();
+
+      // Busy from a v1 item's admission until its answer, and any disconnect it
+      // ends in, has finished: the coordinator counts it until it is closed and
+      // answered, and the client counts the answer it makes after a decision.
       if (
         this.v1PairingInFlight ||
-        RequestCoordinator.getInstance().hasOpenV1Item()
+        RequestCoordinator.getInstance().hasOpenV1Item() ||
+        v1Client.isAnswering()
       ) {
         Toast.show({ type: 'info', ...V1_BUSY_TOAST });
         return false;
       }
-
-      // Initialize WalletConnect v1 client
-      const v1Client = WalletConnectV1Client.getInstance();
 
       // Set up event handlers
       v1Client.once(

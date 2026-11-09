@@ -854,6 +854,45 @@ describe('U8 v1 occupancy', () => {
     coordinator.release(other);
     expect(coordinator.hasOpenV1Item()).toBe(false);
   });
+
+  it('U8 keeps counting a v1 proposal from its close until its answer has finished', async () => {
+    let finishAnswer!: () => void;
+    transport.rejectProposalV1.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishAnswer = resolve;
+        })
+    );
+    await coordinator.admit(proposal);
+    const settling = coordinator.settle(proposal, 'declined');
+    // Closed (no longer open) and the answer not yet sent: still counted.
+    expect(coordinator.isOpen(proposal)).toBe(false);
+    expect(coordinator.hasOpenV1Item()).toBe(true);
+    for (let i = 0; i < 50 && !finishAnswer; i++) await Promise.resolve();
+    expect(finishAnswer).toBeDefined();
+    expect(coordinator.hasOpenV1Item()).toBe(true);
+    finishAnswer();
+    await settling;
+    expect(coordinator.hasOpenV1Item()).toBe(false);
+  });
+
+  it('U8 keeps counting a v1 proposal through sendError after a decision', async () => {
+    let finishAnswer!: () => void;
+    transport.rejectProposalV1.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishAnswer = resolve;
+        })
+    );
+    await coordinator.admit(proposal);
+    expect(await coordinator.decide(proposal, 'approved')).toBe(true);
+    expect(coordinator.hasOpenV1Item()).toBe(false);
+    const sending = coordinator.sendError(proposal, 'load-failed');
+    expect(coordinator.hasOpenV1Item()).toBe(true);
+    finishAnswer();
+    await sending;
+    expect(coordinator.hasOpenV1Item()).toBe(false);
+  });
 });
 
 // TASK-518 C2b: a request that arrives while wallet setup is unfinished (the
