@@ -294,7 +294,11 @@ export function walletConnectProposalKey(
   return walletConnectRequestKey(pairingTopic, `proposal-${id}`);
 }
 
-/** A v1 connect request is keyed by its peer id, not its request id. */
+/**
+ * A v1 connect request is keyed by its peer id, not its request id. The v1
+ * payload carries no peer id, so every v1 key is `proposal-`; that is safe
+ * because only one v1 proposal can be open at a time.
+ */
 export function walletConnectV1ProposalKey(
   peerId: string | number | undefined
 ): string {
