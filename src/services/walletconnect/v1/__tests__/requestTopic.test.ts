@@ -103,4 +103,25 @@ describe('v1 answers name the session their request arrived on', () => {
     await client.rejectRequest(7, 'Unsupported method');
     expect(publish).toHaveBeenCalledTimes(1);
   });
+
+  it('publishes an approval to the session it was checked against when a link replaces the session during the encrypt', async () => {
+    const oldPublish = installSession(client, 'topic-s1', 'peer-s1');
+    const answer = client.approveRequest(7, ['signed'], 'topic-s1');
+    // Synchronously, before the encrypt resolves: a link replaces the session.
+    const newPublish = installSession(client, 'topic-s2', 'peer-s2');
+    await answer;
+    expect(oldPublish).toHaveBeenCalledTimes(1);
+    expect(oldPublish.mock.calls[0][0]).toBe('peer-s1');
+    expect(newPublish).not.toHaveBeenCalled();
+  });
+
+  it('publishes a rejection to the session it was checked against when a link replaces the session during the encrypt', async () => {
+    const oldPublish = installSession(client, 'topic-s1', 'peer-s1');
+    const answer = client.rejectRequest(7, 'expired', 'topic-s1');
+    const newPublish = installSession(client, 'topic-s2', 'peer-s2');
+    await answer;
+    expect(oldPublish).toHaveBeenCalledTimes(1);
+    expect(oldPublish.mock.calls[0][0]).toBe('peer-s1');
+    expect(newPublish).not.toHaveBeenCalled();
+  });
 });

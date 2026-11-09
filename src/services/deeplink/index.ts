@@ -430,10 +430,7 @@ export class DeepLinkService {
    */
   private whenReviewQueueIdle(run: () => Promise<void>): Promise<void> {
     const queue = RequestQueue.getInstance();
-    const busy = () => {
-      const snapshot = queue.getSnapshot();
-      return Boolean(snapshot.head || snapshot.result);
-    };
+    const busy = () => this.isReviewHostShowing();
     if (!busy()) return run();
     const unsubscribe = queue.subscribe(() => {
       if (busy()) return;
@@ -657,14 +654,23 @@ export class DeepLinkService {
   }
 
   /**
+   * The review host covers the navigator while a request or proposal is up and
+   * while its result card is, until the person taps OK.
+   */
+  private isReviewHostShowing(): boolean {
+    const snapshot = RequestQueue.getInstance().getSnapshot();
+    return Boolean(snapshot.head || snapshot.result);
+  }
+
+  /**
    * Tell the person a pairing link failed. While the review host is showing a
-   * request or proposal it covers the navigator, so a pushed error screen would
+   * request, proposal or result it covers the navigator, so a pushed error screen would
    * sit unseen underneath and surface only once the queue empties, as an error
    * about an earlier link. A toast shows over the host instead, as the v1 busy
    * path does.
    */
   private async showPairingError(message: string): Promise<void> {
-    if (RequestQueue.getInstance().getSnapshot().head) {
+    if (this.isReviewHostShowing()) {
       Toast.show({
         type: 'error',
         text1: 'Connection failed',

@@ -491,12 +491,23 @@ export class WalletConnectService extends EventEmitter {
         await deleteV1Sessions(staleKeys, { dropSlot: false });
       }
 
-      await v1Client.connect({
-        topic,
-        version: '1',
-        bridge: session.bridge,
-        key: sessionKey,
-      });
+      // Restore never replaces a connection: a pairing link may already hold
+      // the client, awaiting approval, and replacing it would turn the person's
+      // answer into one for this session. Then nothing is restored; the row
+      // stays and the person can re-pair.
+      const connected = await v1Client.connect(
+        {
+          topic,
+          version: '1',
+          bridge: session.bridge,
+          key: sessionKey,
+        },
+        { onlyIfIdle: true }
+      );
+      if (connected === false) {
+        console.warn('Skipped v1 session restore: the client is in use');
+        return;
+      }
 
       // Signing requests for the restored session go through the ONE v1
       // `call_request` listener DeepLinkService owns (TASK-257). This used to

@@ -470,6 +470,23 @@ describe('v1 producers feed the review queue', () => {
       noRouteWasUsed();
     });
 
+    it('a malformed link while only the result card shows is reported by toast', async () => {
+      await service.testDeepLink(link('A'));
+      client.emit('call_request', callRequest(1));
+      await flush();
+      const head = queue.getSnapshot().head!;
+      queue.finish(head.ref, { title: 'Done' });
+      expect(queue.getSnapshot().head).toBeNull();
+      expect(queue.getSnapshot().result).not.toBeNull();
+
+      expect(await service.testDeepLink('wc:bad@1?bridge=x')).toBe(false);
+
+      expect(Toast.show).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'error', text1: 'Connection failed' })
+      );
+      noRouteWasUsed();
+    });
+
     it('a malformed link with no host showing still opens the error screen', async () => {
       expect(await service.testDeepLink('wc:bad@1?bridge=x')).toBe(false);
 

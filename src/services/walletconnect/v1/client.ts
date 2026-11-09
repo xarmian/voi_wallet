@@ -61,6 +61,7 @@ export class WalletConnectV1Client extends EventEmitter {
   private clientId: string | null = null;
   private handshakeId: number = 0;
   private handshakeTopic: string | null = null;
+  private connecting: Promise<void> | null = null;
 
   static getInstance(): WalletConnectV1Client {
     if (!WalletConnectV1Client.instance) {
@@ -72,16 +73,50 @@ export class WalletConnectV1Client extends EventEmitter {
   /**
    * Initialize client with URI
    */
-  async connect(config: WalletConnectV1SessionConfig): Promise<void> {
+  async connect(
+    config: WalletConnectV1SessionConfig,
+    options: { onlyIfIdle?: boolean } = {}
+  ): Promise<boolean> {
+    // This client is a singleton and holds one connection, so the two callers
+    // (a pairing link, and boot session restore) never overlap. Restore passes
+    // `onlyIfIdle` and is skipped, without waiting, when a connection already
+    // exists or is being made: a link that is awaiting approval must not have
+    // its session replaced under it. A link waits for a connection in flight
+    // to settle and then replaces it, as a link always replaces a session.
+    if (options.onlyIfIdle && (this.config !== null || this.connecting)) {
+      return false;
+    }
+    while (this.connecting) {
+      try {
+        await this.connecting;
+      } catch {
+        // The connection in flight failed; its own caller reports that.
+      }
+    }
+    const run = this.openConnection(config);
+    this.connecting = run;
     try {
-      if (this.sessionData?.connected) {
+      await run;
+    } finally {
+      if (this.connecting === run) this.connecting = null;
+    }
+    return true;
+  }
+
+  private async openConnection(
+    config: WalletConnectV1SessionConfig
+  ): Promise<void> {
+    try {
+      if (this.socket || this.sessionData) {
         // `peerId` and `topic` are both peer/URI supplied — the topic arrives
         // straight from a scanned QR or deep link and is never validated — so
         // neither is echoed at all. The message alone carries the diagnostic.
         console.warn(
           'WC v1 Client: Replacing active session with new connection request'
         );
-        // Disconnect the old session's WebSocket
+        // Always destroy the old socket, connected or still awaiting approval:
+        // overwriting it would leave it open and delivering for a session this
+        // client no longer owns.
         if (this.socket) {
           this.socket.destroy();
           this.socket = null;
@@ -187,9 +222,18 @@ export class WalletConnectV1Client extends EventEmitter {
     if (!this.sessionData) {
       throw new Error('No pending session request');
     }
+    // The proposal is closed in the coordinator before this runs, so a link may
+    // connect while the probes and the subscribe below await. Everything the
+    // answer needs is read once, here, and the session is confirmed unchanged
+    // right before it is published.
+    const config = this.config;
+    const socket = this.socket;
+    const clientId = this.clientId;
+    const pending = this.sessionData;
+    const handshakeId = this.handshakeId;
 
     try {
-      const responseChainId = chainId ?? this.sessionData.chainId;
+      const responseChainId = chainId ?? pending.chainId;
       const chain = resolveV1Chain(responseChainId);
       if (!chain) throw new Error('Unsupported v1 chain');
       const selected = (
@@ -208,38 +252,39 @@ export class WalletConnectV1Client extends EventEmitter {
       // This ensures we respond with the same chainId the dApp sent us
       // Create approval response
       const response = createSessionApprovalResponse(
-        this.handshakeId,
+        handshakeId,
         true,
         responseChainId,
         accounts,
         DEFAULT_PEER_META,
-        this.clientId
+        clientId
       );
 
       // Encrypt and send response
-      const encryptedResponse = await encryptResponse(
-        response,
-        this.config.key
-      );
+      const encryptedResponse = await encryptResponse(response, config.key);
 
       // Subscribe to OUR clientId topic - this is where dApp will send algo_signTxn requests!
       // The dApp sends requests to this.peerId (which is OUR clientId from their perspective)
-      this.socket.onTopicMessageWithMeta(this.clientId, (payload, topic) => {
+      socket.onTopicMessageWithMeta(clientId, (payload, topic) => {
         this.handleMessage(payload, topic);
       });
-      await this.socket.subscribeToTopic(this.clientId);
+      await socket.subscribeToTopic(clientId);
+
+      // A link replaced the session while this awaited: nothing is published,
+      // and the replacing session's data is not overwritten.
+      this.assertSessionUnchanged(config, socket);
 
       // WalletConnect v1 protocol: responses go to peerId topic ONLY
       // Per WalletConnect client source: _sendResponse uses this.peerId as topic
       // The dApp subscribes to its clientId (peerId) and listens there for responses
-      const peerIdTopic = this.sessionData.peerId;
+      const peerIdTopic = pending.peerId;
 
       // Publish to peerId topic (where dApp is subscribed and listening)
-      this.socket.publishToTopic(peerIdTopic, encryptedResponse);
+      socket.publishToTopic(peerIdTopic, encryptedResponse);
 
       // Update session data
       this.sessionData = {
-        ...this.sessionData,
+        ...pending,
         connected: true,
         accounts,
         chainId: responseChainId,
@@ -265,6 +310,11 @@ export class WalletConnectV1Client extends EventEmitter {
     if (!this.config || !this.socket || !this.clientId) {
       throw new Error('Client not connected');
     }
+    // Read once: the proposal is closed before this runs, and the encrypt
+    // awaits, so a link may connect meanwhile. The disconnect below deletes the
+    // current session, which must be the one that was rejected.
+    const config = this.config;
+    const socket = this.socket;
 
     try {
       // Create rejection response
@@ -278,11 +328,9 @@ export class WalletConnectV1Client extends EventEmitter {
       );
 
       // Encrypt and send response
-      const encryptedResponse = await encryptResponse(
-        response,
-        this.config.key
-      );
-      this.socket.publishToTopic(this.config.topic, encryptedResponse);
+      const encryptedResponse = await encryptResponse(response, config.key);
+      this.assertSessionUnchanged(config, socket);
+      socket.publishToTopic(config.topic, encryptedResponse);
 
       // Disconnect
       await this.disconnect();
@@ -337,6 +385,20 @@ export class WalletConnectV1Client extends EventEmitter {
   }
 
   /**
+   * Throws when the connection captured before an await is no longer the
+   * client's: a link replaced it, and publishing or disconnecting now would act
+   * on the replacing session.
+   */
+  private assertSessionUnchanged(
+    config: WalletConnectV1SessionConfig,
+    socket: WalletConnectV1WebSocket
+  ): void {
+    if (this.config !== config || this.socket !== socket) {
+      throw new Error('Session was replaced');
+    }
+  }
+
+  /**
    * This client is a singleton: a new connection replaces its session, and an
    * answer is encrypted with the current key and sent to the current peer, so an
    * id alone cannot say which session a request came from. An answer that
@@ -371,17 +433,19 @@ export class WalletConnectV1Client extends EventEmitter {
       throw new Error('Client not connected');
     }
     this.assertRequestTopic(requestTopic);
+    // Key, peer and socket are read once, here, with the topic check: the
+    // encrypt below awaits, and a link may replace the session meanwhile. The
+    // answer is encrypted and published with the one session that was checked.
+    const { key, topic: pairingTopic } = this.config;
+    const socket = this.socket;
+    const responseTopic = this.sessionData.peerId || pairingTopic;
 
     try {
       const response = createSignTxnResponse(requestId, signedTxns);
 
       // Encrypt and send response to peerId topic
-      const encryptedResponse = await encryptResponse(
-        response,
-        this.config.key
-      );
-      const responseTopic = this.sessionData.peerId || this.config.topic;
-      this.socket.publishToTopic(responseTopic, encryptedResponse);
+      const encryptedResponse = await encryptResponse(response, key);
+      socket.publishToTopic(responseTopic, encryptedResponse);
     } catch (error) {
       console.error(
         'WC v1 Client: Failed to approve request',
@@ -403,6 +467,11 @@ export class WalletConnectV1Client extends EventEmitter {
       throw new Error('Client not connected');
     }
     this.assertRequestTopic(requestTopic);
+    // Read once with the topic check, as in approveRequest.
+    const { key, topic: pairingTopic } = this.config;
+    const socket = this.socket;
+    // Use peerId topic if we have session data, otherwise use handshake topic
+    const responseTopic = this.sessionData?.peerId || pairingTopic;
 
     try {
       const response = createErrorResponse(
@@ -412,13 +481,8 @@ export class WalletConnectV1Client extends EventEmitter {
       );
 
       // Encrypt and send response to appropriate topic
-      const encryptedResponse = await encryptResponse(
-        response,
-        this.config.key
-      );
-      // Use peerId topic if we have session data, otherwise use handshake topic
-      const responseTopic = this.sessionData?.peerId || this.config.topic;
-      this.socket.publishToTopic(responseTopic, encryptedResponse);
+      const encryptedResponse = await encryptResponse(response, key);
+      socket.publishToTopic(responseTopic, encryptedResponse);
     } catch (error) {
       console.error(
         'WC v1 Client: Failed to reject request',
