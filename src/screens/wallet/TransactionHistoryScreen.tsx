@@ -38,6 +38,7 @@ import { ErrorStateView } from '@/components/common/ErrorStateView';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useCurrentNetwork } from '@/store/networkStore';
+import { redactError } from '@/utils/logRedaction';
 
 // Stable empty reference so a scope mismatch does not churn list identity.
 const EMPTY_TRANSACTIONS: TransactionInfo[] = [];
@@ -152,7 +153,7 @@ export default function TransactionHistoryScreen() {
     try {
       await loadAllTransactions(accountId);
     } catch (error) {
-      console.error('Failed to load transaction history:', error);
+      console.error('Failed to load transaction history:', redactError(error));
     } finally {
       // Always set, even on failure/early-return, so a spinner can never wedge.
       setAttemptedAccountId(accountId);
@@ -183,7 +184,7 @@ export default function TransactionHistoryScreen() {
     try {
       await loadMoreTransactions(activeAccount.id);
     } catch (error) {
-      console.error('Failed to load more transactions:', error);
+      console.error('Failed to load more transactions:', redactError(error));
     } finally {
       loadMoreInFlightRef.current = false;
     }

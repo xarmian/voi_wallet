@@ -15,7 +15,8 @@
         "gradleCommand": ":app:assembleDebug"
       },
       "env": {
-        "APP_VARIANT": "development"
+        "APP_VARIANT": "development",
+        "EXPO_PUBLIC_USE_RN_FETCH": "1"
       },
       "channel": "development"
     },
@@ -31,7 +32,8 @@
         "gradleCommand": ":app:assembleDebug"
       },
       "env": {
-        "APP_VARIANT": "development"
+        "APP_VARIANT": "development",
+        "EXPO_PUBLIC_USE_RN_FETCH": "1"
       },
       "channel": "development-simulator"
     },
@@ -45,6 +47,9 @@
         "buildType": "apk",
         "gradleCommand": ":app:assembleRelease"
       },
+      "env": {
+        "EXPO_PUBLIC_USE_RN_FETCH": "1"
+      },
       "channel": "preview"
     },
     "production": {
@@ -53,6 +58,9 @@
       },
       "android": {
         "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_USE_RN_FETCH": "1"
       },
       "channel": "production"
     }

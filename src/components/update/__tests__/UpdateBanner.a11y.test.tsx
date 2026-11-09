@@ -44,8 +44,8 @@ jest.mock('react-native-reanimated', () => {
   };
 });
 
-const findCard = (root: { findAll: (p: (n: any) => boolean) => any[] }) =>
-  root.findAll(
+const findCard = (root: { queryAll: (p: (n: any) => boolean) => any[] }) =>
+  root.queryAll(
     (node: any) => Array.isArray(node.props?.accessibilityActions) === true
   )[0];
 
@@ -55,13 +55,13 @@ beforeEach(() => {
 });
 
 describe('UpdateBanner accessibility', () => {
-  it('exposes dismiss as a custom action on the grouped card', () => {
+  it('exposes dismiss as a custom action on the grouped card', async () => {
     const onDismiss = jest.fn();
-    const { UNSAFE_root } = render(
+    const { container } = await render(
       <UpdateBanner onInstall={jest.fn()} onDismiss={onDismiss} />
     );
 
-    const card = findCard(UNSAFE_root);
+    const card = findCard(container);
     expect(card.props.accessibilityActions).toEqual([
       { name: 'dismiss', label: 'Dismiss update' },
     ]);
@@ -72,36 +72,36 @@ describe('UpdateBanner accessibility', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores unrelated accessibility actions', () => {
+  it('ignores unrelated accessibility actions', async () => {
     const onDismiss = jest.fn();
-    const { UNSAFE_root } = render(
+    const { container } = await render(
       <UpdateBanner onInstall={jest.fn()} onDismiss={onDismiss} />
     );
 
-    findCard(UNSAFE_root).props.onAccessibilityAction({
+    findCard(container).props.onAccessibilityAction({
       nativeEvent: { actionName: 'activate' },
     });
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
-  it('drops the dismiss action while the update is busy', () => {
-    const { UNSAFE_root } = render(
+  it('drops the dismiss action while the update is busy', async () => {
+    const { container } = await render(
       <UpdateBanner onInstall={jest.fn()} onDismiss={jest.fn()} isInstalling />
     );
 
-    expect(findCard(UNSAFE_root)).toBeUndefined();
+    expect(findCard(container)).toBeUndefined();
   });
 });
 
 describe('UpdateBanner reduce-motion (DR-13)', () => {
-  it('pulses the icon when motion is allowed', () => {
-    render(<UpdateBanner onInstall={jest.fn()} onDismiss={jest.fn()} />);
+  it('pulses the icon when motion is allowed', async () => {
+    await render(<UpdateBanner onInstall={jest.fn()} onDismiss={jest.fn()} />);
     expect(mockWithRepeat).toHaveBeenCalled();
   });
 
-  it('never starts the infinite pulse under Reduce Motion', () => {
+  it('never starts the infinite pulse under Reduce Motion', async () => {
     mockUseReducedMotion.mockReturnValue(true);
-    render(<UpdateBanner onInstall={jest.fn()} onDismiss={jest.fn()} />);
+    await render(<UpdateBanner onInstall={jest.fn()} onDismiss={jest.fn()} />);
     expect(mockWithRepeat).not.toHaveBeenCalled();
   });
 });

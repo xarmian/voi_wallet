@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useMemo, useRef } from 'react';
+import { scopedNavigation } from '@/services/navigation/scopedNavigation';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import algosdk from 'algosdk';
@@ -47,7 +48,12 @@ const resolveAlgorandAddress = (value: string): string | null => {
   return null;
 };
 
-export default function QRScannerScreen({ navigation }: Props) {
+export default function QRScannerScreen({ navigation, route }: Props) {
+  const scoped = useMemo(
+    () => scopedNavigation(navigation, route.key),
+    [navigation, route.key]
+  );
+  const closedRef = useRef(false);
   const getPaymentParamsFromUri = (uri: string): Record<string, any> | null => {
     if (!isAlgorandPaymentUri(uri)) {
       return null;
@@ -95,9 +101,11 @@ export default function QRScannerScreen({ navigation }: Props) {
   };
 
   const handleClose = () => {
+    if (closedRef.current) return;
+    closedRef.current = true;
     // Check if we can go back, otherwise navigate to main
     if (navigation.canGoBack()) {
-      navigation.goBack();
+      scoped.goBack();
     } else {
       navigation.navigate('Main', { screen: 'Home' });
     }
@@ -134,13 +142,7 @@ export default function QRScannerScreen({ navigation }: Props) {
       return;
     }
 
-    setTimeout(() => {
-      if (navigation.canGoBack()) {
-        navigation.goBack();
-      } else {
-        navigation.navigate('Main', { screen: 'Home' });
-      }
-    }, 100);
+    setTimeout(handleClose, 100);
   };
 
   return <QRScanner onClose={handleClose} onSuccess={handleSuccess} />;

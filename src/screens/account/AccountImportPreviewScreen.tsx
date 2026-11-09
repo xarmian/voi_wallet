@@ -26,8 +26,10 @@ import {
   AccountType,
 } from '@/types/wallet';
 import { AccountSecureStorage } from '@/services/secure';
+import { onboardingNeedsSecuritySetup } from '@/services/secure/orphanPin';
 import AccountImportItem from '@/components/account/AccountImportItem';
 import { useTheme } from '@/contexts/ThemeContext';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 type AccountImportPreviewScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -54,7 +56,7 @@ export default function AccountImportPreviewScreen({
   navigation,
   route,
 }: Props) {
-  const { accounts: initialAccounts } = route.params;
+  const { accounts: initialAccounts, isOnboarding } = route.params;
   const { theme } = useTheme();
 
   const [accounts, setAccounts] = useState<ScannedAccount[]>(initialAccounts);
@@ -146,11 +148,14 @@ export default function AccountImportPreviewScreen({
     const selectedAccounts = getSelectedAccounts();
 
     try {
-      // Check if PIN is already set up
-      const hasPin = await AccountSecureStorage.hasPin();
+      // Onboarding routes an orphan PIN through SecuritySetup's healer too
+      // (TASK-417); a strict read failure lands in the catch below.
+      const needsSecuritySetup = isOnboarding
+        ? await onboardingNeedsSecuritySetup()
+        : !(await AccountSecureStorage.hasPin());
 
-      if (!hasPin) {
-        // No PIN setup - route through SecuritySetupScreen
+      if (needsSecuritySetup) {
+        // No usable PIN - route through SecuritySetupScreen
         setIsImporting(false);
         navigation.navigate('SecuritySetup', {
           accounts: selectedAccounts,
@@ -182,7 +187,12 @@ export default function AccountImportPreviewScreen({
             // If upgrading from watch account, delete the watch account first
             if (account.isUpgrade && account.existingAccountId) {
               await MultiAccountWalletService.deleteAccount(
-                account.existingAccountId
+                account.existingAccountId,
+                {
+                  address: account.address,
+                  type: AccountType.WATCH,
+                  keyless: true,
+                }
               );
             }
 
@@ -216,7 +226,10 @@ export default function AccountImportPreviewScreen({
             results.success++;
           }
         } catch (error) {
-          console.error(`Failed to import account ${account.address}:`, error);
+          console.error(
+            `Failed to import account ${redactAddress(account.address)}:`,
+            redactError(error)
+          );
           results.failed++;
           results.errors.push({
             account: account.address,

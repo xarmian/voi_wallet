@@ -29,6 +29,7 @@ import { useWalletStore } from '../../store/walletStore';
 import { NetworkService } from '../../services/network';
 import { AccountBalance } from '../../types/wallet';
 import { getTokenImageSource } from '../../utils/tokenImages';
+import { redactError } from '@/utils/logRedaction';
 
 interface TokenSelectorProps {
   visible: boolean;
@@ -112,7 +113,7 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
           setNetworkBalance(singleNetworkBalance || null);
         }
       } catch (error) {
-        console.error('Error loading network balance:', error);
+        console.error('Error loading network balance:', redactError(error));
         if (!cancelled) setNetworkBalance(singleNetworkBalance || null);
       } finally {
         if (!cancelled) setLoadingBalance(false);
@@ -350,7 +351,7 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
         } catch (error) {
           console.error(
             `Error getting balance for token ${token.symbol}:`,
-            error
+            redactError(error)
           );
           return {
             ...token,

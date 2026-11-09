@@ -21,6 +21,8 @@ import { getSupabaseClient } from '@/services/supabase';
 import { NetworkId } from '@/types/network';
 import { WalletAccount } from '@/types/wallet';
 import { KEY_REGISTRATION_PREFIX, MessagingKeyRegistration } from './types';
+import { withMessagingDeadline } from './requestDeadline';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 /**
  * MIMIR message_keys table row structure
@@ -134,14 +136,17 @@ export async function lookupMessagingKey(
       }
       // If MIMIR query failed, fall back to indexer
       console.warn(
-        `MIMIR lookup failed for ${address}, falling back to indexer`
+        `MIMIR lookup failed for ${redactAddress(address)}, falling back to indexer`
       );
     }
 
     // Fallback to indexer
     return lookupMessagingKeyViaIndexer(address);
   } catch (error) {
-    console.error(`Failed to lookup messaging key for ${address}:`, error);
+    console.error(
+      `Failed to lookup messaging key for ${redactAddress(address)}:`,
+      redactError(error)
+    );
     return null;
   }
 }
@@ -158,17 +163,23 @@ async function lookupMessagingKeyViaMimir(
 
   try {
     // Query the latest key registration for this address from voiwallet schema
-    const { data, error } = await supabase
-      .schema('voiwallet')
-      .from('message_keys')
-      .select('*')
-      .eq('address', address)
-      .order('round', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const { data, error } = await withMessagingDeadline(
+      supabase
+        .schema('voiwallet')
+        .from('message_keys')
+        .select('*')
+        .eq('address', address)
+        .order('round', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      'key registry (Mimir)'
+    );
 
     if (error) {
-      console.error(`MIMIR query error for ${address}:`, error);
+      console.error(
+        `MIMIR query error for ${redactAddress(address)}:`,
+        redactError(error)
+      );
       return undefined; // Trigger fallback
     }
 
@@ -194,7 +205,10 @@ async function lookupMessagingKeyViaMimir(
 
     return registration;
   } catch (error) {
-    console.error(`MIMIR lookup error for ${address}:`, error);
+    console.error(
+      `MIMIR lookup error for ${redactAddress(address)}:`,
+      redactError(error)
+    );
     return undefined; // Trigger fallback
   }
 }
@@ -211,11 +225,14 @@ async function lookupMessagingKeyViaIndexer(
 
     // Query payment transactions for this address
     // Key registrations are self-transfers with the key in the note
-    const response = await indexer
-      .lookupAccountTransactions(address)
-      .txType('pay')
-      .limit(50) // Check recent transactions
-      .do();
+    const response = await withMessagingDeadline(
+      indexer
+        .lookupAccountTransactions(address)
+        .txType('pay')
+        .limit(50) // Check recent transactions
+        .do(),
+      'key registry (indexer)'
+    );
 
     // Search for the most recent key registration
     let latestRegistration: MessagingKeyRegistration | null = null;
@@ -275,7 +292,10 @@ async function lookupMessagingKeyViaIndexer(
 
     return latestRegistration;
   } catch (error) {
-    console.error(`Indexer lookup failed for ${address}:`, error);
+    console.error(
+      `Indexer lookup failed for ${redactAddress(address)}:`,
+      redactError(error)
+    );
     return null;
   }
 }

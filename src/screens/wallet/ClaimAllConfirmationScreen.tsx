@@ -1,3 +1,4 @@
+import { ErrorStateView } from '@/components/common/ErrorStateView';
 /**
  * ClaimAllConfirmationScreen - Confirmation screen for batch claiming multiple tokens
  *
@@ -5,7 +6,13 @@
  * the batch claim transaction.
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+} from 'react';
 import {
   View,
   Text,
@@ -38,14 +45,16 @@ import { GlassButton } from '@/components/common/GlassButton';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { useActiveAccount } from '@/store/walletStore';
 import { fromSerializableClaimableItem } from '@/types/claimable';
-import {
-  Arc200TransactionService,
-  Arc200ClaimParams,
-} from '@/services/transactions/arc200';
+import { Arc200TransactionService } from '@/services/transactions/arc200';
 import { NetworkService } from '@/services/network';
 import EnvoiService, { EnvoiSearchResult } from '@/services/envoi';
 import { normalizeAssetImageUrl } from '@/utils/assetImages';
-import { toErrorAlert } from '@/utils/errorMapping';
+import {
+  ErrorAlertContent,
+  PENDING_TRANSACTION_ALERT,
+  toErrorAlert,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 import {
   resolveAddressOrName,
   isLikelyEnvoiName,
@@ -55,6 +64,8 @@ import { NetworkId } from '@/types/network';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import type { WalletStackParamList } from '@/navigation/AppNavigator';
+import { ARC200_RECONFIRM_MESSAGE } from '@/services/transactions/arc200MbrRace';
+import { useArc200Confirmation } from '@/hooks/useArc200Confirmation';
 
 // Claimable tokens are always on Voi network
 const CLAIM_NETWORK_ID = NetworkId.VOI_MAINNET;
@@ -94,7 +105,10 @@ export default function ClaimAllConfirmationScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<ClaimAllRouteProp>();
 
-  const items = route.params.items.map(fromSerializableClaimableItem);
+  const items = useMemo(
+    () => route.params.items.map(fromSerializableClaimableItem),
+    [route.params.items]
+  );
   const activeAccount = useActiveAccount();
 
   const [sendToSelf, setSendToSelf] = useState(true);
@@ -106,7 +120,6 @@ export default function ClaimAllConfirmationScreen() {
     null
   );
   const [isClaiming, setIsClaiming] = useState(false);
-  const [estimatedFee, setEstimatedFee] = useState<number>(0);
   const [isRecipientModalVisible, setIsRecipientModalVisible] = useState(false);
   const [searchResults, setSearchResults] = useState<EnvoiSearchResult[]>([]);
   const [isSearchingNames, setIsSearchingNames] = useState(false);
@@ -268,58 +281,34 @@ export default function ClaimAllConfirmationScreen() {
     []
   );
 
-  // Estimate transaction fee (including MBR where needed)
-  useEffect(() => {
-    const estimateFee = async () => {
+  const buildClaim = useCallback(
+    (forceMbrPayment = false) => {
       if (
-        !finalRecipientAddress ||
+        !activeAccount?.address ||
         !algosdk.isValidAddress(finalRecipientAddress)
-      ) {
-        // Default estimate assuming all need MBR (worst case)
-        try {
-          const costEstimate = await Arc200TransactionService.estimateClaimCost(
-            items.length,
-            items.length,
-            CLAIM_NETWORK_ID
-          );
-          setEstimatedFee(costEstimate.total);
-        } catch {
-          setEstimatedFee(1000 * items.length);
-        }
-        return;
-      }
-
-      try {
-        // Check which tokens need MBR for the recipient
-        const uniqueContractIds = [
-          ...new Set(items.map((item) => item.contractId)),
-        ];
-        let needsMbrCount = 0;
-
-        for (const contractId of uniqueContractIds) {
-          const hasBalance =
-            await Arc200TransactionService.checkRecipientBalance(
-              finalRecipientAddress,
-              contractId
-            );
-          if (!hasBalance) {
-            needsMbrCount++;
-          }
-        }
-
-        const costEstimate = await Arc200TransactionService.estimateClaimCost(
-          items.length,
-          needsMbrCount,
-          CLAIM_NETWORK_ID
-        );
-        setEstimatedFee(costEstimate.total);
-      } catch (error) {
-        console.error('Failed to estimate fee:', error);
-        setEstimatedFee(1000 * items.length);
-      }
-    };
-    estimateFee();
-  }, [items, finalRecipientAddress]);
+      )
+        return undefined;
+      return Arc200TransactionService.buildBatchClaimTransactionGroup(
+        items.map((item) => ({
+          contractId: item.contractId,
+          from: item.owner,
+          to: finalRecipientAddress,
+          amount: item.amount,
+          sender: activeAccount.address,
+        })),
+        CLAIM_NETWORK_ID,
+        forceMbrPayment
+      );
+    },
+    [activeAccount, finalRecipientAddress, items]
+  );
+  const {
+    group: txnGroup,
+    fee: estimatedFee,
+    recover,
+    buildError,
+    retry,
+  } = useArc200Confirmation(buildClaim);
 
   // Handle batch claim - navigate to universal signing screen
   const handleClaimAll = useCallback(async () => {
@@ -336,21 +325,8 @@ export default function ClaimAllConfirmationScreen() {
     setIsClaiming(true);
 
     try {
-      // Build claim params for each item
-      const claimParams: Arc200ClaimParams[] = items.map((item) => ({
-        contractId: item.contractId,
-        from: item.owner,
-        to: finalRecipientAddress,
-        amount: item.amount,
-        sender: activeAccount.address,
-      }));
-
-      // Build the batch transaction group (always on Voi network)
-      const txnGroup =
-        await Arc200TransactionService.buildBatchClaimTransactionGroup(
-          claimParams,
-          CLAIM_NETWORK_ID
-        );
+      if (!txnGroup) return;
+      hasSubmittedRef.current = false;
 
       // Encode transactions as base64 for UniversalTransactionSigning
       const base64Transactions = txnGroup.txnBytes.map((txnBytes) =>
@@ -365,12 +341,13 @@ export default function ClaimAllConfirmationScreen() {
             console.log('Transaction already submitted, skipping duplicate');
             return;
           }
-          hasSubmittedRef.current = true;
 
-          // Submit the signed transactions to Voi network
+          // Submit the signed transactions to Voi network. Set when it was,
+          // or may have been, submitted and is not confirmed: pending, never
+          // failed, and the latch stays held so the group can't submit again.
+          let unsettled: ErrorAlertContent | undefined;
           try {
             const networkService = NetworkService.getInstance(CLAIM_NETWORK_ID);
-            const algodClient = networkService.getAlgodClient();
             // DR-1: a `null` slot means the signer DECLINED that entry
             // (ARC-0001). `Buffer.from(null, 'base64')` would throw a bare
             // TypeError here; submitting a hole would corrupt the group. Fail
@@ -384,31 +361,61 @@ export default function ClaimAllConfirmationScreen() {
             const signedTxns = rawSigned.map(
               (txn) => new Uint8Array(Buffer.from(txn as string, 'base64'))
             );
-            await algodClient.sendRawTransaction(signedTxns).do();
-
-            // Navigate back to claimable tokens list with pending refresh
-            navigation.dispatch(
-              CommonActions.reset({
-                index: 1,
-                routes: [
-                  { name: 'HomeMain' },
-                  {
-                    name: 'ClaimableTokens',
-                    params: {
-                      pendingRefresh: true,
-                      claimedItemIds: items.map((item) => item.id),
-                    },
-                  },
-                ],
-              })
-            );
+            hasSubmittedRef.current = true;
+            // Through submitTransaction, so an ambiguous send is resent with
+            // the same bytes and reconciled by txid, never reported as a
+            // failure (TASK-440 #8, TASK-451).
+            const { confirmed } =
+              await networkService.submitTransaction(signedTxns);
+            if (!confirmed) unsettled = PENDING_TRANSACTION_ALERT;
           } catch (submitError) {
-            const message =
-              submitError instanceof Error
-                ? submitError.message
-                : 'Failed to submit transaction';
-            Alert.alert('Submission Failed', message);
+            unsettled = toUnsettledTransactionAlert(submitError);
+            if (!unsettled) {
+              // Hold the latch THROUGH recovery (a second success callback for
+              // the old group must not submit while recover() awaits), then
+              // release it on every path, so the reconfirmed group can submit
+              // through this same callback (TASK-418 + TASK-416).
+              let recoveryResult: Awaited<ReturnType<typeof recover>> = false;
+              try {
+                recoveryResult = await recover(submitError, txnGroup);
+              } catch {
+                // A failed recovery is no recovery: show the original error.
+                recoveryResult = false;
+              } finally {
+                hasSubmittedRef.current = false;
+              }
+              if (recoveryResult) {
+                navigation.goBack();
+                if (recoveryResult === 'rebuilt')
+                  Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
+                return;
+              }
+              const message =
+                submitError instanceof Error
+                  ? submitError.message
+                  : 'Failed to submit transaction';
+              Alert.alert('Submission Failed', message);
+              return;
+            }
           }
+
+          // Navigate back to claimable tokens list with pending refresh
+          navigation.dispatch(
+            CommonActions.reset({
+              index: 1,
+              routes: [
+                { name: 'HomeMain' },
+                {
+                  name: 'ClaimableTokens',
+                  params: {
+                    pendingRefresh: true,
+                    claimedItemIds: items.map((item) => item.id),
+                  },
+                },
+              ],
+            })
+          );
+          if (unsettled) Alert.alert(unsettled.title, unsettled.message);
         },
         onReject: async () => {
           // User cancelled - just go back
@@ -433,12 +440,20 @@ export default function ClaimAllConfirmationScreen() {
     } finally {
       setIsClaiming(false);
     }
-  }, [activeAccount, finalRecipientAddress, items, navigation]);
+  }, [
+    activeAccount,
+    finalRecipientAddress,
+    items,
+    navigation,
+    txnGroup,
+    recover,
+  ]);
 
   const canClaim =
     activeAccount?.address &&
     finalRecipientAddress &&
     algosdk.isValidAddress(finalRecipientAddress) &&
+    !!txnGroup &&
     !isClaiming &&
     !isResolvingName;
 
@@ -640,6 +655,14 @@ export default function ClaimAllConfirmationScreen() {
             )}
           </GlassCard>
 
+          {!!buildError && (
+            <ErrorStateView
+              error={buildError}
+              onRetry={retry}
+              variant="inline"
+              fallbackMessage="Unable to prepare transaction. Please retry."
+            />
+          )}
           {/* Fee Estimate */}
           <View style={styles.feeContainer}>
             <Text style={styles.feeLabel}>Estimated Max Fee</Text>

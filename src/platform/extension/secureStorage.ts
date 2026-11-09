@@ -140,8 +140,9 @@ export class ExtensionSecureStorageAdapter implements SecureStorageAdapter {
       // A PRESENT-but-undecryptable item is a genuine read/decrypt FAILURE, NOT
       // absence. THROW so fail-closed callers (auth-init strict reads, TASK-213)
       // can distinguish it from "no value"; the error-swallowing callers
-      // (hasPin/getCurrentWallet/...) still catch and resolve falsy, so their
-      // contract is unchanged. Never log the ciphertext or decrypted plaintext.
+      // (getCurrentWallet/...) still catch and resolve falsy, so their contract
+      // is unchanged. hasPin() propagates it (TASK-455). Never log the
+      // ciphertext or decrypted plaintext.
       console.error('Failed to decrypt secure storage item');
       throw new Error('Secure storage decrypt failed');
     }

@@ -2,6 +2,11 @@
 // so the RN/Expo module graph resolves the same way the app does.
 module.exports = {
   preset: 'jest-expo',
+  // reanimated 4.7 / worklets 0.13 need their own jest resolver, which picks
+  // the right platform build of a few modules under jest. Without it worklets
+  // fail to initialise ("loadUnpackersWithCode" undefined / "runOnUISync is
+  // not supported on web").
+  resolver: 'react-native-reanimated/jest/resolver',
   setupFiles: ['<rootDir>/jest.setup.js'],
   moduleNameMapper: {
     // Mirror the tsconfig `@/*` path alias.

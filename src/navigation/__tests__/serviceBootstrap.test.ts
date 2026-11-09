@@ -1,3 +1,7 @@
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+
 /**
  * Regression test for TASK-243.
  *
@@ -23,6 +27,7 @@
 
 import { initializeServices } from '../serviceBootstrap';
 import { isAccountSubscribeTokenCurrent } from '@/services/notifications/subscribePass';
+import { settleLegacyQueue } from '@/services/walletconnect/legacyQueueMigration';
 
 // --- Mock leaves (all prefixed `mock` so jest can hoist them into factories) ---
 const mockWcService = {
@@ -34,6 +39,7 @@ const mockDeepLinkService = {
   setNavigationRef: jest.fn(),
   initialize: jest.fn(async () => {}),
   testDeepLink: jest.fn(async () => {}),
+  cleanup: jest.fn(),
 };
 const mockExtensionDeepLinkHandler = {
   initialize: jest.fn(),
@@ -46,13 +52,6 @@ const mockNotificationService = {
     async (_accounts: unknown[], _subscribeToken?: number) => {}
   ),
   cleanup: jest.fn(),
-};
-const mockTxnQueue = {
-  enqueue: jest.fn(async () => {}),
-  setProcessing: jest.fn(async () => {}),
-  isEmpty: jest.fn(async () => true),
-  peek: jest.fn(async () => null),
-  dequeue: jest.fn(async () => {}),
 };
 // Mutable app mode driven per test ('user' vs 'signer').
 let mockAppMode = 'user';
@@ -113,10 +112,8 @@ jest.mock('@/services/ledger/transport', () => ({
   },
 }));
 
-jest.mock('@/services/walletconnect/TransactionRequestQueue', () => ({
-  get TransactionRequestQueue() {
-    return mockTxnQueue;
-  },
+jest.mock('@/services/walletconnect/legacyQueueMigration', () => ({
+  settleLegacyQueue: jest.fn(async () => {}),
 }));
 
 jest.mock('@/platform/detection', () => ({
@@ -166,6 +163,7 @@ describe('serviceBootstrap.initializeServices — TASK-243 teardown wiring', () 
     expect(mockWcService.off).not.toHaveBeenCalled();
     expect(mockExtensionDeepLinkHandler.cleanup).not.toHaveBeenCalled();
     expect(mockNotificationService.cleanup).not.toHaveBeenCalled();
+    expect(mockDeepLinkService.cleanup).not.toHaveBeenCalled();
 
     // Simulate the effect's synchronous unmount cleanup.
     cleanupRef.current!();
@@ -182,6 +180,8 @@ describe('serviceBootstrap.initializeServices — TASK-243 teardown wiring', () 
     // ...and the deep-link + notification services are cleaned up.
     expect(mockExtensionDeepLinkHandler.cleanup).toHaveBeenCalledTimes(1);
     expect(mockNotificationService.cleanup).toHaveBeenCalledTimes(1);
+    // TASK-381: the deep-link Linking subscription + route queue too.
+    expect(mockDeepLinkService.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it('tears services down IMMEDIATELY when the effect already unmounted before boot completed (isDisposed)', async () => {
@@ -279,6 +279,24 @@ describe('serviceBootstrap.initializeServices — deferred subscribe abort token
     mockNotificationService.registerPushToken.mockResolvedValue('expo-token');
   });
 
+  it('registers without prompting and skips account subscriptions when no token is available (TASK-433)', async () => {
+    mockNotificationService.registerPushToken.mockResolvedValue(null);
+    const cleanupRef = makeCleanupRef();
+
+    await initializeServices({
+      navigationRef: { current: null },
+      initializeNetwork: jest.fn(async () => {}),
+      cleanupRef,
+    });
+    await flush();
+
+    expect(mockNotificationService.registerPushToken).toHaveBeenCalledWith({
+      prompt: false,
+    });
+    expect(mockNotificationService.subscribeAllAccounts).not.toHaveBeenCalled();
+    cleanupRef.current!();
+  });
+
   it('hands the deferred subscribe a live token, which the teardown then invalidates', async () => {
     const cleanupRef = makeCleanupRef();
 
@@ -350,5 +368,58 @@ describe('serviceBootstrap.initializeServices — deferred subscribe abort token
     const [, subscribeToken] =
       mockNotificationService.subscribeAllAccounts.mock.calls[0];
     expect(isAccountSubscribeTokenCurrent(subscribeToken!)).toBe(false);
+  });
+});
+
+describe('serviceBootstrap.initializeServices — legacy queue migration order', () => {
+  beforeEach(() => {
+    mockAppMode = 'user';
+    mockGetCurrentWallet.mockResolvedValue(null);
+    mockNotificationService.registerPushToken.mockResolvedValue(null);
+    mockWcService.initialize.mockImplementation(async () => {});
+  });
+
+  it('does not answer the legacy queue until WalletConnect initialize resolves', async () => {
+    let finishInit!: () => void;
+    mockWcService.initialize.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishInit = resolve;
+        })
+    );
+
+    const booting = initializeServices({
+      navigationRef: { current: null },
+      initializeNetwork: jest.fn(async () => {}),
+      cleanupRef: makeCleanupRef(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // initialize() is in flight, so no transport can send yet.
+    expect(mockWcService.initialize).toHaveBeenCalledTimes(1);
+    expect(settleLegacyQueue).not.toHaveBeenCalled();
+
+    finishInit();
+    await booting;
+
+    expect(settleLegacyQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the legacy queue for the next launch when initialize fails', async () => {
+    mockWcService.initialize.mockRejectedValueOnce(new Error('init failed'));
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+
+    await initializeServices({
+      navigationRef: { current: null },
+      initializeNetwork: jest.fn(async () => {}),
+      cleanupRef: makeCleanupRef(),
+    });
+
+    expect(mockWcService.initialize).toHaveBeenCalledTimes(1);
+    expect(settleLegacyQueue).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });

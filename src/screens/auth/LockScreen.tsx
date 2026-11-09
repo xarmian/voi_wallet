@@ -1,6 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from 'react';
 import {
   Alert,
+  AppState,
   View,
   Text,
   StyleSheet,
@@ -10,6 +18,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { RequestQueue } from '@/services/walletconnect/requestQueue';
+import { buildWaitingSummary } from '@/services/walletconnect/waitingSummary';
+import { useLockFocus } from '@/contexts/LockFocusContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
@@ -17,8 +28,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure';
 import type { PinThrottleState } from '@/services/secure';
 import type { SecretSource } from '@/services/secure/SessionKeyVault';
-import { MultiAccountWalletService } from '@/services/wallet';
+import { wipeWalletData } from '@/services/wipe';
+import {
+  showWipeCompleteNotice,
+  showWipeIncompleteNotice,
+} from '@/services/wipe/notices';
 import { hapticNotify } from '@/utils/haptics';
+import { redactError } from '@/utils/logRedaction';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
 
 // Cross-platform alert helper
@@ -49,6 +65,22 @@ const showAlert = (
   }
 };
 
+// One authentication (PIN, passphrase or biometric) at a time. Kept behind a
+// hook so the flag is only read from event handlers and effects, never during
+// render, and the compiler does not treat it as render-reachable.
+function useAuthenticationGuard() {
+  const active = useRef(false);
+  const tryBegin = useCallback(() => {
+    if (active.current) return false;
+    active.current = true;
+    return true;
+  }, []);
+  const end = useCallback(() => {
+    active.current = false;
+  }, []);
+  return useMemo(() => ({ tryBegin, end }), [tryBegin, end]);
+}
+
 // Format a remaining-lockout duration as M:SS for the live countdown.
 const formatCountdown = (ms: number): string => {
   const totalSeconds = Math.ceil(ms / 1000);
@@ -57,11 +89,37 @@ const formatCountdown = (ms: number): string => {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 };
 
+function useWaitingSummary(visible: boolean) {
+  const queue = RequestQueue.getInstance();
+  const subscribe = useCallback(
+    (listener: () => void) => queue.subscribe(listener),
+    [queue]
+  );
+  const getSnapshot = useCallback(() => queue.getSnapshot(), [queue]);
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!visible) return;
+    const interval = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(interval);
+  }, [visible]);
+  return visible ? buildWaitingSummary(snapshot, now) : null;
+}
+
 export default function LockScreen() {
+  const focus = useLockFocus();
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const { authState, unlock, unlockWithBiometrics, recheckAuthState } =
-    useAuth();
+  const {
+    authState,
+    unlock,
+    unlockWithBiometrics,
+    recheckAuthState,
+    consumeUnlockRefusal,
+  } = useAuth();
+  const summary = useWaitingSummary(
+    authState.isLocked || !authState.isAuthenticated
+  );
   const [pin, setPin] = useState('');
   // The stored credential kind decides the input: numeric keypad for a PIN, a
   // masked text field for a passphrase (PR7). Defaults to 'pin' until the read
@@ -97,7 +155,7 @@ export default function LockScreen() {
       const state = await AccountSecureStorage.getPinThrottleState();
       setThrottle(state);
     } catch (error) {
-      console.error('Failed to read PIN throttle state:', error);
+      console.error('Failed to read PIN throttle state:', redactError(error));
     } finally {
       // Hydrated regardless of success — on a read error the service still
       // fails closed, and we don't want to strand input disabled forever.
@@ -154,25 +212,97 @@ export default function LockScreen() {
     return () => clearInterval(interval);
   }, [throttle.lockedUntil, refreshThrottle]);
 
+  const authentication = useAuthenticationGuard();
+  const focusGeneration = useRef(0);
+  const focused = useRef(false);
+  const biometricAttempted = useRef(false);
+  const pendingActive = useRef<
+    ReturnType<typeof AppState.addEventListener> | undefined
+  >(undefined);
+  const biometricAuth = useRef({
+    enabled: authState.biometricEnabled,
+    unlock: unlockWithBiometrics,
+  });
+  // Keep the latest values for the focus handler. Declared before the focus
+  // effect, so both run in the same commit and the handler never reads stale ones.
   useEffect(() => {
-    if (authState.biometricEnabled) {
-      promptBiometric();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric prompt when biometrics become enabled, keyed on authState.biometricEnabled; promptBiometric is read at that commit and must not re-fire on its own identity.
-  }, [authState.biometricEnabled]);
+    biometricAuth.current = {
+      enabled: authState.biometricEnabled,
+      unlock: unlockWithBiometrics,
+    };
+  }, [authState.biometricEnabled, unlockWithBiometrics]);
 
-  const promptBiometric = async () => {
-    try {
-      const success = await unlockWithBiometrics();
-      if (success) {
-        hapticNotify('success');
+  const promptBiometric = useCallback(
+    async (manual = false) => {
+      if (
+        !biometricAuth.current.enabled ||
+        !focus.isFocused() ||
+        AppState.currentState !== 'active' ||
+        (!manual && biometricAttempted.current)
+      )
+        return;
+      if (!authentication.tryBegin()) return;
+      pendingActive.current?.remove();
+      pendingActive.current = undefined;
+      biometricAttempted.current = true;
+      const generation = focusGeneration.current;
+      const isCurrent = () =>
+        generation === focusGeneration.current &&
+        focus.isFocused() &&
+        AppState.currentState !== 'background';
+      try {
+        const success = await biometricAuth.current.unlock(isCurrent);
+        if (success && isCurrent()) hapticNotify('success');
+      } catch (error) {
+        console.error('Biometric authentication error:', redactError(error));
+      } finally {
+        authentication.end();
       }
-      // On !success the user cancelled or biometrics failed; no error haptic —
-      // a cancel is a normal path to the PIN pad and shouldn't buzz.
-    } catch (error) {
-      console.error('Biometric authentication error:', error);
-    }
-  };
+    },
+    [focus, authentication]
+  );
+
+  useEffect(() => {
+    const onFocus = () => {
+      if (focused.current) {
+        if (!biometricAttempted.current) void promptBiometric();
+        return;
+      }
+      focused.current = true;
+      focusGeneration.current++;
+      biometricAttempted.current = false;
+      const generation = focusGeneration.current;
+      if (AppState.currentState === 'active') {
+        void promptBiometric();
+      } else {
+        pendingActive.current = AppState.addEventListener('change', (state) => {
+          if (
+            state !== 'active' ||
+            generation !== focusGeneration.current ||
+            biometricAttempted.current
+          )
+            return;
+          pendingActive.current?.remove();
+          pendingActive.current = undefined;
+          void promptBiometric();
+        });
+      }
+    };
+    const onBlur = () => {
+      focused.current = false;
+      focusGeneration.current++;
+      pendingActive.current?.remove();
+      pendingActive.current = undefined;
+    };
+    const removeFocus = focus.addListener('focus', onFocus);
+    const removeBlur = focus.addListener('blur', onBlur);
+    if (focus.isFocused()) onFocus();
+    return () => {
+      onBlur();
+      removeFocus();
+      removeBlur();
+    };
+  }, [focus, promptBiometric]);
 
   const handleNumberPress = (number: string) => {
     if (inputDisabled || pin.length >= 6) return;
@@ -191,12 +321,17 @@ export default function LockScreen() {
   };
 
   const verifyPin = async (enteredPin: string) => {
+    if (!authentication.tryBegin()) {
+      setPin('');
+      return;
+    }
     try {
       // unlock() -> AccountSecureStorage.verifyPin() applies the persistent
       // throttle internally (and returns a plain boolean). We read the resulting
       // lockout/remaining-attempts back via the separate throttle-state query.
-      const success = await unlock(enteredPin);
+      const success = await unlock(enteredPin, () => focus.isFocused());
       setPin('');
+      if (!focus.isFocused()) return;
 
       if (success) {
         hapticNotify('success');
@@ -206,6 +341,12 @@ export default function LockScreen() {
         });
         return;
       }
+
+      // TASK-469: unlock refused because a wipe is pending. The PIN was never
+      // checked and the attempt counter was not touched, so this is NOT an
+      // incorrect PIN: say nothing here and leave the throttle as it is. The
+      // auth check the refusal ran shows the right screen or notice itself.
+      if (consumeUnlockRefusal() === 'wipe_pending') return;
 
       hapticNotify('error');
       // getPinThrottleState() returns lockedUntil=null once a lockout has
@@ -229,9 +370,12 @@ export default function LockScreen() {
         );
       }
     } catch (error) {
-      console.error('Secret verification error:', error);
+      setPin('');
+      console.error('Secret verification error:', redactError(error));
       hapticNotify('error');
       showAlert('Error', `Failed to verify ${secretNoun}`);
+    } finally {
+      authentication.end();
     }
   };
 
@@ -279,36 +423,33 @@ export default function LockScreen() {
   };
 
   const performReset = async () => {
+    // TASK-469: one bounded, verified wipe. It resolves ONLY when everything is
+    // erased; on any failure the user stays on this screen with a plain message
+    // and the wipe request stays recorded, so the next launch finishes it.
     try {
-      // Clear all secure storage
-      await AccountSecureStorage.clearAll();
-
-      // Clear wallet data
-      await MultiAccountWalletService.clearAllWallets();
-
-      // Reset local state (clearAll() also wipes the persisted PIN throttle).
-      setPin('');
-      setThrottle({
-        lockedUntil: null,
-        attemptsRemaining: SECURITY_CONFIG.PIN_ATTEMPT_LIMIT,
-      });
-
-      // Force the AuthContext to re-check the initial state
-      await recheckAuthState();
-
-      showAlert(
-        'Reset Complete',
-        'All application data has been cleared. You can now set up a new wallet.',
-        [
-          {
-            text: 'OK',
-          },
-        ]
-      );
+      await wipeWalletData();
     } catch (error) {
-      console.error('Reset error:', error);
-      showAlert('Error', 'Failed to reset application. Please try again.');
+      console.error('Reset error:', redactError(error));
+      showWipeIncompleteNotice();
+      return;
     }
+
+    // Reset local state (the wipe also erased the persisted PIN throttle).
+    setPin('');
+    setThrottle({
+      lockedUntil: null,
+      attemptsRemaining: SECURITY_CONFIG.PIN_ATTEMPT_LIMIT,
+    });
+
+    // Force the AuthContext to re-check the initial state
+    try {
+      await recheckAuthState();
+    } catch (error) {
+      console.error('Reset recheck error:', redactError(error));
+    }
+
+    // Shown only here: after the wipe reported complete.
+    showWipeCompleteNotice();
   };
 
   const renderPinDots = () => {
@@ -413,7 +554,11 @@ export default function LockScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.content}>
-        <View style={styles.header}>
+        <View
+          style={
+            summary ? [styles.header, styles.headerWithSummary] : styles.header
+          }
+        >
           <Ionicons name="lock-closed" size={48} color={theme.colors.primary} />
           <Text style={styles.title}>Wallet Locked</Text>
           <Text style={styles.subtitle}>
@@ -421,6 +566,23 @@ export default function LockScreen() {
               ? `Enter your ${secretNoun} to unlock`
               : 'Checking status…'}
           </Text>
+          {summary && (
+            <View style={styles.summary}>
+              <Text style={styles.summaryTitle}>{summary.title}</Text>
+              <Text style={styles.summaryLine}>{summary.dappLine}</Text>
+              <Text style={styles.summaryLine} numberOfLines={1}>
+                {summary.detailLine}
+              </Text>
+              <Text style={styles.summaryLine} numberOfLines={1}>
+                {summary.ageLine}
+              </Text>
+              {summary.moreLine && (
+                <Text style={styles.summaryLine} numberOfLines={1}>
+                  {summary.moreLine}
+                </Text>
+              )}
+            </View>
+          )}
         </View>
 
         {!isPassphrase && renderPinDots()}
@@ -428,7 +590,7 @@ export default function LockScreen() {
         {authState.biometricEnabled && !isLocked && (
           <TouchableOpacity
             style={styles.biometricButton}
-            onPress={promptBiometric}
+            onPress={() => promptBiometric(true)}
           >
             <Ionicons
               name="finger-print"
@@ -504,6 +666,27 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
       marginTop: theme.spacing.lg,
       marginBottom: theme.spacing.sm,
+    },
+    // The waiting summary must not push the keypad off a small screen, so the
+    // header gives up most of its bottom margin and the detail lines stay on
+    // one row each. The dApp line may wrap, so the host stays readable.
+    headerWithSummary: {
+      marginBottom: theme.spacing.lg,
+    },
+    summary: {
+      alignItems: 'center',
+      marginTop: theme.spacing.md,
+    },
+    summaryLine: {
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+      textAlign: 'center',
+    },
+    summaryTitle: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: theme.colors.text,
+      textAlign: 'center',
     },
     subtitle: {
       fontSize: 16,

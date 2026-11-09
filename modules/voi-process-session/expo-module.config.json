@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["VoiProcessSessionModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.voiprocesssession.VoiProcessSessionModule"]
+  }
+}

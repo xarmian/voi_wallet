@@ -9,6 +9,7 @@ import {
 
 // Buffer polyfill for extension compatibility
 import { Buffer } from 'buffer';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 
 // Use crypto-js (pure JS, works in RN/Expo and browser) with explicit side-effect imports
 import CryptoJS from 'crypto-js';
@@ -29,8 +30,10 @@ import {
   RekeyedAccountMetadata,
   SecureAccountStorage,
   AccountStorageError,
+  WipeIncompleteError,
   AccountRetrievalError,
   AccountNotFoundError,
+  AccountDeletionPreconditionError,
   AuthenticationRequiredError,
   ResetRacedError,
   DuplicatePendingCreateError,
@@ -46,10 +49,37 @@ import {
 } from './envelopeV2';
 import { SessionKeyVault, VaultLockedError } from './SessionKeyVault';
 import type { SecretSource } from './SessionKeyVault';
-import { clearPinSetupPending } from './pinSetupPending';
+import {
+  clearPinSetupPending,
+  readPinSetupPendingStrict,
+} from './pinSetupPending';
 import { SECURITY_CONFIG } from '../../config/security';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { pbkdf2Hex } from './pbkdf2Kdf';
+import { redactError } from '@/utils/logRedaction';
+import {
+  boundedSet,
+  boundedDelete,
+  classifyUnknownWrite,
+  UnknownJournalCorruptError,
+  UNKNOWN_WRITES_STORAGE_KEY,
+  WRITE_TIMEOUT_MS,
+  WriteOutcomeUnknownError,
+  WriteUnresolvedError,
+  isCurrentSessionId,
+  hasPendingRecord,
+  hasUnsettledPendingRecord,
+  newDeleteAttempt,
+  type UnknownWriteEntry,
+  type UnknownJournal,
+  type WriteContext,
+} from './boundedWrites';
+
+/** Handed to a runWithConfirmedAbsentSecrets action; set when its time bound fires. */
+export type ConfirmedAbsentActionSignal = {
+  aborted: boolean;
+  committed: boolean;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PIN THROTTLE — THREAT MODEL (DOC-137 §8 / TASK-26). READ BEFORE CHANGING.
@@ -87,6 +117,26 @@ import { pbkdf2Hex } from './pbkdf2Kdf';
 const { PIN_ATTEMPT_LIMIT, PIN_LOCKOUT_DURATION } = SECURITY_CONFIG;
 const THROTTLE_BACKOFF_CAP_MS = 24 * 60 * 60 * 1000; // hard cap: 24h
 
+/** TASK-504: what an account id's secret slot holds, and the vault state the
+ *  answer was taken under. See AccountSecureStorage.inspectSecretSlot. */
+export interface SecretSlotInspection {
+  state: 'empty' | 'key-matches' | 'key-other' | 'occupied-unreadable';
+  vault: 'locked' | 'unlocked';
+}
+
+/**
+ * TASK-504: the session vault was locked, unlocked or replaced while a restore's
+ * slot check was reading. A result taken across that change was not taken under
+ * ONE vault state (a healthy PIN-wrapped key reads occupied-unreadable once the
+ * vault empties), so it must never decide a write. The restore stops.
+ */
+export class VaultChangedDuringReadError extends Error {
+  constructor() {
+    super('The session vault changed while a stored key was being checked');
+    this.name = 'VaultChangedDuringReadError';
+  }
+}
+
 /**
  * Persisted PIN-throttle record. Lives in SecureStore under
  * `voi_pin_throttle` so the lockout SURVIVES an app relaunch (killing the app
@@ -119,6 +169,8 @@ type PersistedAccountMetadata = Omit<
 >;
 
 interface AccountSecretPayload {
+  /** Random write marker outside the envelope MAC; never derived from a value. */
+  writeNonce?: string;
   accountId: string;
   /**
    * Legacy 4-colon (Format A/B/C) ciphertext, OR '' once fully migrated to v2.
@@ -238,7 +290,22 @@ export class AccountSecureStorage {
   // inside clearAll (non-reentrant chain → deadlock).
   // ───────────────────────────────────────────────────────────────────────────
   private static readonly SECURE_WIPE_TOMBSTONE_KEY = 'voi_secure_wiped';
+  /**
+   * TASK-469: durable "a wipe was requested and has not completed" marker, in
+   * general storage (non-secret). Written, and verified, BEFORE the first delete;
+   * cleared only after the whole wipe is complete. A boot that finds it finishes
+   * the wipe before routing anywhere, so a wipe that left the device in a state
+   * that routes to onboarding (phantom accounts pruned, PIN gone) cannot be
+   * mistaken for a finished one.
+   */
+  static readonly WIPE_INTENT_KEY = 'voi_wipe_intent';
   private static readonly PENDING_CREATES_KEY = 'voi_pending_account_creates';
+  private static readonly QUARANTINED_IDS_KEY = 'voi_reconcile_quarantined_ids';
+  private static readonly UNEXPLAINED_REMOVALS_KEY =
+    'voi_reconcile_unexplained_removals';
+  private static readonly RECONCILE_RECOVERY_MARKER_KEY =
+    'voi_reconcile_recovery_required';
+  private static readonly RECONCILE_ACTION_TIMEOUT_MS = 5000;
   private static secureResetGeneration = 0;
   private static pendingCreateTokenCounter = 0;
 
@@ -292,6 +359,329 @@ export class AccountSecureStorage {
     { key: Uint8Array; timestamp: number }
   > = new Map();
   private static readonly CACHE_TTL_MS = 60000; // 60 seconds as suggested
+  /** Bound on the keychain reads an account store makes (TASK-449): the PIN
+   *  presence read, the legacy account-list fallback and the device-id read.
+   *  Matches the 5 s wallet-blob legacy bound (TASK-443). */
+  private static readonly KEYCHAIN_READ_TIMEOUT_MS = 5000;
+
+  private static unknownJournalChain: Promise<unknown> = Promise.resolve();
+  private static unknownJournalWriteCounter = 0;
+  private static unknownJournalDesired:
+    Record<string, UnknownWriteEntry> | null | undefined;
+  private static readonly unknownJournal: UnknownJournal = {
+    get: async (key) => (await this.readUnknownWritesStrict())[key],
+    add: (entry) =>
+      this.mutateUnknownWrites((entries) => {
+        entries[entry.key] = entry;
+      }),
+    remove: (key) =>
+      this.mutateUnknownWrites((entries) => {
+        delete entries[key];
+      }),
+    removeIf: (key, expected) =>
+      this.mutateUnknownWrites((entries) => {
+        const current = entries[key];
+        if (
+          current &&
+          current.op === expected.op &&
+          current.at === expected.at &&
+          current.attempt === expected.attempt &&
+          current.sessionId === expected.sessionId
+        )
+          delete entries[key];
+      }),
+  };
+
+  private static async readUnknownWritesTolerant(): Promise<
+    Record<string, UnknownWriteEntry>
+  > {
+    const raw = await this.withTimeout(
+      storage.getItem(UNKNOWN_WRITES_STORAGE_KEY),
+      WRITE_TIMEOUT_MS,
+      'unknown-write journal read'
+    );
+    if (raw === null) return {};
+    try {
+      const entries = JSON.parse(raw) as Record<string, UnknownWriteEntry>;
+      return entries && typeof entries === 'object' && !Array.isArray(entries)
+        ? entries
+        : {};
+    } catch {
+      return {};
+    }
+  }
+
+  static async readUnknownWritesStrict(): Promise<
+    Record<string, UnknownWriteEntry>
+  > {
+    const raw = await this.withTimeout(
+      storage.getItem(UNKNOWN_WRITES_STORAGE_KEY),
+      WRITE_TIMEOUT_MS,
+      'unknown-write journal read'
+    );
+    if (raw === null) return {};
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+      throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
+    for (const [key, entry] of Object.entries(parsed)) {
+      if (!key || !entry || typeof entry !== 'object' || Array.isArray(entry))
+        throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
+      const e = entry as UnknownWriteEntry;
+      if (
+        e.key !== key ||
+        !['set', 'delete'].includes(e.op) ||
+        !['nonce', 'presence'].includes(e.verifier) ||
+        typeof e.attempt !== 'string' ||
+        typeof e.sessionId !== 'string' ||
+        typeof e.at !== 'number' ||
+        !Number.isFinite(e.at)
+      )
+        throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
+    }
+    return parsed as Record<string, UnknownWriteEntry>;
+  }
+
+  // Ruling A on the wipe path: a wipe never erases an inherited same-process
+  // SET entry (the native set may still be hung after a JS reload and could land
+  // and resurrect the key) and never drops a same-process delete entry. Runs on
+  // the journal chain from the in-memory desired state, so it cannot race another
+  // journal mutation; a transient read failure leaves the journal untouched and
+  // only a CORRUPT journal is reset.
+  private static rewriteUnknownWritesAfterWipe(): Promise<void> {
+    const task = this.unknownJournalChain.then(async () => {
+      let current: Record<string, UnknownWriteEntry>;
+      if (this.unknownJournalDesired !== undefined) {
+        current = this.unknownJournalDesired ?? {};
+      } else {
+        try {
+          current = await this.readUnknownWritesStrict();
+        } catch (error) {
+          if (!(error instanceof UnknownJournalCorruptError)) return;
+          current = {};
+        }
+      }
+      const kept: Record<string, UnknownWriteEntry> = {};
+      for (const [key, entry] of Object.entries(current)) {
+        if (!(await isCurrentSessionId(entry.sessionId))) continue;
+        const tracked = this.adaptersForKey(key).some((adapter) =>
+          hasPendingRecord(adapter, key)
+        );
+        // A tracked set keeps its original entry (the tombstone clears it on
+        // settle); an inherited set becomes a delete entry; a same-process delete
+        // entry stays as it is.
+        kept[key] =
+          entry.op === 'set' && !tracked
+            ? {
+                key,
+                op: 'delete',
+                verifier: 'presence',
+                attempt: newDeleteAttempt(),
+                sessionId: entry.sessionId,
+                at: Date.now(),
+              }
+            : entry;
+      }
+      const empty = Object.keys(kept).length === 0;
+      this.unknownJournalDesired = empty ? null : kept;
+      await this.writeUnknownSnapshot(empty ? null : kept).catch(() => {});
+    });
+    this.unknownJournalChain = task.catch(() => undefined);
+    return task;
+  }
+
+  static async resetUnknownWrites(): Promise<void> {
+    this.unknownJournalDesired = null;
+    this.unknownJournalWriteCounter += 1;
+    try {
+      await this.withTimeout(
+        storage.removeItem(UNKNOWN_WRITES_STORAGE_KEY),
+        WRITE_TIMEOUT_MS,
+        'unknown-write journal reset'
+      );
+    } catch {
+      /* Best effort. */
+    }
+  }
+
+  private static writeUnknownSnapshot(
+    entries: Record<string, UnknownWriteEntry> | null
+  ): Promise<void> {
+    const counter = ++this.unknownJournalWriteCounter;
+    const write =
+      entries === null
+        ? storage.removeItem(UNKNOWN_WRITES_STORAGE_KEY)
+        : storage.setItem(UNKNOWN_WRITES_STORAGE_KEY, JSON.stringify(entries));
+    void write.then(
+      () => {
+        if (counter >= this.unknownJournalWriteCounter) return;
+        const repair = this.unknownJournalChain.then(async () => {
+          if (
+            counter < this.unknownJournalWriteCounter &&
+            this.unknownJournalDesired !== undefined
+          )
+            await this.writeUnknownSnapshot(this.unknownJournalDesired);
+        });
+        this.unknownJournalChain = repair.catch(() => undefined);
+      },
+      () => undefined
+    );
+    return this.withTimeout(
+      write,
+      WRITE_TIMEOUT_MS,
+      'unknown-write journal write'
+    );
+  }
+
+  private static mutateUnknownWrites(
+    change: (entries: Record<string, UnknownWriteEntry>) => void
+  ): Promise<void> {
+    const task = this.unknownJournalChain.then(async () => {
+      const stored = await this.readUnknownWritesTolerant();
+      const entries = {
+        ...(this.unknownJournalDesired === undefined
+          ? stored
+          : (this.unknownJournalDesired ?? {})),
+      };
+      change(entries);
+      this.unknownJournalDesired = entries;
+      await this.writeUnknownSnapshot(entries);
+    });
+    this.unknownJournalChain = task.catch(() => undefined);
+    return task;
+  }
+
+  /**
+   * Decide whether an UNKNOWN entry from an EARLIER session is resolved. Never
+   * removes the entry (the boot reconcile drops resolved entries only after its
+   * whole pass, so a later unresolved entry cannot leave a half-applied journal).
+   * An entry from THIS session is never resolved here (a late write can still
+   * land). Verifier 'presence': resolved by any successful probe. Verifier
+   * 'nonce' (a secret set): present with writeNonce === entry.attempt = written;
+   * absent, a different or missing marker, a legacy payload or an unparsable value
+   * = not written (no native call survives process death). Any successful probe
+   * resolves; only a probe that throws or times out leaves the entry unresolved.
+   */
+  /** The adapter(s) a journaled key can live in (shared by resolve and wipe). */
+  private static adaptersForKey(key: string) {
+    return key.startsWith(this.STORAGE_KEY_PREFIX)
+      ? [secureStorage]
+      : key.startsWith(this.METADATA_KEY) || key === this.PENDING_CREATES_KEY
+        ? [storage]
+        : key === this.METADATA_LIST_KEY ||
+            key === this.PIN_KEY ||
+            key === this.SALT_KEY
+          ? [storage, secureStorage]
+          : key.startsWith(this.LEGACY_STORAGE_KEY_PREFIX)
+            ? [secureStorage]
+            : [storage];
+  }
+
+  static async resolveUnknownWrite(key: string): Promise<boolean> {
+    const entries = await this.readUnknownWritesStrict();
+    const entry = entries[key];
+    if (!entry) return true;
+    if (await isCurrentSessionId(entry.sessionId)) return false;
+    const adapters = this.adaptersForKey(key);
+    try {
+      const raws: (string | null)[] = [];
+      for (const adapter of adapters) {
+        raws.push(
+          await this.withTimeout(
+            adapter.getItem(key),
+            WRITE_TIMEOUT_MS,
+            'unknown-write probe'
+          )
+        );
+      }
+      raws.forEach((raw) => {
+        classifyUnknownWrite(entry, raw);
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Drop a journal entry. With `expected` (the entry the caller resolved) it is a
+   * compare-and-remove: an entry journaled since (a same-process set/delete for the
+   * same key) is never erased by a boot-reconcile drop of an older entry.
+   */
+  static async dropUnknownWrite(
+    key: string,
+    expected?: UnknownWriteEntry
+  ): Promise<void> {
+    await this.mutateUnknownWrites((entries) => {
+      const current = entries[key];
+      if (
+        !expected ||
+        (current &&
+          current.at === expected.at &&
+          current.op === expected.op &&
+          current.attempt === expected.attempt &&
+          current.sessionId === expected.sessionId)
+      )
+        delete entries[key];
+    });
+  }
+
+  private static async freshWriteNonce(): Promise<string> {
+    const bytes = await platformCrypto.getRandomBytes(16);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(
+      ''
+    );
+  }
+
+  private static ignoreKnownWriteFailure(error: unknown): void {
+    if (
+      error instanceof WriteOutcomeUnknownError ||
+      error instanceof WriteUnresolvedError
+    )
+      throw error;
+  }
+
+  private static boundedSecureSet(
+    key: string,
+    value: string,
+    verifier: 'nonce' | 'presence',
+    attempt?: string,
+    context?: WriteContext
+  ): Promise<void> {
+    return boundedSet(secureStorage, key, value, {
+      journal: this.unknownJournal,
+      verifier,
+      attempt,
+      context,
+    });
+  }
+  private static boundedSecureDelete(key: string): Promise<void> {
+    return boundedDelete(secureStorage, key, {
+      journal: this.unknownJournal,
+      verifier: 'presence',
+    });
+  }
+  private static boundedStorageSet(
+    key: string,
+    value: string,
+    unguarded = false
+  ): Promise<void> {
+    return boundedSet(storage, key, value, {
+      journal: this.unknownJournal,
+      verifier: 'presence',
+      unguarded,
+    });
+  }
+  private static boundedStorageRemove(key: string): Promise<void> {
+    return boundedDelete(storage, key, {
+      journal: this.unknownJournal,
+      verifier: 'presence',
+    });
+  }
 
   // In-flight request deduplication to prevent cache stampede
   private static inFlightRequests: Map<string, Promise<Uint8Array>> = new Map();
@@ -340,7 +730,7 @@ export class AccountSecureStorage {
       try {
         return JSON.parse(stored) as PersistedAccountMetadata;
       } catch (error) {
-        console.warn('Failed to parse account metadata', error);
+        console.warn('Failed to parse account metadata', redactError(error));
         return null;
       }
     }
@@ -353,7 +743,7 @@ export class AccountSecureStorage {
     accountId: string,
     metadata: PersistedAccountMetadata
   ): Promise<void> {
-    await storage.setItem(
+    await this.boundedStorageSet(
       this.metadataKey(accountId),
       JSON.stringify(metadata)
     );
@@ -391,22 +781,35 @@ export class AccountSecureStorage {
         ? (JSON.parse(migratedSecret) as AccountSecretPayload)
         : null;
     } catch (error) {
-      console.warn('Failed to parse account secret payload', error);
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
+      console.warn(
+        'Failed to parse account secret payload',
+        redactError(error)
+      );
       return null;
     }
   }
 
   private static async saveSecret(
     accountId: string,
-    secret: AccountSecretPayload | null
+    secret: AccountSecretPayload | null,
+    context: WriteContext = 'other'
   ): Promise<void> {
     if (!secret) {
-      await secureStorage.deleteItem(this.secretKey(accountId)).catch(() => {});
+      await this.boundedSecureDelete(this.secretKey(accountId));
       return;
     }
-    await secureStorage.setItem(
+    const writeNonce = await this.freshWriteNonce();
+    await this.boundedSecureSet(
       this.secretKey(accountId),
-      JSON.stringify(secret)
+      JSON.stringify({ ...secret, writeNonce }),
+      'nonce',
+      writeNonce,
+      context
     );
   }
 
@@ -476,9 +879,15 @@ export class AccountSecureStorage {
     accountId: string,
     payload: AccountSecretPayload
   ): Promise<void> {
-    const serialized = JSON.stringify(payload);
+    const writeNonce = await this.freshWriteNonce();
+    const serialized = JSON.stringify({ ...payload, writeNonce });
     assertPayloadSizeWithinLimit(serialized, payload.blobs?.length ?? 0);
-    await secureStorage.setItem(this.secretKey(accountId), serialized);
+    await this.boundedSecureSet(
+      this.secretKey(accountId),
+      serialized,
+      'nonce',
+      writeNonce
+    );
   }
 
   /**
@@ -934,6 +1343,11 @@ export class AccountSecureStorage {
       // (P1-B). The OLD copy stays intact → nothing stranded → retried on a later
       // trigger. `finalized` guards against a hypothetical future post-finalize
       // throw dropping the ONLY remaining copy (mirrors changePin's `committed`).
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       if (!finalized && appended && newBlob) {
         try {
           const current = await this.readSecretLocked(accountId);
@@ -948,7 +1362,7 @@ export class AccountSecureStorage {
           // wrong-secret trial-decrypt MAC-fails), so a surviving copy is harmless.
         }
       }
-      console.warn('v2 migration deferred', accountId, error);
+      console.warn('v2 migration deferred', accountId, redactError(error));
       return 'NOT_MIGRATED';
     } finally {
       unwrapped.plaintext.fill(0);
@@ -1041,11 +1455,17 @@ export class AccountSecureStorage {
 
       const { encryptedPrivateKey, ...metadata } = parsed;
       const persistable: PersistedAccountMetadata = metadata;
-      await storage.setItem(
+      await this.boundedStorageSet(
         this.metadataKey(accountId),
         JSON.stringify(persistable)
       );
-      await this.addToAccountList(accountId).catch(() => {});
+      await this.addToAccountList(accountId).catch((error) => {
+        if (
+          error instanceof WriteOutcomeUnknownError ||
+          error instanceof WriteUnresolvedError
+        )
+          throw error;
+      });
 
       if (encryptedPrivateKey) {
         const secretPayload: AccountSecretPayload = {
@@ -1053,20 +1473,46 @@ export class AccountSecureStorage {
           encryptedPrivateKey,
           authMethod: parsed.authMethod,
         };
-        await secureStorage.setItem(
-          this.secretKey(accountId),
-          JSON.stringify(secretPayload)
-        );
+        await this.saveSecret(accountId, secretPayload);
       } else {
-        await secureStorage
-          .deleteItem(this.secretKey(accountId))
-          .catch(() => {});
+        try {
+          await this.boundedSecureDelete(this.secretKey(accountId));
+        } catch (error) {
+          if (
+            error instanceof WriteOutcomeUnknownError ||
+            error instanceof WriteUnresolvedError
+          )
+            throw error;
+          // Both entry points serve reads. Preserve the successful legacy read
+          // and its discoverable blob when cleanup fails; retry on migration.
+          console.warn('Legacy primary cleanup failed', redactError(error));
+          return persistable;
+        }
       }
 
-      await secureStorage.deleteItem(legacyKey).catch(() => {});
+      try {
+        await this.boundedSecureDelete(legacyKey);
+      } catch (error) {
+        if (
+          error instanceof WriteOutcomeUnknownError ||
+          error instanceof WriteUnresolvedError
+        )
+          throw error;
+        // The migrated primary is readable. Keep the legacy copy discoverable
+        // rather than turning a successful read into a retrieval failure.
+        console.warn('Legacy account cleanup failed', redactError(error));
+      }
       return persistable;
     } catch (error) {
-      console.error('Failed to migrate legacy account data', error);
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
+      console.error(
+        'Failed to migrate legacy account data',
+        redactError(error)
+      );
       return null;
     }
   }
@@ -1124,14 +1570,17 @@ export class AccountSecureStorage {
     journal: Record<string, string>
   ): Promise<void> {
     if (Object.keys(journal).length === 0) {
-      await storage.removeItem(this.PENDING_CREATES_KEY);
+      await this.boundedStorageRemove(this.PENDING_CREATES_KEY);
       return;
     }
-    await storage.setItem(this.PENDING_CREATES_KEY, JSON.stringify(journal));
+    await this.boundedStorageSet(
+      this.PENDING_CREATES_KEY,
+      JSON.stringify(journal)
+    );
   }
 
   /**
-   * Atomic guarded secret write for a NEW STANDARD account (TASK-220). In ONE
+   * Atomic guarded secret write for a NEW key-bearing account (TASK-220). In ONE
    * key-mutation-mutex task: (1) abort if a reset advanced the generation since
    * the creation began (reset wins); (2) reject a duplicate pending id (another
    * attempt owns it — prevents an earlier attempt's rollback deleting a later
@@ -1148,22 +1597,181 @@ export class AccountSecureStorage {
   static async storeAccountForCreation(
     account: AccountMetadata,
     privateKey: Uint8Array,
-    creationGen: number
+    creationGen: number,
+    context: WriteContext = 'create'
   ): Promise<string> {
+    return this.runKeyMutationExclusive(() =>
+      this.storeAccountForCreationLocked(
+        account,
+        privateKey,
+        creationGen,
+        context
+      )
+    ).catch((error: unknown) => {
+      if (error instanceof WriteOutcomeUnknownError) {
+        throw new WriteOutcomeUnknownError(error.journaled, context);
+      }
+      throw error;
+    });
+  }
+
+  /** The body of storeAccountForCreation, assuming the key-mutation mutex is
+   *  HELD. */
+  private static async storeAccountForCreationLocked(
+    account: AccountMetadata,
+    privateKey: Uint8Array,
+    creationGen: number,
+    context: WriteContext
+  ): Promise<string> {
+    if (this.secureResetGeneration !== creationGen) {
+      throw new ResetRacedError();
+    }
+    const journal = await this.readPendingCreateJournal();
+    if (journal[account.id] !== undefined) {
+      throw new DuplicatePendingCreateError();
+    }
+    const token = this.nextPendingCreateToken();
+    journal[account.id] = token;
+    await this.writePendingCreateJournal(journal);
+    const progress = { secretWritten: false };
+    try {
+      await this.storeAccountLocked(account, privateKey, progress, context);
+    } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
+      // TASK-449: the caller never receives the token on a throw, so it cannot
+      // roll back; do it here, in the same mutex task.
+      await this.rollBackFailedCreateLocked(
+        account.id,
+        token,
+        progress.secretWritten
+      );
+      throw error;
+    }
+    return token;
+  }
+
+  /**
+   * Add-only restore of a record that carries a key (TASK-504). One key-mutation
+   * mutex task reads the id's secret slot and acts on what that read shows:
+   *  - empty: the key is written under the file id, journaled, as for any new
+   *    account (`written`, with the ownership token);
+   *  - holds the key for this address: nothing is written and nothing is
+   *    journaled, only the account metadata is added (`in-place`);
+   *  - holds a DIFFERENT key that reads and derives to another address: nothing
+   *    is written and the record is not added (`occupied-other`). The caller
+   *    reports it. An id in a file proves nothing about what this device's slot
+   *    for that id is; a key that positively belongs to another account is not
+   *    ours to route around (DOC-507 4.1 item 1);
+   *  - holds something no reader opens (a PIN-wrapped key with the vault empty,
+   *    a payload no reader accepts, a surviving legacy blob): the record is
+   *    stored under a fresh id whose own slot reads empty first (`written`,
+   *    `reassigned`), and the occupied slot is not touched. This is the only
+   *    state that takes the new-id route.
+   * A slot read that cannot complete throws and writes nothing.
+   */
+  static async storeAccountForRestore(
+    account: AccountMetadata,
+    privateKey: Uint8Array,
+    creationGen: number,
+    context: WriteContext = 'restore'
+  ): Promise<
+    | { kind: 'written'; id: string; token: string; reassigned: boolean }
+    | { kind: 'in-place'; id: string }
+    | { kind: 'occupied-other'; id: string }
+  > {
     return this.runKeyMutationExclusive(async () => {
       if (this.secureResetGeneration !== creationGen) {
         throw new ResetRacedError();
       }
-      const journal = await this.readPendingCreateJournal();
-      if (journal[account.id] !== undefined) {
-        throw new DuplicatePendingCreateError();
+      const own = await this.inspectSlotUnderOneVaultState(
+        account.id,
+        account.address
+      );
+      if (own.state === 'empty') {
+        const token = await this.storeAccountForCreationLocked(
+          account,
+          privateKey,
+          creationGen,
+          context
+        );
+        return {
+          kind: 'written' as const,
+          id: account.id,
+          token,
+          reassigned: false,
+        };
       }
-      const token = this.nextPendingCreateToken();
-      journal[account.id] = token;
-      await this.writePendingCreateJournal(journal);
-      await this.storeAccountLocked(account, privateKey);
-      return token;
+      if (own.state === 'key-matches') {
+        await this.storeAccountLocked(
+          account,
+          undefined,
+          undefined,
+          context,
+          true
+        );
+        return { kind: 'in-place' as const, id: account.id };
+      }
+      if (own.state === 'key-other') {
+        return { kind: 'occupied-other' as const, id: account.id };
+      }
+      // Only 'occupied-unreadable' is left: the new-id route.
+      const id = await this.freshAccountId();
+      const fresh = await this.inspectSlotUnderOneVaultState(
+        id,
+        account.address
+      );
+      if (fresh.state !== 'empty') {
+        throw new AccountStorageError(
+          'Could not find an empty secret slot for a restored key'
+        );
+      }
+      const token = await this.storeAccountForCreationLocked(
+        { ...account, id } as AccountMetadata,
+        privateKey,
+        creationGen,
+        context
+      );
+      return { kind: 'written' as const, id, token, reassigned: true };
+    }).catch((error: unknown) => {
+      if (error instanceof WriteOutcomeUnknownError) {
+        throw new WriteOutcomeUnknownError(error.journaled, context);
+      }
+      throw error;
     });
+  }
+
+  /**
+   * Undo a storeAccountForCreation that threw after journaling its token
+   * (TASK-449). Deletes the secret only if THIS attempt wrote it (a failure
+   * before the write must not touch a same-id record it does not own), then
+   * drops the journal entry iff it is still ours. Never throws: if any step
+   * fails, the journal entry stays and the boot reconcile (TASK-222) finishes
+   * the cleanup, as for a crash.
+   */
+  private static async rollBackFailedCreateLocked(
+    accountId: string,
+    token: string,
+    secretWritten: boolean
+  ): Promise<void> {
+    try {
+      if (secretWritten) {
+        await this.deleteAccountLocked(accountId);
+      }
+      const journal = await this.readPendingCreateJournal();
+      if (journal[accountId] === token) {
+        delete journal[accountId];
+        await this.writePendingCreateJournal(journal);
+      }
+    } catch (rollbackError) {
+      console.warn(
+        'Failed-create rollback incomplete; the boot reconcile will finish it',
+        redactError(rollbackError)
+      );
+    }
   }
 
   /**
@@ -1176,14 +1784,124 @@ export class AccountSecureStorage {
    */
   static async storeAccountMetadataForCreation(
     account: AccountMetadata,
-    creationGen: number
+    creationGen: number,
+    context: WriteContext = 'restore'
   ): Promise<void> {
     return this.runKeyMutationExclusive(async () => {
       if (this.secureResetGeneration !== creationGen) {
         throw new ResetRacedError();
       }
-      await this.storeAccountLocked(account);
+      await this.storeAccountLocked(
+        account,
+        undefined,
+        undefined,
+        context,
+        true
+      );
+    }).catch((error: unknown) => {
+      if (error instanceof WriteOutcomeUnknownError) {
+        throw new WriteOutcomeUnknownError(error.journaled, context);
+      }
+      throw error;
     });
+  }
+
+  /**
+   * Restore of a record that carries no phrase (watch, Ledger, remote signer,
+   * key-less rekeyed). An id in a file proves nothing about what the secret slot
+   * of that id holds on this device, so the record keeps its file id only when
+   * the slot reads EMPTY at this write; otherwise it is stored under a fresh id
+   * whose own slot reads empty first. Nothing here writes or deletes a secret
+   * slot: the slot read and the metadata write share one mutex task, and the
+   * writer is metadata-only (TASK-504). Returns the id the record was stored
+   * under. A slot read that cannot complete throws and writes nothing.
+   */
+  static async storeKeylessAccountForRestore(
+    account: AccountMetadata,
+    creationGen: number,
+    context: WriteContext = 'restore',
+    bind?: { epoch: number },
+    unboundAs?: AccountMetadata
+  ): Promise<{ id: string; reassigned: boolean; bound?: boolean }> {
+    return this.runKeyMutationExclusive(async () => {
+      if (this.secureResetGeneration !== creationGen) {
+        throw new ResetRacedError();
+      }
+      let id = account.id;
+      let reassigned = false;
+      let bound = false;
+      const startEpoch = SessionKeyVault.currentEpoch();
+      const own = await this.inspectSlotUnderOneVaultState(id, account.address);
+      // DOC-507 4.1 item 9, the one exception to "a key-less record never binds
+      // to an occupied slot". All of it holds at THIS write, each read now:
+      // the old-PIN screen's session (the caller passes the epoch recorded at the
+      // verify), the vault still holding what that verify put in it, a credential
+      // still present, a REKEYED record (the type that retains a key), and the
+      // slot reading key-matches for the record's OWN id and OWN address. Only
+      // metadata is written; the slot is never touched.
+      if (
+        own.state === 'key-matches' &&
+        bind !== undefined &&
+        (account.type === AccountType.REKEYED ||
+          account.type === AccountType.STANDARD) &&
+        (await this.hasPinStrict()) &&
+        SessionKeyVault.isUnlocked() &&
+        SessionKeyVault.currentEpoch() === bind.epoch &&
+        startEpoch === bind.epoch
+      ) {
+        bound = true;
+      } else if (own.state !== 'empty') {
+        id = await this.freshAccountId();
+        const fresh = await this.inspectSlotUnderOneVaultState(
+          id,
+          account.address
+        );
+        if (fresh.state !== 'empty') {
+          throw new AccountStorageError(
+            'Could not find an empty secret slot for a key-less record'
+          );
+        }
+        reassigned = true;
+      }
+      // A record that did not bind is written as `unboundAs` when the caller
+      // gave one (a flagged standard record is stored as Watch Only), never as
+      // its real type: a standard record without a key is a phantom.
+      const written = bound ? account : (unboundAs ?? account);
+      await this.storeAccountLocked(
+        reassigned ? ({ ...written, id } as AccountMetadata) : written,
+        undefined,
+        undefined,
+        context,
+        true
+      );
+      return { id, reassigned, ...(bound ? { bound: true } : {}) };
+    }).catch((error: unknown) => {
+      if (error instanceof WriteOutcomeUnknownError) {
+        throw new WriteOutcomeUnknownError(error.journaled, context);
+      }
+      throw error;
+    });
+  }
+
+  /**
+   * Undo a metadata-only restore write (a key-less record, or a key added
+   * against a key already on the device): removes the account's metadata and
+   * its account-list entry and NEVER touches the secret slot, because this
+   * attempt did not write one (TASK-504).
+   */
+  static async removeAccountMetadataOnly(accountId: string): Promise<void> {
+    await this.runKeyMutationExclusive(async () => {
+      await this.boundedStorageRemove(this.metadataKey(accountId));
+      await this.removeFromAccountList(accountId);
+    });
+  }
+
+  private static async freshAccountId(): Promise<string> {
+    const bytes = await platformCrypto.getRandomBytes(9);
+    const suffix = Array.from(bytes, (b) =>
+      b.toString(16).padStart(2, '0')
+    ).join('');
+    return `account_${Date.now()}_${suffix}`;
   }
 
   /**
@@ -1306,6 +2024,195 @@ export class AccountSecureStorage {
   }
 
   /**
+   * TASK-504: READ-ONLY check of what an account id's secret slot holds, for a
+   * restore deciding per record whether to write a key, add the record only, or
+   * skip. It writes nothing, migrates nothing and takes no lock.
+   *
+   *   empty               primary secret, legacy blob and wipe tombstone each
+   *                       read SUCCESSFULLY and the slot holds nothing.
+   *   key-matches         a key reads under this id and derives to
+   *                       `expectedAddress` (seed AND public half).
+   *   key-other           a key reads under this id and derives to another
+   *                       address.
+   *   occupied-unreadable something is there that does not open: a payload no
+   *                       reader accepts, a user-secret-wrapped key with the
+   *                       vault locked, or a surviving legacy blob (counted as
+   *                       occupied whether or not a wipe tombstone is set; this
+   *                       check never decides a legacy blob is dead).
+   *
+   * Any READ failure (or timeout) THROWS. A failed read is never "empty" and
+   * never "occupied": the caller stops. probeOwnKey is deliberately not used
+   * (its tombstone branch can return false-absent), and the "Private key not
+   * available" alert text proves nothing because it has two producers.
+   */
+  static async inspectSecretSlot(
+    accountId: string,
+    expectedAddress: string,
+    timeoutMs: number = 1500
+  ): Promise<SecretSlotInspection> {
+    // The vault state this result is taken under. A caller that classifies
+    // again after an unlock must act on the NEW result, never an older one.
+    const vault: SecretSlotInspection['vault'] = SessionKeyVault.isUnlocked()
+      ? 'unlocked'
+      : 'locked';
+    const primary = await this.withTimeout(
+      secureStorage.getItem(this.secretKey(accountId)),
+      timeoutMs,
+      'secret slot primary read'
+    );
+    const tombstone = await this.withTimeout(
+      storage.getItem(this.SECURE_WIPE_TOMBSTONE_KEY),
+      timeoutMs,
+      'secret slot tombstone read'
+    );
+    const legacy = await this.withTimeout(
+      secureStorage.getItem(`${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`),
+      timeoutMs,
+      'secret slot legacy read'
+    );
+
+    if (!primary) {
+      // The tombstone only decides whether the reader would resurrect a legacy
+      // blob. Here a legacy blob of any kind makes the slot occupied.
+      void tombstone;
+      return { state: legacy ? 'occupied-unreadable' : 'empty', vault };
+    }
+
+    // A payload no reader would accept is not a key, and not empty.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(primary);
+    } catch {
+      return { state: 'occupied-unreadable', vault };
+    }
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      (typeof (parsed as { encryptedPrivateKey?: unknown })
+        .encryptedPrivateKey !== 'string' &&
+        !Array.isArray((parsed as { blobs?: unknown }).blobs))
+    ) {
+      return { state: 'occupied-unreadable', vault };
+    }
+
+    // Read the key the way getPrivateKey does (same gate, same decrypt order)
+    // but WITHOUT its side effects: getPrivateKey updates the account's
+    // lastAccessed metadata, caches the key for 60 s, and with an unlocked vault
+    // fires a lazy re-wrap of a device-key account (migrateAccountToV2). A check
+    // that only looks must do none of those.
+    const payload = parsed as AccountSecretPayload;
+    // §6.4 reader gate: on a device with a PIN the vault itself must be
+    // unlocked. hasPinStrict throws on a read failure; that is read OUTSIDE the
+    // try below so a failed read propagates instead of becoming "unreadable".
+    const vaultUnlocked = vault === 'unlocked';
+    if (!vaultUnlocked && (await this.hasPinStrict())) {
+      return { state: 'occupied-unreadable', vault };
+    }
+    // The device id is a keychain read, and both decrypts below need it. Their
+    // catch turns every failure into "something is there that does not open", so
+    // a failed or timed-out read of the id would be taken as "occupied" (and
+    // the record routed to a fresh id) when it is a failed read. Read it here,
+    // outside the try, so that failure propagates like every other read above.
+    // The adapter keeps what it loaded, so the decrypts' own calls are cheap.
+    await this.getStableDeviceId();
+    let key: Uint8Array | undefined;
+    try {
+      if (
+        vaultUnlocked &&
+        Array.isArray(payload.blobs) &&
+        payload.blobs.length > 0
+      ) {
+        key = await this.tryDecryptV2Blobs(accountId, payload.blobs, undefined);
+      }
+      if (!key && typeof payload.encryptedPrivateKey === 'string') {
+        key = await this.decryptPrivateKey(payload.encryptedPrivateKey);
+      }
+    } catch {
+      // A wrong wrap secret, a corrupt blob, a vault that locked mid-read:
+      // something is there and it does not open. "Occupied", never "empty".
+      return { state: 'occupied-unreadable', vault };
+    }
+    if (!key) {
+      return { state: 'occupied-unreadable', vault };
+    }
+    try {
+      return {
+        state: keyBelongsToAddress(key, expectedAddress)
+          ? 'key-matches'
+          : 'key-other',
+        vault,
+      };
+    } finally {
+      key.fill(0);
+    }
+  }
+
+  /**
+   * TASK-504: inspectSecretSlot for a result that DECIDES A WRITE. The vault
+   * state is recorded with the result, but a vault that locks, unlocks or is
+   * replaced WHILE the read runs leaves a result that no single state produced.
+   * Compare the vault epoch before and after; any change throws
+   * VaultChangedDuringReadError and the caller writes nothing.
+   */
+  private static async inspectSlotUnderOneVaultState(
+    accountId: string,
+    expectedAddress: string
+  ): Promise<SecretSlotInspection> {
+    // Every set, rotate and clear bumps the epoch, so the epoch alone sees a
+    // lock, an unlock and a replacement alike.
+    const epochBefore = SessionKeyVault.currentEpoch();
+    const slot = await this.inspectSecretSlot(accountId, expectedAddress);
+    if (SessionKeyVault.currentEpoch() !== epochBefore) {
+      throw new VaultChangedDuringReadError();
+    }
+    return slot;
+  }
+
+  /**
+   * TASK-504: the slot check a restore REPORT row is built from. A report input
+   * only: it writes nothing, migrates nothing, and its result decides no write.
+   * It runs as one key-mutation task, so it is taken at the record's turn and
+   * never inside a queue task.
+   *
+   * The result counts (`counts: true`) only when it was taken under a state that
+   * can be trusted: the device has no PIN, or the vault was unlocked and held the
+   * same epoch before and after the read. Under a locked vault a healthy
+   * PIN-wrapped key reads `occupied-unreadable`, which a row must never present
+   * as a problem with the stored key. A result that does not count carries no
+   * state, so no row can be built from it.
+   *
+   * A read failure THROWS, as in inspectSecretSlot; the caller decides what a
+   * failed report read means (it is never a write decision).
+   */
+  static async inspectSlotForRestoreReport(
+    accountId: string,
+    expectedAddress: string,
+    timeoutMs?: number
+  ): Promise<
+    { counts: true; state: SecretSlotInspection['state'] } | { counts: false }
+  > {
+    return this.runKeyMutationExclusive(async () => {
+      const hasPin = await this.hasPinStrict();
+      const unlockedBefore = SessionKeyVault.isUnlocked();
+      const epochBefore = SessionKeyVault.currentEpoch();
+      const slot = await this.inspectSecretSlot(
+        accountId,
+        expectedAddress,
+        timeoutMs
+      );
+      if (hasPin) {
+        const stable =
+          unlockedBefore &&
+          slot.vault === 'unlocked' &&
+          SessionKeyVault.isUnlocked() &&
+          SessionKeyVault.currentEpoch() === epochBefore;
+        if (!stable) return { counts: false as const };
+      }
+      return { counts: true as const, state: slot.state };
+    });
+  }
+
+  /**
    * STRICT read of the durable pending-creation journal (TASK-222). Unlike the
    * tolerant private readPendingCreateJournal (which degrades bad JSON to `{}` —
    * a safe default on the WRITE paths), this FAILS CLOSED for the reconcile: a
@@ -1351,6 +2258,92 @@ export class AccountSecureStorage {
   }
 
   /**
+   * TASK-504: the key-side half of "this device is fresh". True only when ALL of
+   * these read successfully and hold nothing: no PIN credential (either copy),
+   * an empty account list, an empty pending-creates journal, an empty
+   * quarantine registry, and no pin-setup-pending breadcrumb. Any read error
+   * THROWS (the caller stops); a failed read is never "empty". It reads only,
+   * takes no lock (so it may run inside a wallet-queue task, DOC-507 section 1
+   * rule 2), and writes nothing. The wallet blob is the other half and is read by
+   * the wallet service inside its queue.
+   */
+  static async isKeyStateEmptyStrict(): Promise<boolean> {
+    if (await this.hasPinStrict()) return false;
+    if ((await this.readAccountListStrict()).length > 0) return false;
+    if (Object.keys(await this.readPendingCreatesStrict()).length > 0) {
+      return false;
+    }
+    if ((await this.readQuarantinedIdsStrict()).length > 0) return false;
+    if (await readPinSetupPendingStrict()) return false;
+    return true;
+  }
+
+  /** Strict, id-only quarantine registry used by boot reconcile and full wipes. */
+  static async readQuarantinedIdsStrict(): Promise<string[]> {
+    const raw = await storage.getItem(this.QUARANTINED_IDS_KEY);
+    if (raw == null) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      !Array.isArray(parsed) ||
+      !parsed.every((id) => typeof id === 'string' && id.length > 0)
+    )
+      throw new Error('Corrupt reconcile quarantine registry');
+    return [...new Set(parsed)];
+  }
+
+  /**
+   * Erase-path reader: the registry is the only index of quarantined secrets
+   * (the keychain cannot list keys), so when it is corrupt recover every quoted
+   * id from the raw text instead of dropping it. A storage read failure still
+   * propagates. Ids only; nothing is logged but the fact of recovery.
+   */
+  static async readQuarantinedIdsSalvaged(): Promise<string[]> {
+    try {
+      return await this.readQuarantinedIdsStrict();
+    } catch (error) {
+      const raw = await storage.getItem(this.QUARANTINED_IDS_KEY);
+      if (raw == null) throw error;
+      console.warn('[quarantine] registry unreadable; salvaging ids');
+      const ids = [...raw.matchAll(/"([^"\\]+)"/g)].map((m) => m[1]);
+      return [...new Set(ids)];
+    }
+  }
+
+  static async addQuarantinedIds(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    return this.runKeyMutationExclusive(async () => {
+      const existing = await this.readQuarantinedIdsSalvaged();
+      const next = [...new Set([...existing, ...ids])];
+      await storage.setItem(this.QUARANTINED_IDS_KEY, JSON.stringify(next));
+    });
+  }
+
+  static async removeQuarantinedIds(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    return this.runKeyMutationExclusive(async () => {
+      const removed = new Set(ids);
+      const next = (await this.readQuarantinedIdsSalvaged()).filter(
+        (id) => !removed.has(id)
+      );
+      if (next.length === 0) await storage.removeItem(this.QUARANTINED_IDS_KEY);
+      else
+        await storage.setItem(this.QUARANTINED_IDS_KEY, JSON.stringify(next));
+    });
+  }
+
+  static async readReconcileRecoveryMarker(): Promise<boolean> {
+    return (await storage.getItem(this.RECONCILE_RECOVERY_MARKER_KEY)) === '1';
+  }
+
+  static async setReconcileRecoveryMarker(): Promise<void> {
+    await storage.setItem(this.RECONCILE_RECOVERY_MARKER_KEY, '1');
+  }
+
+  static async clearReconcileRecoveryMarker(): Promise<void> {
+    await storage.removeItem(this.RECONCILE_RECOVERY_MARKER_KEY);
+  }
+
+  /**
    * Unconditionally drop the given ids from the pending-creation journal
    * (TASK-222 reconcile cleanup) under the key-mutation mutex. Unlike
    * deleteAccountIfAttemptMatches this is NOT ownership-checked — the reconcile
@@ -1379,8 +2372,9 @@ export class AccountSecureStorage {
   /**
    * Reject `promise` if it has not settled within `ms`. On timeout the abandoned
    * read's eventual settlement is ignored and a labelled Error is thrown so the
-   * boot reconcile fails CLOSED (treats it as a read failure, not "absent").
-   * Mirrors the AuthContext withTimeout used for the strict lock reads.
+   * caller fails CLOSED (treats it as a read failure, not "absent"): the boot
+   * reconcile probes, and the account-store reads (TASK-449). Mirrors the
+   * AuthContext withTimeout used for the strict lock reads.
    */
   private static withTimeout<T>(
     promise: Promise<T>,
@@ -1405,13 +2399,27 @@ export class AccountSecureStorage {
   }
 
   /** The body of storeAccount, assuming the key-mutation mutex is HELD. Shared by
-   *  storeAccount (public wrapper) and storeAccountForCreation. */
+   *  storeAccount (public wrapper) and storeAccountForCreation. `progress`, when
+   *  given, records whether this call wrote the secret, so a creation that fails
+   *  later knows what it owns (TASK-449). */
   private static async storeAccountLocked(
     account: AccountMetadata,
-    privateKey?: Uint8Array
+    privateKey?: Uint8Array,
+    progress?: { secretWritten: boolean },
+    context: WriteContext = 'other',
+    metadataOnly: boolean = false
   ): Promise<void> {
+    if (metadataOnly && privateKey) {
+      throw new AccountStorageError(
+        'A metadata-only store cannot carry a private key'
+      );
+    }
     try {
-      const hasPin = await this.hasPin();
+      // TASK-449: bounded and strict. A timeout or read error fails the store,
+      // so a stuck or failing keychain is never stored as "no PIN".
+      const hasPin = Boolean(
+        await this.readStoredPinData(this.KEYCHAIN_READ_TIMEOUT_MS)
+      );
       const lastAccessed = new Date().toISOString();
 
       const metadata: PersistedAccountMetadata = {
@@ -1431,7 +2439,18 @@ export class AccountSecureStorage {
         lastAccessed,
       };
 
-      // Encrypt and store private key for Standard accounts.
+      // TASK-421 (b) U2: a REKEYED account's key must be ITS OWN original key.
+      // Reject a key whose seed and public half don't both derive this address,
+      // so a signer's (or any other) key can never be stored under its id.
+      if (account.type === AccountType.REKEYED && privateKey) {
+        if (!keyBelongsToAddress(privateKey, account.address)) {
+          throw new AccountStorageError(
+            'Private key does not belong to this account'
+          );
+        }
+      }
+
+      // Encrypt and store explicitly supplied keys for STANDARD or REKEYED accounts.
       //
       // ALWAYS write the legacy device-key (Format A) envelope — NEVER v2 here
       // (Codex P1-2). A device-key blob is PIN-independent and can be read back
@@ -1445,20 +2464,36 @@ export class AccountSecureStorage {
       // ordered either fully before the enumeration (→ re-wrapped) or fully
       // after the commit (→ stays device-readable, upgraded on the next
       // enumerate). Either way the key is readable — never lost (P1-B).
-      if (account.type === AccountType.STANDARD && privateKey) {
+      if (
+        (account.type === AccountType.STANDARD ||
+          account.type === AccountType.REKEYED) &&
+        privateKey
+      ) {
         const encryptedPrivateKey = await this.encryptPrivateKey(privateKey);
-        await this.saveSecret(account.id, {
-          accountId: account.id,
-          encryptedPrivateKey,
-          authMethod: metadata.authMethod,
-        });
-      } else {
-        await this.saveSecret(account.id, null);
+        await this.saveSecret(
+          account.id,
+          {
+            accountId: account.id,
+            encryptedPrivateKey,
+            authMethod: metadata.authMethod,
+          },
+          context
+        );
+        if (progress) {
+          progress.secretWritten = true;
+        }
+      } else if (!metadataOnly) {
+        await this.saveSecret(account.id, null, context);
       }
 
       // Store metadata for quick access
       await this.storeAccountMetadata(metadata);
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountStorageError(
         `Failed to store account: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1961,12 +2996,160 @@ export class AccountSecureStorage {
     });
   }
 
-  static async deleteAccount(accountId: string): Promise<void> {
+  static async deleteAccount(
+    accountId: string,
+    options: { requireNoSecret?: boolean } = {}
+  ): Promise<void> {
     // Secret writer → acquire the GLOBAL key-mutation mutex (P1-1a) so a delete
     // can never interleave with a rewrap enumeration+commit.
+    return this.runKeyMutationExclusive(async () => {
+      // TASK-424: a deletion confirmed as keyless re-checks custody under the
+      // same mutex every secret writer takes, so a key written after the
+      // caller's check can't be deleted with it. A probe failure can't prove
+      // the account keyless, so it refuses too (the probe propagates it).
+      if (
+        options.requireNoSecret &&
+        (await this.probeSecretPresenceStrict(accountId))
+      ) {
+        throw new AccountDeletionPreconditionError(
+          'This account now holds its own key, so it wasn’t deleted.'
+        );
+      }
+      await this.deleteAccountLocked(accountId);
+      // The secret is gone. Bookkeeping cleanup is best-effort: a corrupt
+      // registry or record must never turn a completed delete into a failure.
+      try {
+        const quarantine = await this.readQuarantinedIdsSalvaged();
+        if (quarantine.includes(accountId)) {
+          const remaining = quarantine.filter((id) => id !== accountId);
+          if (remaining.length === 0)
+            await storage.removeItem(this.QUARANTINED_IDS_KEY);
+          else
+            await storage.setItem(
+              this.QUARANTINED_IDS_KEY,
+              JSON.stringify(remaining)
+            );
+        }
+        await this.clearUnexplainedRemoval(accountId);
+      } catch {
+        console.warn('[deleteAccount] reconcile record cleanup failed');
+      }
+    });
+  }
+
+  /** Persist public account details for a blob account removed without a journaled user delete. */
+  static async recordUnexplainedRemovals(
+    records: { id: string; address: string; label: string }[]
+  ): Promise<void> {
     return this.runKeyMutationExclusive(() =>
-      this.deleteAccountLocked(accountId)
+      this.recordUnexplainedRemovalsLocked(records)
     );
+  }
+
+  /** Caller must hold the key-mutation mutex. */
+  static async recordUnexplainedRemovalsLocked(
+    records: { id: string; address: string; label: string }[]
+  ): Promise<void> {
+    let current: Record<string, { address: string; label: string }> = {};
+    try {
+      current = await this.readUnexplainedRemovalsMap();
+    } catch {
+      console.warn('[reconcile] removal records unreadable; starting fresh');
+    }
+    for (const { id, address, label } of records)
+      current[id] = { address, label };
+    await storage.setItem(
+      this.UNEXPLAINED_REMOVALS_KEY,
+      JSON.stringify(current)
+    );
+  }
+
+  static async runWithConfirmedAbsentSecrets(
+    ids: string[],
+    action: (
+      confirmedAbsent: string[],
+      signal: ConfirmedAbsentActionSignal
+    ) => Promise<boolean>
+  ): Promise<{ confirmedAbsent: string[]; liveIds: string[]; acted: boolean }> {
+    return this.runKeyMutationExclusive(async () => {
+      const states = await Promise.all(
+        ids.map(async (id) => ({
+          id,
+          present: await this.probeSecretPresenceStrict(id),
+        }))
+      );
+      const liveIds = states
+        .filter(({ present }) => present)
+        .map(({ id }) => id);
+      const confirmedAbsent = states
+        .filter(({ present }) => !present)
+        .map(({ id }) => id);
+      const signal: ConfirmedAbsentActionSignal = {
+        aborted: false,
+        committed: false,
+      };
+      const acted = confirmedAbsent.length
+        ? await new Promise<boolean>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              // Timer and commit callbacks run atomically on the JS thread; exactly one wins.
+              if (signal.committed) return;
+              signal.aborted = true;
+              reject(
+                new Error(
+                  `Confirmed-absent reconcile action timed out after ${this.RECONCILE_ACTION_TIMEOUT_MS}ms`
+                )
+              );
+            }, this.RECONCILE_ACTION_TIMEOUT_MS);
+            action(confirmedAbsent, signal).then(
+              (value) => {
+                clearTimeout(timer);
+                resolve(value);
+              },
+              (error) => {
+                clearTimeout(timer);
+                reject(error);
+              }
+            );
+          })
+        : false;
+      return { confirmedAbsent, liveIds, acted };
+    });
+  }
+
+  /** Read public removal records for the later recovery UI. */
+  static async readUnexplainedRemovals(): Promise<
+    { id: string; address: string; label: string }[]
+  > {
+    const records = await this.readUnexplainedRemovalsMap();
+    return Object.entries(records).map(([id, value]) => ({ id, ...value }));
+  }
+
+  static async clearUnexplainedRemoval(id: string): Promise<void> {
+    const records = await this.readUnexplainedRemovalsMap();
+    if (!(id in records)) return;
+    delete records[id];
+    if (Object.keys(records).length === 0)
+      await storage.removeItem(this.UNEXPLAINED_REMOVALS_KEY);
+    else
+      await storage.setItem(
+        this.UNEXPLAINED_REMOVALS_KEY,
+        JSON.stringify(records)
+      );
+  }
+
+  static async clearUnexplainedRemovals(): Promise<void> {
+    await storage.removeItem(this.UNEXPLAINED_REMOVALS_KEY);
+  }
+
+  private static async readUnexplainedRemovalsMap(): Promise<
+    Record<string, { address: string; label: string }>
+  > {
+    const raw = await storage.getItem(this.UNEXPLAINED_REMOVALS_KEY);
+    if (raw == null) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed))
+      throw new Error('Corrupt unexplained removal records');
+    return parsed as Record<string, { address: string; label: string }>;
   }
 
   /** RAW deleteAccount (no mutex acquire) — for callers already holding it
@@ -1976,19 +3159,56 @@ export class AccountSecureStorage {
       // Remove from secure storage
       await this.saveSecret(accountId, null);
 
-      // Remove metadata
-      await storage.removeItem(this.metadataKey(accountId));
-      await secureStorage
-        .deleteItem(`${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`)
-        .catch(() => {});
+      await this.boundedSecureDelete(
+        `${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`
+      );
+      if (await this.probeSecretPresenceStrict(accountId)) {
+        throw new AccountStorageError('Account secret remains after deletion');
+      }
+
+      // Only discard metadata and indexing after verified secret removal.
+      await this.boundedStorageRemove(this.metadataKey(accountId));
 
       // Update account list
       await this.removeFromAccountList(accountId);
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountStorageError(
         `Failed to delete account: ${(error as Error).message}`
       );
     }
+  }
+
+  private static async assertWipeComplete(
+    coveredKeys: Set<string>,
+    unresolved: Set<string>
+  ): Promise<void> {
+    for (const key of coveredKeys) {
+      if (
+        this.adaptersForKey(key).some((adapter) =>
+          hasUnsettledPendingRecord(adapter, key)
+        )
+      )
+        unresolved.add(key);
+    }
+    try {
+      // ANY surviving same-session entry means a write or delete may still land
+      // on a wallet key (secrets, PIN/salt, bookkeeping): the journal holds
+      // nothing else, and an entry for an id the wipe did not know about is
+      // exactly the one it could not have deleted. Earlier-session entries were
+      // already dropped by the wipe's journal rewrite.
+      const entries = await this.readUnknownWritesStrict();
+      for (const [key, entry] of Object.entries(entries)) {
+        if (await isCurrentSessionId(entry.sessionId)) unresolved.add(key);
+      }
+    } catch {
+      unresolved.add(UNKNOWN_WRITES_STORAGE_KEY);
+    }
+    if (unresolved.size > 0) throw new WipeIncompleteError([...unresolved]);
   }
 
   static async getAllAccountIds(): Promise<string[]> {
@@ -1998,15 +3218,29 @@ export class AccountSecureStorage {
         return JSON.parse(stored) as string[];
       }
 
-      const legacy = await secureStorage.getItem(this.METADATA_LIST_KEY);
+      // TASK-449: bounded. Every store reaches this read while the primary list
+      // is absent (the first account on a fresh install). A timeout throws like
+      // any other read error, and the late value is never migrated.
+      const legacy = await this.withTimeout(
+        secureStorage.getItem(this.METADATA_LIST_KEY),
+        this.KEYCHAIN_READ_TIMEOUT_MS,
+        'Legacy account list read'
+      );
       if (legacy) {
-        await storage.setItem(this.METADATA_LIST_KEY, legacy);
-        await secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {});
+        await this.boundedStorageSet(this.METADATA_LIST_KEY, legacy);
+        await this.boundedSecureDelete(this.METADATA_LIST_KEY).catch(
+          this.ignoreKnownWriteFailure
+        );
         return JSON.parse(legacy) as string[];
       }
 
       return [];
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountRetrievalError(
         `Failed to retrieve account list: ${(error as Error).message}`
       );
@@ -2023,6 +3257,56 @@ export class AccountSecureStorage {
    * a corrupt (unparseable) list so the reconcile fails closed. Resolves `[]`
    * only for genuine absence.
    */
+  /** TASK-469: record the wipe request. If it cannot be written, the wipe does not start. */
+  static async beginWipe(): Promise<void> {
+    try {
+      // GUARDED: if an earlier attempt left a delete of this key that can still
+      // land (a timed-out endWipe), writing the marker now would let that late
+      // delete erase it mid-wipe, and a wipe that then failed would have no
+      // marker to finish it. The refusal reads as incomplete: restart and retry.
+      await this.boundedStorageSet(this.WIPE_INTENT_KEY, '1');
+    } catch {
+      throw new WipeIncompleteError([this.WIPE_INTENT_KEY]);
+    }
+  }
+
+  /**
+   * TASK-469: delete one secure-store key through the bounded, journaled delete.
+   * Rejects (never swallows) if the delete cannot be confirmed. Used by the wipe
+   * for the legacy wallet-metadata copy, which clearAllWallets deletes only
+   * fire-and-forget.
+   */
+  static async deleteSecureKeyVerified(key: string): Promise<void> {
+    await this.boundedSecureDelete(key);
+  }
+
+  /** TASK-469: clear the wipe request. Only a COMPLETE wipe calls this. */
+  static async endWipe(): Promise<void> {
+    try {
+      await this.boundedStorageRemove(this.WIPE_INTENT_KEY);
+    } catch {
+      // The data is gone but the marker is not: report incomplete so the user
+      // restarts and the boot finishes (a no-op) and clears it, rather than a
+      // stale marker later wiping a NEW wallet.
+      throw new WipeIncompleteError([this.WIPE_INTENT_KEY]);
+    }
+  }
+
+  /**
+   * TASK-469: true when a wipe was requested and never completed. STRICT and
+   * bounded: a read failure throws (the caller fails closed), it never reads as
+   * "no wipe pending".
+   */
+  static async readWipeIntentStrict(): Promise<boolean> {
+    const value = await this.withTimeout(
+      storage.getItem(this.WIPE_INTENT_KEY),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'Wipe intent read'
+    );
+    // Any stored value counts: an unexpected one is still a request.
+    return value !== null;
+  }
+
   static async readAccountListStrict(): Promise<string[]> {
     // `!= null` (not truthiness): a present-but-EMPTY value ('') is CORRUPTION,
     // not absence — a genuinely absent list is null. Routing '' to the parser
@@ -2294,7 +3578,14 @@ export class AccountSecureStorage {
 
   // Ensure a stable installation-scoped id using platform adapter
   private static async getStableDeviceId(): Promise<string> {
-    return await platformDeviceId.getDeviceId();
+    // TASK-449: bounded. The adapter's first call per process reads the keychain;
+    // a timeout throws, so key derivation fails rather than hanging. The adapter
+    // runs one load at a time, so an abandoned load cannot race a later one.
+    return await this.withTimeout(
+      platformDeviceId.getDeviceId(),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'Device id read'
+    );
   }
 
   private static async storeAccountMetadata(
@@ -2315,12 +3606,17 @@ export class AccountSecureStorage {
       const accountIds = await this.getAllAccountIds();
       if (!accountIds.includes(accountId)) {
         accountIds.push(accountId);
-        await storage.setItem(
+        await this.boundedStorageSet(
           this.METADATA_LIST_KEY,
           JSON.stringify(accountIds)
         );
       }
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountStorageError(
         `Failed to update account list: ${(error as Error).message}`
       );
@@ -2331,8 +3627,18 @@ export class AccountSecureStorage {
     try {
       const accountIds = await this.getAllAccountIds();
       const updatedIds = accountIds.filter((id) => id !== accountId);
-      await storage.setItem(this.METADATA_LIST_KEY, JSON.stringify(updatedIds));
+      // A delete or wipe is never refused: this list rewrite skips the guard.
+      await this.boundedStorageSet(
+        this.METADATA_LIST_KEY,
+        JSON.stringify(updatedIds),
+        true
+      );
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountStorageError(
         `Failed to update account list: ${(error as Error).message}`
       );
@@ -2454,13 +3760,25 @@ export class AccountSecureStorage {
    * no credential is set. Public so the UI (LockScreen / auth modals / settings)
    * can render the numeric keypad vs a masked passphrase field. Never returns the
    * secret itself — only its kind.
+   *
+   * THROWS on a read failure or timeout (TASK-455): null means "no
+   * credential", and ChangePinScreen acts on null by skipping the current-PIN
+   * step, so it must mean exactly that. The deadline covers BOTH reads (primary
+   * and legacy), and it is a pure read: no legacy migration, so an abandoned
+   * read can never write late. verifyPin still migrates a legacy credential.
    */
   static async getCredentialSource(): Promise<SecretSource | null> {
-    const stored = await this.getStoredPinData();
-    if (!stored) {
-      return null;
-    }
-    return stored.secretSource ?? 'pin';
+    return this.withTimeout(
+      (async () => {
+        const raw =
+          (await secureStorage.getItem(this.PIN_KEY)) ||
+          (await storage.getItem(this.PIN_KEY));
+        const stored = raw ? this.parseStoredPin(raw) : null;
+        return stored ? (stored.secretSource ?? 'pin') : null;
+      })(),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'Credential kind read'
+    );
   }
 
   /**
@@ -2496,24 +3814,30 @@ export class AccountSecureStorage {
   ): Promise<void> {
     try {
       this.validateSecret(newSecret, secretSource);
-      // TASK-213 (fail-OPEN closure): clear the restore-before-PIN breadcrumb —
-      // with CONFIRMED removal — BEFORE committing the PIN, not after. A PIN
-      // credential must never come to exist on disk while a live breadcrumb could
-      // still be read: otherwise a commit that partially fails (e.g. the Android
-      // presence-sentinel write fails, so a later keystore break makes the PIN read
-      // resolve absent) would let the stale breadcrumb route that wallet to
-      // SecuritySetup — a NEW PIN over a real wallet. Clearing FIRST makes every
-      // such race fail CLOSED (recovery), never open. If removal cannot be
-      // CONFIRMED (a wedged/unhealthy store), ABORT rather than commit a PIN into
-      // that ambiguous state — the caller simply retries. clearPinSetupPending is
-      // bounded + verifying + never-throwing; a no-op when no breadcrumb exists
-      // (normal onboarding) on a healthy store.
-      const breadcrumbCleared = await clearPinSetupPending();
-      if (!breadcrumbCleared) {
-        throw new Error(
-          'Could not clear the restore setup marker before establishing the PIN'
-        );
-      }
+      // TASK-213 (fail-OPEN closure) and TASK-508. The restore-before-PIN
+      // breadcrumb is cleared, with CONFIRMED removal, BEFORE the PIN credential
+      // is committed (rewrapAndCommitCredentialLocked does it, after the rewrap
+      // and its read-back, immediately before the credential write). A credential
+      // must never come to exist on disk while a live breadcrumb could still be
+      // read: otherwise a commit that partially fails (e.g. the Android
+      // presence-sentinel write fails, so a later keystore break makes the PIN
+      // read resolve absent) would let the stale breadcrumb route that wallet to
+      // SecuritySetup, a NEW PIN over a real wallet.
+      //
+      // The clear used to run FIRST, ahead of the rewrap loop (one scrypt per
+      // account, seconds). A kill anywhere in that loop then left key-bearing
+      // accounts, no PIN and no breadcrumb, which boots to the recovery screen
+      // (TASK-508). With the clear just before the credential write, a kill in
+      // the loop leaves the breadcrumb set and no PIN, which is the legitimate
+      // resume state: SecuritySetup, and setupPin is run again. What remains on
+      // recovery is the gap between the confirmed clear and the credential
+      // write (one storage remove, one secure write).
+      //
+      // If removal cannot be CONFIRMED (a wedged/unhealthy store), the commit is
+      // ABORTED and the pre-commit rollback drops this attempt's new blobs, so
+      // the accounts still read through their device-key copy and no credential
+      // exists; the caller simply retries.
+      //
       // Acquire the GLOBAL key-mutation mutex, then run the atomic rewrap+commit
       // under it (P1-3: no verify/commit races). setupPin has no current secret
       // to verify (first-secret setup).
@@ -2522,6 +3846,7 @@ export class AccountSecureStorage {
           currentSecret: undefined,
           newSecret,
           newSource: secretSource,
+          clearBreadcrumbBeforeCommit: true,
         })
       );
       this.legacyCheckRequired = false;
@@ -2801,6 +4126,13 @@ export class AccountSecureStorage {
    * device-broken condition as every other awaited secure write (see THREAT
    * MODEL) — not special-cased.
    */
+  /** The persisted throttle record removed with the removal CONFIRMED (a
+   *  failure throws), and the in-memory mirror reset with it. */
+  private static async clearThrottleConfirmed(): Promise<void> {
+    await this.boundedSecureDelete(this.PIN_THROTTLE_KEY);
+    this.throttleMirror = { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
+  }
+
   private static async resetThrottle(): Promise<void> {
     this.throttleMirror = { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
     await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
@@ -2847,7 +4179,10 @@ export class AccountSecureStorage {
               secretSource,
             });
           } catch (error) {
-            console.warn('Failed to upgrade stored PIN metadata', error);
+            console.warn(
+              'Failed to upgrade stored PIN metadata',
+              redactError(error)
+            );
           }
         }
         return true;
@@ -2876,7 +4211,7 @@ export class AccountSecureStorage {
         } catch (error) {
           console.warn(
             'Failed to upgrade PIN hash to latest iteration count',
-            error
+            redactError(error)
           );
         }
         return true;
@@ -2890,31 +4225,34 @@ export class AccountSecureStorage {
     return false;
   }
 
+  /**
+   * Whether a PIN/passphrase credential is stored. THROWS on a read failure and
+   * on a read that outlives KEYCHAIN_READ_TIMEOUT_MS (TASK-455): every caller
+   * decides whether to demand auth on this answer (getPrivateKey's ambient
+   * read, transaction auth, import routing, biometric enable), so a failed read
+   * must never read as "no PIN". It used to swallow failures to `false`.
+   */
   static async hasPin(): Promise<boolean> {
-    try {
-      const storedData = await this.getStoredPinData();
-      return Boolean(storedData);
-    } catch {
-      return false;
-    }
+    return this.withTimeout(
+      this.hasPinStrict(),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'PIN presence read'
+    );
   }
 
   /**
-   * STRICT, boot-only PIN-presence probe (TASK-213). Unlike hasPin() — which
-   * swallows secure-storage read/decrypt errors and resolves `false`, making a
-   * genuine read FAILURE indistinguishable from genuine absence (the auth-init
-   * fail-OPEN) — this variant THROWS on a genuine secure-storage read/decrypt
-   * failure and resolves `false` ONLY for genuine ABSENCE (no credential stored
-   * in either the primary secure-store or the legacy AsyncStorage location).
+   * STRICT PIN-presence probe (TASK-213), unbounded. It THROWS on a genuine
+   * secure-storage read/decrypt failure and resolves `false` ONLY for genuine
+   * ABSENCE (no credential stored in either the primary secure-store or the
+   * legacy AsyncStorage location).
    *
    * It is a pure read: no JSON parse, no legacy-migration WRITE, no cache
    * mutation, and no secret material is ever returned or logged. Presence is
    * decided purely on whether a raw credential value exists.
    *
-   * Used EXCLUSIVELY by AuthContext.checkInitialAuthState so lock computation can
-   * fail CLOSED (the "secure storage unavailable" recovery state) on a storage
-   * read failure. Do NOT route other callers here: hasPin()'s error-swallowing
-   * contract (resolve falsy on failure) is relied on by its other call sites.
+   * AuthContext.checkInitialAuthState calls it directly (under its own deadline)
+   * so lock computation fails CLOSED (the "secure storage unavailable" recovery
+   * state) on a read failure. Other callers use hasPin(), the bounded wrapper.
    */
   static async hasPinStrict(): Promise<boolean> {
     // A throw from either getItem (keychain/keystore unavailable, decrypt error)
@@ -3025,6 +4363,14 @@ export class AccountSecureStorage {
     newSecret: string;
     /** Kind of the new secret (folded into the credential + each blob). */
     newSource: SecretSource;
+    /**
+     * setupPin only (TASK-508): confirm removal of the restore-before-PIN
+     * breadcrumb after the rewrap and read-back and immediately before the
+     * credential write; abort (pre-commit rollback) if it cannot be confirmed.
+     * clearPinSetupPending takes no lock, so running it inside the key mutex
+     * nests nothing (DOC-507 section 1).
+     */
+    clearBreadcrumbBeforeCommit?: boolean;
   }): Promise<void> {
     const { currentSecret, newSecret, newSource } = opts;
 
@@ -3149,6 +4495,33 @@ export class AccountSecureStorage {
           }
         } finally {
           check?.fill(0);
+        }
+      }
+
+      // PHASE 3b (setupPin, TASK-508): the breadcrumb is gone, CONFIRMED, before
+      // the credential exists. An unconfirmed removal throws here, pre-commit, so
+      // the rollback below drops the unproven new blobs.
+      if (opts.clearBreadcrumbBeforeCommit) {
+        // TASK-504 (DOC-507 5.4, B): a kill inside the forgotten-PIN step's
+        // credential removal can leave the credential gone and a stale throttle
+        // behind. When setupPin finds NO credential it clears that throttle,
+        // confirmed, BEFORE the new credential exists; otherwise it would refuse
+        // the new PIN. It never clears a throttle while a credential exists (no
+        // path may clear a lockout while a PIN does), and a credential read that
+        // fails leaves the throttle alone too.
+        let credentialExists = true;
+        try {
+          credentialExists = await this.hasPinStrict();
+        } catch {
+          credentialExists = true;
+        }
+        if (!credentialExists) {
+          await this.clearThrottleConfirmed();
+        }
+        if (!(await clearPinSetupPending())) {
+          throw new AccountStorageError(
+            'Could not clear the restore setup marker before establishing the PIN'
+          );
         }
       }
 
@@ -3351,6 +4724,48 @@ export class AccountSecureStorage {
     });
   }
 
+  /**
+   * TASK-504 (DOC-507 5.4, step B): remove the PIN credential for the
+   * forgotten-PIN step, and nothing else. Deletes credential items by name only,
+   * in the ruled order: (1) the PIN credential, both copies; (2) SALT_KEY, both
+   * copies; (3) the persisted throttle record, LAST, so a kill between them can
+   * never leave the old PIN with its lockout cleared. It never calls deletePin or
+   * clearOrphanPin (both enumerate the account list, which is empty after a
+   * reinstall, so their "no key held" checks pass only because the keys are
+   * invisible), and it touches no secret slot, no device id and no metadata.
+   *
+   * Preconditions, checked here as well as by the caller: a credential exists
+   * (otherwise there is nothing to remove) and the account list is EMPTY (the
+   * step is for a device with no accounts; with accounts the wallet's own Change
+   * PIN is the route). A read that fails throws and nothing is deleted.
+   * Re-running after a kill finishes the deletes only while a PIN credential
+   * copy is left; once both copies are gone it throws "There is no PIN to
+   * remove" and the step is not offered. A salt or throttle record left by a kill
+   * after the credential is gone is harmless: the salt is overwritten by the next
+   * setupPin, and setupPin clears the throttle when it finds no credential.
+   */
+  static async removeCredentialForForgottenPin(): Promise<void> {
+    return this.runKeyMutationExclusive(async () => {
+      if (!(await this.hasPinStrict())) {
+        throw new AccountStorageError('There is no PIN to remove');
+      }
+      if ((await this.readAccountListStrict()).length > 0) {
+        throw new AccountStorageError(
+          'The PIN cannot be removed while accounts are listed'
+        );
+      }
+      // (1) the PIN credential: both copies.
+      await this.boundedSecureDelete(this.PIN_KEY);
+      await this.boundedStorageRemove(this.PIN_KEY);
+      // (2) SALT_KEY: both copies.
+      await this.boundedSecureDelete(this.SALT_KEY);
+      await this.boundedStorageRemove(this.SALT_KEY);
+      // (3) the throttle record, last.
+      await this.clearThrottleConfirmed();
+      this.legacyCheckRequired = undefined;
+    });
+  }
+
   // Biometric Settings
   static async setBiometricEnabled(enabled: boolean): Promise<void> {
     try {
@@ -3536,28 +4951,46 @@ export class AccountSecureStorage {
 
   private static async getStoredPinData(): Promise<StoredPinData | null> {
     try {
-      const stored = await secureStorage.getItem(this.PIN_KEY);
-      if (stored) {
-        const parsed = this.parseStoredPin(stored);
-        if (parsed) {
-          return parsed;
-        }
-      }
-
-      const legacy = await storage.getItem(this.PIN_KEY);
-      if (legacy) {
-        await secureStorage.setItem(this.PIN_KEY, legacy);
-        await storage.removeItem(this.PIN_KEY).catch(() => {});
-        const parsed = this.parseStoredPin(legacy);
-        if (parsed) {
-          return parsed;
-        }
-      }
-      return null;
+      return await this.readStoredPinData();
     } catch (error) {
-      console.warn('Failed to retrieve stored PIN hash', error);
+      console.warn('Failed to retrieve stored PIN hash', redactError(error));
       return null;
     }
+  }
+
+  /**
+   * The stored PIN credential, or null if none is stored or it does not parse.
+   * THROWS on a read failure, and on a keychain read that outlives `timeoutMs`
+   * when one is given (TASK-449), so a caller that must not read a failure as
+   * "no PIN" can tell the two apart. getStoredPinData is the swallowing wrapper.
+   */
+  private static async readStoredPinData(
+    timeoutMs?: number
+  ): Promise<StoredPinData | null> {
+    const read = secureStorage.getItem(this.PIN_KEY);
+    const stored =
+      timeoutMs === undefined
+        ? await read
+        : await this.withTimeout(read, timeoutMs, 'PIN presence read');
+    if (stored) {
+      const parsed = this.parseStoredPin(stored);
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    const legacy = await storage.getItem(this.PIN_KEY);
+    if (legacy) {
+      await this.boundedSecureSet(this.PIN_KEY, legacy, 'presence');
+      await this.boundedStorageRemove(this.PIN_KEY).catch(
+        this.ignoreKnownWriteFailure
+      );
+      const parsed = this.parseStoredPin(legacy);
+      if (parsed) {
+        return parsed;
+      }
+    }
+    return null;
   }
 
   private static async getOrCreateSalt(
@@ -3573,8 +5006,10 @@ export class AccountSecureStorage {
 
       const legacy = await storage.getItem(this.SALT_KEY);
       if (!regenerate && legacy) {
-        await secureStorage.setItem(this.SALT_KEY, legacy);
-        await storage.removeItem(this.SALT_KEY).catch(() => {});
+        await this.boundedSecureSet(this.SALT_KEY, legacy, 'presence');
+        await this.boundedStorageRemove(this.SALT_KEY).catch(
+          this.ignoreKnownWriteFailure
+        );
         return legacy;
       }
 
@@ -3583,10 +5018,17 @@ export class AccountSecureStorage {
       }
 
       const salt = await this.generateRandomHex(32);
-      await secureStorage.setItem(this.SALT_KEY, salt);
-      await storage.removeItem(this.SALT_KEY).catch(() => {});
+      await this.boundedSecureSet(this.SALT_KEY, salt, 'presence');
+      await this.boundedStorageRemove(this.SALT_KEY).catch(
+        this.ignoreKnownWriteFailure
+      );
       return salt;
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountStorageError('Failed to generate or retrieve salt');
     }
   }
@@ -3635,7 +5077,7 @@ export class AccountSecureStorage {
           };
         }
       } catch (error) {
-        console.warn('Failed to parse stored PIN metadata', error);
+        console.warn('Failed to parse stored PIN metadata', redactError(error));
       }
     }
 
@@ -3707,7 +5149,7 @@ export class AccountSecureStorage {
     // TASK-192: cancel any in-flight deferred notification subscribe pass, here
     // rather than only in clearAllWallets. Every reset path awaits THIS method
     // first and reaches clearAllWallets second (LockScreen.performReset,
-    // SecureStorageUnavailableScreen, backup restorers.clearAllData,
+    // SecureStorageUnavailableScreen,
     // keyManager), so invalidating downstream leaves a window the length of a
     // full secure-storage wipe in which the boot-time batch can still write
     // subscriptions for accounts being erased. Synchronous and before the mutex,
@@ -3728,7 +5170,19 @@ export class AccountSecureStorage {
         // removal — if the app dies mid-wipe we are left tombstone-set (legacy
         // resurrection blocked) rather than secrets-gone-without-a-marker. A
         // committed creation/restore clears it later.
-        await storage.setItem(this.SECURE_WIPE_TOMBSTONE_KEY, '1');
+        const unresolved = new Set<string>();
+        try {
+          // Bounded and unguarded: a stalled store must not hold the key mutex,
+          // and an earlier unresolved record must not stop a retry. If the
+          // tombstone cannot be written, nothing has been deleted yet.
+          await this.boundedStorageSet(
+            this.SECURE_WIPE_TOMBSTONE_KEY,
+            '1',
+            true
+          );
+        } catch {
+          throw new WipeIncompleteError([this.SECURE_WIPE_TOMBSTONE_KEY]);
+        }
 
         // TASK-220: drain the pending-creation journal — an in-flight creation
         // may have written a secret that is not yet in the account list (the
@@ -3736,38 +5190,87 @@ export class AccountSecureStorage {
         // leave that secret orphaned. Union the journaled ids with the account
         // list and delete every one, then clear the journal.
         const journal = await this.readPendingCreateJournal();
+        // A corrupt quarantine registry must never block a user-requested wipe:
+        // erase what the listed + journaled ids cover and still drop the registry.
+        const quarantinedIds = await this.readQuarantinedIdsSalvaged();
         const listedIds = await this.getAllAccountIds();
         const idsToDelete = new Set<string>([
           ...listedIds,
           ...Object.keys(journal),
+          ...quarantinedIds,
         ]);
 
         // Delete all accounts (listed + in-flight-journaled)
+        let failedCount = 0;
+        const failedKeys = new Set<string>();
         for (const accountId of idsToDelete) {
-          await this.deleteAccountLocked(accountId);
+          try {
+            await this.deleteAccountLocked(accountId);
+          } catch {
+            failedCount += 1;
+            failedKeys.add(this.secretKey(accountId));
+          }
         }
-        await this.writePendingCreateJournal({});
+        if (failedCount > 0) {
+          throw new WipeIncompleteError(
+            [...failedKeys],
+            `Failed to delete ${failedCount} account(s) from secure storage`
+          );
+        }
+        // Bounded, and a failure is reported instead of aborting or stalling.
+        try {
+          await this.writePendingCreateJournal({});
+        } catch {
+          unresolved.add(this.PENDING_CREATES_KEY);
+        }
+        for (const registryKey of [
+          this.QUARANTINED_IDS_KEY,
+          this.UNEXPLAINED_REMOVALS_KEY,
+        ]) {
+          try {
+            await this.boundedStorageRemove(registryKey);
+          } catch {
+            unresolved.add(registryKey);
+          }
+        }
 
         // Clear PIN and settings from general storage
         // NOTE: DEVICE_ID_KEY is intentionally NOT cleared - it's used for key derivation
         // and must remain consistent across restore operations to decrypt private keys
-        await storage.multiRemove([
+        for (const key of [
           this.PIN_KEY,
           this.SALT_KEY,
           this.BIOMETRIC_ENABLED_KEY,
           this.METADATA_LIST_KEY,
           this.PIN_TIMEOUT_KEY,
-        ]);
+        ]) {
+          try {
+            await this.boundedStorageRemove(key);
+          } catch {
+            unresolved.add(key);
+          }
+        }
+        // Ruling A: a wipe never erases an inherited same-process SET entry (the
+        // native set may still be hung and could resurrect the key); keep it as a
+        // delete UNKNOWN entry, drop everything else from the journal.
+        await this.rewriteUnknownWritesAfterWipe();
         // Clear from secure storage
-        await Promise.all([
-          secureStorage.deleteItem(this.PIN_KEY).catch(() => {}),
-          secureStorage.deleteItem(this.SALT_KEY).catch(() => {}),
-          secureStorage.deleteItem(this.BIOMETRIC_ENABLED_KEY).catch(() => {}),
+        const secureDeletes = [
+          this.PIN_KEY,
+          this.SALT_KEY,
+          this.BIOMETRIC_ENABLED_KEY,
           // Drop the auth-gated biometric-convenience secret on a full wipe.
-          secureStorage.deleteItem(this.BIOMETRIC_SECRET_KEY).catch(() => {}),
-          secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {}),
-          secureStorage.deleteItem(this.PIN_TIMEOUT_KEY).catch(() => {}),
-        ]);
+          this.BIOMETRIC_SECRET_KEY,
+          this.METADATA_LIST_KEY,
+          this.PIN_TIMEOUT_KEY,
+        ];
+        const secureDeleteResults = await Promise.allSettled(
+          secureDeletes.map((key) => this.boundedSecureDelete(key))
+        );
+        secureDeleteResults.forEach((result, index) => {
+          if (result.status === 'rejected')
+            unresolved.add(secureDeletes[index]);
+        });
         // Wipe the persistent PIN throttle THROUGH the throttle serialization
         // mutex verifyPin uses (a SEPARATE mutex from the key-mutation lock; the
         // two never deadlock because nothing acquires the key mutex inside the
@@ -3776,10 +5279,33 @@ export class AccountSecureStorage {
         // is then wiped here — it can never land AFTER the wipe and leave a stale
         // lockout (which would phantom-lock the freshly reset/restored wallet).
         await this.runThrottleExclusive(async () => {
-          await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
+          try {
+            await this.boundedSecureDelete(this.PIN_THROTTLE_KEY);
+          } catch {
+            unresolved.add(this.PIN_THROTTLE_KEY);
+          }
           this.throttleMirror = null;
         });
-      } catch {
+        const coveredKeys = new Set<string>([
+          this.PIN_KEY,
+          this.SALT_KEY,
+          this.BIOMETRIC_ENABLED_KEY,
+          this.BIOMETRIC_SECRET_KEY,
+          this.METADATA_LIST_KEY,
+          this.PIN_TIMEOUT_KEY,
+          this.PIN_THROTTLE_KEY,
+          this.PENDING_CREATES_KEY,
+          this.QUARANTINED_IDS_KEY,
+          this.UNEXPLAINED_REMOVALS_KEY,
+        ]);
+        for (const id of idsToDelete) {
+          coveredKeys.add(this.secretKey(id));
+          coveredKeys.add(`${this.LEGACY_STORAGE_KEY_PREFIX}${id}`);
+          coveredKeys.add(this.metadataKey(id));
+        }
+        await this.assertWipeComplete(coveredKeys, unresolved);
+      } catch (error) {
+        if (error instanceof AccountStorageError) throw error;
         throw new AccountStorageError('Failed to clear all secure storage');
       }
     });

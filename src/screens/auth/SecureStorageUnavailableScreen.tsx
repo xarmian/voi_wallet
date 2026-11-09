@@ -13,8 +13,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
-import { AccountSecureStorage } from '@/services/secure';
-import { MultiAccountWalletService } from '@/services/wallet';
+import { redactError } from '@/utils/logRedaction';
+import { wipeWalletData } from '@/services/wipe';
+import { showWipeCompleteNotice } from '@/services/wipe/notices';
 
 // Cross-platform confirm dialog (mirrors LockScreen.showAlert): on web there is
 // no native Alert, so fall back to window.confirm for the multi-button
@@ -46,11 +47,8 @@ const showAlert = (
   }
 };
 
-// No-stuck bound for each reset step (TASK-213). A wedged native call — a hung
-// keystore deletion or a recheck that never settles — must not leave the button
-// pinned on "Resetting…" forever. On timeout the step is abandoned (best-effort)
-// so the flow proceeds to the recheck / the "reset didn't resolve it" guidance
-// instead of hanging. 8s comfortably exceeds any healthy local wipe.
+// Bound each reset step so a wedged native call leaves the reset retry usable.
+// A timeout fails closed just like a rejected deletion.
 const RESET_STEP_TIMEOUT_MS = 8000;
 
 const withTimeout = <T,>(
@@ -119,6 +117,7 @@ export default function SecureStorageUnavailableScreen({
   // the guidance renders (no silent loop). This survives-by-unmount design needs
   // no fragile post-await timing check.
   const [resetAttempted, setResetAttempted] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const RESET_CONFIRM_WORD = 'RESET';
   const canReset = resetConfirmText === RESET_CONFIRM_WORD;
   // Avoid a setState-after-unmount warning: on a SUCCESSFUL retry/reset this
@@ -153,34 +152,30 @@ export default function SecureStorageUnavailableScreen({
     // (securityUnavailable cleared), discarding this flag; if we stay mounted the
     // reset did NOT resolve the failure and the guidance below renders.
     setResetAttempted(true);
+    setResetError(null);
     try {
-      // Best-effort local wipe. Each step is isolated so a throw in one (a broken
-      // keystore can make key-material deletion fail) still lets the wallet-
-      // metadata wipe run — that AsyncStorage removal is what makes the next
-      // strict boot read resolve "no wallet" and route to Onboarding, and on
-      // Android it also clears the secure-store presence sentinel so hasPinStrict
-      // reads genuine ABSENCE (not a fail-closed throw) afterward.
       try {
         await withTimeout(
-          AccountSecureStorage.clearAll(),
+          // TASK-415 / TASK-469: reset fails closed when key material can't be
+          // verifiably erased. wipeWalletData records the wipe request first, then
+          // erases secure storage and the wallet blob, and clears the request only
+          // when all of it is complete; an incomplete wipe is finished by the next
+          // launch. A keychain that fails every read can't support wallet setup
+          // either; wiping metadata here would recreate TASK-413's orphan-PIN state.
+          wipeWalletData(),
           RESET_STEP_TIMEOUT_MS,
-          'clearAll'
+          'wipe'
         );
       } catch (error) {
-        console.error('Reset: clearAll failed/timed out (continuing):', error);
+        if (mountedRef.current) {
+          setResetError(
+            "Couldn't erase all wallet data from secure storage. Restart your device and try again. If your device is low on storage, free some up first."
+          );
+        }
+        throw error;
       }
-      try {
-        await withTimeout(
-          MultiAccountWalletService.clearAllWallets(),
-          RESET_STEP_TIMEOUT_MS,
-          'clearAllWallets'
-        );
-      } catch (error) {
-        console.error(
-          'Reset: clearAllWallets failed/timed out (continuing):',
-          error
-        );
-      }
+      // Only after the wipe reported complete.
+      showWipeCompleteNotice();
       // Re-run the auth check: with local data wiped it resolves to genuine
       // absence ⇒ unlocked setup ⇒ Onboarding (restore-from-recovery-phrase).
       // Bounded too, so a recheck that never settles can't strand "Resetting…".
@@ -189,7 +184,10 @@ export default function SecureStorageUnavailableScreen({
       // A throw here (or a recheck that re-lands on recovery without throwing)
       // leaves this screen mounted; resetAttempted stays true and the inline
       // "reset didn't resolve it" guidance renders — no silent loop.
-      console.error('Reset of secure storage state failed:', error);
+      console.error(
+        'Reset of secure storage state failed:',
+        redactError(error)
+      );
     } finally {
       if (mountedRef.current) {
         setIsResetting(false);
@@ -294,8 +292,8 @@ export default function SecureStorageUnavailableScreen({
             style={styles.resetFailedNotice}
             accessibilityLiveRegion="polite"
           >
-            Reset didn&apos;t resolve the problem. Fully restart your device and
-            reopen the app. If it keeps happening, contact support.
+            {resetError ??
+              "Reset didn't resolve the problem. Fully restart your device and reopen the app. If it keeps happening, contact support."}
           </Text>
         ) : null}
 

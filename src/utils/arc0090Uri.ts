@@ -1,5 +1,6 @@
 import algosdk from 'algosdk';
 import { NetworkId } from '@/types/network';
+import { redactAddress } from '@/utils/logRedaction';
 
 // =============================================================================
 // Types
@@ -48,6 +49,9 @@ export interface Arc0090KeyregUri extends Arc0090BaseUri {
     xnote?: string;
   };
   isOnline: boolean; // true if participation keys present
+  // true if the raw query names any participation param, even with an empty
+  // or malformed value the parser dropped (TASK-439)
+  hasParticipationParams?: boolean;
 }
 
 // Application Call URI
@@ -107,11 +111,7 @@ export type Arc0090Uri =
   | Arc0090AssetQueryUri;
 
 export type Arc0090UriType =
-  | 'payment'
-  | 'keyreg'
-  | 'appl'
-  | 'app-query'
-  | 'asset-query';
+  'payment' | 'keyreg' | 'appl' | 'app-query' | 'asset-query';
 
 // =============================================================================
 // Constants
@@ -145,6 +145,16 @@ const ZERO_ADDRESS =
 
 // Supported URI schemes
 const SUPPORTED_SCHEMES = ['algorand', 'voi', 'perawallet'];
+
+// Keyreg query params that only belong to an online (participation) keyreg.
+const PARTICIPATION_PARAMS = [
+  'votekey',
+  'selkey',
+  'sprfkey',
+  'votefst',
+  'votelst',
+  'votekd',
+] as const;
 
 // =============================================================================
 // Detection Functions
@@ -382,7 +392,7 @@ function parsePaymentUri(uri: string): Arc0090PaymentUri | null {
   }
 
   if (!isValidAddress && address) {
-    console.warn('Invalid address in payment URI:', address);
+    console.warn('Invalid address in payment URI:', redactAddress(address));
     return null;
   }
 
@@ -471,6 +481,12 @@ function parseKeyregUri(uri: string): Arc0090KeyregUri | null {
 
   // Determine if this is an online (participation) or offline keyreg
   const isOnline = !!(params.votekey && params.selkey);
+  // Presence, not truthiness: `votekey=` or `votefst=abc` still means the URI
+  // was about participation keys, not a plain go-offline (TASK-439).
+  const query = new URLSearchParams(queryString ?? '');
+  const hasParticipationParams = PARTICIPATION_PARAMS.some((key) =>
+    query.has(key)
+  );
 
   return {
     type: 'keyreg',
@@ -479,6 +495,7 @@ function parseKeyregUri(uri: string): Arc0090KeyregUri | null {
     address,
     params,
     isOnline,
+    hasParticipationParams,
     fragment,
   };
 }
@@ -795,12 +812,29 @@ export function validateKeyregUri(uri: Arc0090KeyregUri): ValidationResult {
     errors.push('Address is required for key registration');
   }
 
+  // isOnline needs both votekey and selkey. A URI that names any
+  // participation param without both keys is incomplete, not a request to go
+  // offline: treating it as offline would silently drop what it did send
+  // (TASK-439). Checked by presence, so an empty value counts.
+  if (
+    !uri.isOnline &&
+    (uri.hasParticipationParams ||
+      PARTICIPATION_PARAMS.some((key) => uri.params[key] !== undefined))
+  ) {
+    errors.push(
+      'Participation keys are incomplete: going online needs both a vote key and a selection key'
+    );
+  }
+
   // Online keyreg requires all participation keys
   if (uri.isOnline) {
     if (!uri.params.votekey)
       errors.push('Vote key is required for online keyreg');
     if (!uri.params.selkey)
       errors.push('Selection key is required for online keyreg');
+    // Every online keyreg sampled on Voi mainnet carries one (TASK-439).
+    if (!uri.params.sprfkey)
+      errors.push('State proof key is required for online keyreg');
     if (!uri.params.votefst)
       errors.push('First valid round is required for online keyreg');
     if (!uri.params.votelst)

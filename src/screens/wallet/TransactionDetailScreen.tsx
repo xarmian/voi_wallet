@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,6 +18,7 @@ import {
   useCurrentNetworkConfig,
 } from '@/store/networkStore';
 import { getTransactionUrl } from '@/utils/blockExplorer';
+import { copyToClipboard } from '@/utils/clipboard';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import {
@@ -132,9 +132,10 @@ export default function TransactionDetailScreen() {
     return formatNativeBalance(amount, currentNetworkConfig.nativeToken);
   };
 
-  const handleCopyAddress = (address: string) => {
-    // Note: In a real app, you'd implement clipboard functionality
-    Alert.alert('Address Copied', 'Address has been copied to clipboard');
+  // TASK-400: this used to show "Address Copied" without writing to the
+  // clipboard at all.
+  const handleCopy = (value: string, label: string) => {
+    void copyToClipboard(value, `${label} copied to clipboard`);
   };
 
   const handleOpenExplorer = () => {
@@ -284,7 +285,8 @@ export default function TransactionDetailScreen() {
               <Text style={styles.detailLabel}>Transaction ID</Text>
               <TouchableOpacity
                 style={styles.detailValueContainer}
-                onPress={() => handleCopyAddress(transaction.id)}
+                testID="copy-transaction-id"
+                onPress={() => handleCopy(transaction.id, 'Transaction ID')}
               >
                 <Text
                   style={styles.detailValue}
@@ -350,7 +352,8 @@ export default function TransactionDetailScreen() {
               </View>
               <TouchableOpacity
                 style={styles.addressContainer}
-                onPress={() => handleCopyAddress(transaction.from)}
+                testID="copy-from"
+                onPress={() => handleCopy(transaction.from, 'Address')}
               >
                 <View style={styles.addressInfo}>
                   {fromNameInfo?.name && (
@@ -392,7 +395,8 @@ export default function TransactionDetailScreen() {
               </View>
               <TouchableOpacity
                 style={styles.addressContainer}
-                onPress={() => handleCopyAddress(transaction.to)}
+                testID="copy-to"
+                onPress={() => handleCopy(transaction.to, 'Address')}
               >
                 <View style={styles.addressInfo}>
                   {toNameInfo?.name && (

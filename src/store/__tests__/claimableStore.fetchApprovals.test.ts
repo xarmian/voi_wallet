@@ -529,3 +529,60 @@ describe('claimableStore.fetchApprovals guards (TASK-188)', () => {
     });
   });
 });
+
+describe('claimableStore.fetchApprovals approval dedupe (TASK-392, GH #20)', () => {
+  beforeEach(async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockGetApprovals.mockReset();
+    mockGetMetadata.mockReset();
+    mockBatchBalances.mockReset();
+    mockGetNames.mockReset();
+    mockStorageGetItem.mockReset();
+    mockStorageGetItem.mockResolvedValue(null);
+
+    mockGetMetadata.mockResolvedValue({ tokens: [] });
+    mockGetNames.mockResolvedValue(new Map());
+    mockBatchBalances.mockResolvedValue(okBalances(1));
+
+    await useClaimableStore.getState().clearCache();
+    resetStore();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('two approval events for the same contract and owner give ONE claimable item, from the latest event', async () => {
+    mockGetApprovals.mockResolvedValue({
+      approvals: [
+        { ...approval(1, '100'), round: 5, transactionId: 'OLDER' },
+        { ...approval(1, '100'), round: 9, transactionId: 'LATEST' },
+      ],
+      'current-round': 10,
+    });
+
+    await useClaimableStore.getState().fetchApprovals(ACCOUNT_A);
+
+    const { claimableItems, approvals } = useClaimableStore.getState();
+    expect(claimableItems).toHaveLength(1);
+    expect(claimableItems[0].id).toBe(`1_${OWNER}`);
+    expect(claimableItems[0].approval.transactionId).toBe('LATEST');
+    expect(approvals).toHaveLength(1);
+    // One balance lookup per surviving pair, not per event.
+    expect(mockBatchBalances.mock.calls[0][0]).toHaveLength(1);
+  });
+
+  it('a newer zero approval removes the item instead of resurrecting the older grant', async () => {
+    mockGetApprovals.mockResolvedValue({
+      approvals: [
+        { ...approval(1, '0'), round: 9, transactionId: 'REVOKE' },
+        { ...approval(1, '500'), round: 5, transactionId: 'GRANT' },
+      ],
+      'current-round': 10,
+    });
+
+    await useClaimableStore.getState().fetchApprovals(ACCOUNT_A);
+
+    expect(useClaimableStore.getState().claimableItems).toEqual([]);
+  });
+});

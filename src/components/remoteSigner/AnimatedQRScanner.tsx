@@ -5,6 +5,9 @@
  * using the BC-UR protocol with fountain codes.
  */
 
+import { redactError } from '@/utils/logRedaction';
+import { useCoverPaused } from '@/hooks/useCoverPaused';
+import { isCovered } from '@/utils/lockCover';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
@@ -97,10 +100,19 @@ export function AnimatedQRScanner({
     hasCompletedRef.current = false;
   }, []);
 
+  const covered = useCoverPaused();
+  const wasCovered = useRef(covered);
+  useEffect(() => {
+    if (wasCovered.current && !covered) {
+      resetDecoder();
+    }
+    wasCovered.current = covered;
+  }, [covered, resetDecoder]);
+
   // Initialize decoder on mount
   useEffect(() => {
-    resetDecoder();
-  }, [resetDecoder]);
+    decoderRef.current = AnimatedQRService.createDecoder();
+  }, []);
 
   // Auto-reset decoder when screen gains focus (handles back navigation after successful scan)
   useFocusEffect(
@@ -114,6 +126,7 @@ export function AnimatedQRScanner({
   // Handle barcode scan
   const handleBarCodeScanned = useCallback(
     ({ data }: { data: string }) => {
+      if (isCovered()) return;
       // Prevent rapid duplicate scans
       const now = Date.now();
       if (now - lastScanTimeRef.current < 100) return;
@@ -147,14 +160,6 @@ export function AnimatedQRScanner({
             data
           );
 
-          // Log progress concisely
-          const seqInfo = AnimatedQRService.getSequenceInfo(data);
-          if (seqInfo) {
-            console.log(
-              `[AnimatedQRScanner] Frame ${seqInfo.current}/${seqInfo.total} → ${state.progress}% (${state.receivedCount}/${state.expectedCount} received)${state.error ? ` error: ${state.error}` : ''}`
-            );
-          }
-
           setDecodeState(state);
           onProgress?.(state);
 
@@ -175,7 +180,7 @@ export function AnimatedQRScanner({
           } catch (error) {
             console.error(
               '[AnimatedQRScanner] Single-part UR decode error:',
-              error
+              redactError(error)
             );
             onError?.(
               error instanceof Error ? error.message : 'Failed to decode QR'
@@ -250,14 +255,16 @@ export function AnimatedQRScanner({
 
   return (
     <View style={styles.container}>
-      <CameraView
-        style={StyleSheet.absoluteFillObject}
-        facing="back"
-        barcodeScannerSettings={{
-          barcodeTypes: ['qr'],
-        }}
-        onBarcodeScanned={handleBarCodeScanned}
-      />
+      {!covered && (
+        <CameraView
+          style={StyleSheet.absoluteFill}
+          facing="back"
+          barcodeScannerSettings={{
+            barcodeTypes: ['qr'],
+          }}
+          onBarcodeScanned={handleBarCodeScanned}
+        />
+      )}
 
       {/* Overlay */}
       <View style={styles.overlay}>
@@ -389,7 +396,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   overlaySection: {
     flex: 1,

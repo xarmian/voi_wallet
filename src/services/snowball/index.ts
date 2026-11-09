@@ -13,6 +13,7 @@ import {
   CachedData,
   TokensResponse,
 } from './types';
+import { fetchBuffered } from '@/utils/fetchBuffered';
 
 const SNOWBALL_API_BASE_URL = 'https://api.snowballswap.com';
 const REQUEST_TIMEOUT = 10000; // 10 seconds
@@ -81,21 +82,20 @@ export class SnowballApiService {
     options: RequestInit = {},
     retryCount = 0
   ): Promise<T> {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
-
     try {
       const url = `${SNOWBALL_API_BASE_URL}${endpoint}`;
-      const response = await fetch(url, {
-        ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          ...options.headers,
+      // TASK-440 #9: the deadline covers the body read too.
+      const response = await fetchBuffered(
+        url,
+        {
+          ...options,
+          headers: {
+            'Content-Type': 'application/json',
+            ...options.headers,
+          },
         },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
+        REQUEST_TIMEOUT
+      );
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -115,8 +115,6 @@ export class SnowballApiService {
 
       return await response.json();
     } catch (error) {
-      clearTimeout(timeoutId);
-
       // Retry on network errors or 5xx errors
       if (
         retryCount < MAX_RETRIES &&

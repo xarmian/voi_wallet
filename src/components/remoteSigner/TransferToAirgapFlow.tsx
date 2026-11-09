@@ -1,7 +1,8 @@
 /**
  * TransferToAirgapFlow Component
  *
- * Multi-step flow for transferring a STANDARD account to an airgap signer device.
+ * Multi-step flow for transferring an account whose own key this device holds
+ * (canTransferOwnKey) to an airgap signer device.
  * The flow:
  * 1. Show disclaimer (recommending new keys on airgap device)
  * 2. Authenticate with PIN/biometric
@@ -12,7 +13,8 @@
  * 7. Convert account to REMOTE_SIGNER type
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import { useCoverPaused } from '@/hooks/useCoverPaused';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -21,18 +23,19 @@ import {
   ActivityIndicator,
   Modal,
   ScrollView,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
-import {
-  StandardAccountMetadata,
-  RemoteSignerAccountMetadata,
-} from '@/types/wallet';
+import { RemoteSignerAccountMetadata } from '@/types/wallet';
+import { OwnKeyAccount } from '@/services/wallet/ownKeyCustody';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { RemoteSignerResponse } from '@/types/remoteSigner';
 import { MultiAccountWalletService } from '@/services/wallet';
-import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import { SecureKeyManager } from '@/services/secure/keyManager';
+import { withFreshAuth } from '@/services/secure/freshAuth';
 import { AnimatedQRCode } from '@/components/remoteSigner/AnimatedQRCode';
 import { AnimatedQRScanner } from '@/components/remoteSigner/AnimatedQRScanner';
 import { verifyAirgapTransferConfirmation } from '@/utils/signatureVerification';
@@ -53,8 +56,8 @@ type TransferState =
   | 'error';
 
 interface TransferToAirgapFlowProps {
-  /** The STANDARD account to transfer */
-  account: StandardAccountMetadata;
+  /** The account to transfer: one whose own key this device holds */
+  account: OwnKeyAccount;
   /** Called when transfer succeeds */
   onSuccess: (newAccount: RemoteSignerAccountMetadata) => void;
   /** Called when user cancels the flow */
@@ -67,6 +70,7 @@ export function TransferToAirgapFlow({
   onCancel,
 }: TransferToAirgapFlowProps) {
   const { theme } = useTheme();
+  const covered = useCoverPaused();
   const networkId = useCurrentNetwork();
 
   // Block OS screenshots / screen recordings: this flow displays an ARC-0300 QR
@@ -83,9 +87,26 @@ export function TransferToAirgapFlow({
   // so keep only the (undefined) value passed to convertStandardToRemoteSigner.
   const [verifiedSignerDeviceName] = useState<string | undefined>(undefined);
 
+  // Cancels a pending fresh-auth prompt/read when the flow goes away or the app
+  // goes to the background.
+  const exportAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (covered) {
+      exportAbortRef.current?.abort();
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- The external lock must discard the key-bearing QR and require fresh authentication, matching the background handler.
+      setPrivateKeyQrData(null);
+      setError(null);
+      setState('disclaimer');
+    }
+  }, [covered]);
+
   // Handle disclaimer acceptance
   const handleAcceptDisclaimer = useCallback(async () => {
     setState('generating');
+    exportAbortRef.current?.abort();
+    const abort = new AbortController();
+    exportAbortRef.current = abort;
 
     // Hoisted so the finally block can zero the raw secret key on EVERY path
     // (success, error, early throw), not just success.
@@ -93,10 +114,23 @@ export function TransferToAirgapFlow({
 
     try {
       // Retrieve the private key (will prompt for biometric/PIN authentication internally)
-      privateKey = await AccountSecureStorage.getPrivateKey(account.id);
+      privateKey = await withFreshAuth(
+        'export_private_key',
+        (cap) => SecureKeyManager.revealPrivateKey(account.id, cap),
+        { signal: abort.signal }
+      );
+
+      // Backgrounded or closed while authenticating: show nothing. The finally
+      // block zeroes the key that was read.
+      if (abort.signal.aborted) return;
 
       if (!privateKey) {
         throw new Error('Could not retrieve private key for this account');
+      }
+      // TASK-425 U2: export only the account's OWN key, never one for
+      // another address.
+      if (!keyBelongsToAddress(privateKey, account.address)) {
+        throw new Error('The stored key does not belong to this account');
       }
 
       // Generate ARC-300 URI. The returned string embeds the key and is an
@@ -111,6 +145,13 @@ export function TransferToAirgapFlow({
       setPrivateKeyQrData(arc300Uri);
       setState('displaying_qr');
     } catch (err) {
+      // Closed or backgrounded mid-prompt: the flow was already reset.
+      if (abort.signal.aborted) return;
+      // A cancelled prompt shows nothing: back to the disclaimer, no error.
+      if ((err as { code?: string } | null)?.code === 'cancelled') {
+        setState('disclaimer');
+        return;
+      }
       const message =
         err instanceof Error ? err.message : 'Failed to prepare transfer';
       // Check for authentication errors
@@ -273,8 +314,23 @@ export function TransferToAirgapFlow({
   // dismissed while the QR is on screen).
   useEffect(() => {
     return () => {
+      exportAbortRef.current?.abort();
       setPrivateKeyQrData(null);
     };
+  }, []);
+
+  // Going to the background drops the key-bearing QR and returns to the
+  // disclaimer: coming back shows no key and a new export needs a new prompt.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next === 'background') {
+        exportAbortRef.current?.abort();
+        setPrivateKeyQrData(null);
+        setError(null);
+        setState('disclaimer');
+      }
+    });
+    return () => subscription?.remove?.();
   }, []);
 
   // Handle back to QR
@@ -782,7 +838,7 @@ export function TransferToAirgapFlow({
 
   return (
     <Modal
-      visible
+      visible={!covered}
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={canClose ? onCancel : undefined}

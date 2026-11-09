@@ -1,3 +1,4 @@
+import { ReviewEndedError } from './ReviewEndedError';
 import { useState } from 'react';
 import algosdk from 'algosdk';
 import {
@@ -5,17 +6,19 @@ import {
   UnifiedTransactionRequest,
   UnifiedSigningCallbacks,
   UnifiedSigningResult,
+  signsSequentially,
 } from '@/services/transactions/unifiedSigner';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
-import { isSoftwareAuthError } from '@/services/secure/authErrors';
 import {
-  LedgerSigningInfo,
-  WalletAccount,
-  AccountType,
-  RekeyedAccountMetadata,
-} from '@/types/wallet';
+  reviewGrant,
+  walletConnectReviewDigest,
+} from '@/services/auth/reviewGrant';
+import { AppLockSignal } from '@/services/secure/appLockState';
+import { clearSessionSecurity } from '@/services/secure/sessionTeardown';
+import { isSoftwareAuthError } from '@/services/secure/authErrors';
+import { LedgerSigningInfo, WalletAccount, AccountType } from '@/types/wallet';
 import {
   ledgerTransportService,
   LedgerDeviceInfo,
@@ -33,17 +36,25 @@ import { RemoteSignerService } from '@/services/remoteSigner';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { verifyRemoteSignerResponse } from '@/utils/signatureVerification';
 import { NetworkId } from '@/types/network';
+import { NetworkService } from '@/services/network';
+import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation';
+import { getRekeyStateStrict } from '@/store/walletStore';
+import { redactError } from '@/utils/logRedaction';
+
+export const SIGNED_THEN_LAPSED_BATCH_MESSAGE =
+  'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then try again there if you still need it.';
+const SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE =
+  "Your approval ended after signing finished, and this wallet can't tell whether the transaction was sent. Check your account or the dApp before you try again.";
+
+export { ReviewEndedError } from './ReviewEndedError';
+
+class WalletSecuritySettingsError extends ReviewEndedError {}
 
 /**
  * Authentication states for transaction signing
  */
 export type TransactionAuthState =
-  | 'idle'
-  | 'authenticating'
-  | 'signing'
-  | 'processing'
-  | 'completed'
-  | 'error';
+  'idle' | 'authenticating' | 'signing' | 'processing' | 'completed' | 'error';
 
 /**
  * Ledger status during signing flow
@@ -117,11 +128,24 @@ export interface TransactionAuthState_Interface {
  * Manages the complete authentication and signing flow for ALL transaction types
  */
 export class TransactionAuthController {
+  private startGate: (() => boolean) | null = null;
+
+  public setStartGate(gate: (() => boolean) | null): void {
+    this.startGate = gate;
+  }
+
+  private canStartAuth(): boolean {
+    return this.startGate ? this.startGate() : true;
+  }
+
   private unifiedSigner = UnifiedTransactionSigner.getInstance();
   private stateListeners: ((state: TransactionAuthState_Interface) => void)[] =
     [];
   private currentState: TransactionAuthState_Interface;
   private currentRequest: UnifiedTransactionRequest | null = null;
+  private remoteBatchPlan: Awaited<
+    ReturnType<UnifiedTransactionSigner['planBatch']>
+  > | null = null;
   private ledgerSigningInfo: LedgerSigningInfo | null = null;
   // Tracks the device currently being connected during a Ledger flow; cleared on
   // reset(). Declared so the reset assignment type-checks.
@@ -130,10 +154,13 @@ export class TransactionAuthController {
   private ledgerCancelRequested: boolean = false;
   private cancelledFlowGeneration: number = 0;
   private activeFlowGeneration: number = 0;
+  // WalletConnect batches use this flag for signing completion only; this
+  // wallet returns signed bytes to the dApp and never broadcasts that batch.
   private hasSubmittedToNetwork: boolean = false;
   private pendingStartAfterReady: boolean = false;
   private pendingPinForStart: string | undefined;
   private hasStartedSigning: boolean = false;
+  private startDeferredByCover = false;
   private ledgerListenersSetup: boolean = false;
   private ledgerVerificationCache: {
     deviceId: string;
@@ -143,6 +170,9 @@ export class TransactionAuthController {
   private isSigningInProgress: boolean = false;
   private userExplicitlyRejected: boolean = false;
   private signingAbortController: AbortController | null = null;
+  private signerRunToken: symbol | null = null;
+  private reviewLapseUnsubscribe: (() => void) | null = null;
+  private userCancelled = false;
   private deviceVerificationInProgress: boolean = false;
   private ledgerRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private ledgerRecoveryReason: 'app_required' | 'device_locked' | null = null;
@@ -307,6 +337,7 @@ export class TransactionAuthController {
   private scheduleLedgerAutoRecovery(
     status: 'app_required' | 'device_locked'
   ): void {
+    if (this.reviewFlowEnded) return;
     if (this.ledgerCancelRequested || this.userExplicitlyRejected) {
       return;
     }
@@ -336,6 +367,7 @@ export class TransactionAuthController {
   }
 
   private async runLedgerAutoRecovery(): Promise<void> {
+    if (this.reviewFlowEnded) return;
     this.ledgerRecoveryTimer = null;
     const reason = this.ledgerRecoveryReason;
 
@@ -461,13 +493,29 @@ export class TransactionAuthController {
   public async initializeSigningFlow(
     request: UnifiedTransactionRequest
   ): Promise<void> {
-    this.currentRequest = request;
+    this.unsubscribeReviewLapse();
     this.cancelledFlowGeneration += 1; // invalidate any previous async callbacks
+    this.signingAbortController?.abort();
+    if (
+      this.currentRequest?.reviewGrantKey !== request.reviewGrantKey ||
+      !request.reviewGrantKey
+    )
+      this.endReviewCapability();
+    this.reviewFlowEnded = false;
+    this.userCancelled = false;
+    this.reviewAuthorized = false;
+    this.reviewSigningStarted = false;
+    this.signerEnteredForRequest = false;
+    this.signatureReceivedForRequest = false;
+    this.currentRequest = request;
+    this.remoteBatchPlan = null;
     this.activeFlowGeneration = this.cancelledFlowGeneration;
+    const generation = this.cancelledFlowGeneration;
     this.hasSubmittedToNetwork = false;
     this.pendingStartAfterReady = false;
     this.pendingPinForStart = undefined;
     this.hasStartedSigning = false;
+    this.startDeferredByCover = false;
     this.isSigningInProgress = false;
     this.ledgerCancelRequested = false; // Reset cancel flag for new flow
     this.ledgerVerificationCache = null; // Clear cache on new flow
@@ -495,42 +543,61 @@ export class TransactionAuthController {
       // Determine authentication requirements BEFORE transitioning to authenticating state
       // This ensures the correct flow flags are set before the UI renders
       await this.determineAuthRequirements(request.account);
+      if (generation !== this.cancelledFlowGeneration) return;
 
       // Now transition to authenticating state with correct flow flags already set
       this.updateState({
         state: 'authenticating',
       });
 
-      // If no PIN required and no biometric required (and not ledger/remote signer flow),
-      // auto-proceed to signing since user has already confirmed the transaction
-      if (
-        !this.currentState.requiresPin &&
-        !this.currentState.requiresBiometric &&
-        !this.currentState.isLedgerFlow &&
-        !this.currentState.isRemoteSignerFlow
-      ) {
-        this.updateState({ state: 'signing' });
-        await this.startSigning();
-        return;
-      }
-
       // Setup Ledger flow if needed
       if (this.currentState.isLedgerFlow) {
         await this.initializeLedgerFlow();
       }
 
-      // Setup Remote Signer flow if needed
+      // Remote signers authorize on their own device; end local review permission
+      // before creating the QR flow.
       if (this.currentState.isRemoteSignerFlow) {
+        if (
+          request.reviewGrantKey &&
+          reviewGrant.isLockedSitting(request.reviewGrantKey)
+        ) {
+          this.settleReviewCapability();
+          this.updateState({
+            state: 'error',
+            error: new ReviewEndedError(
+              'This account signs on another device, so your wallet needs to be fully unlocked. Unlock your wallet, then start the request again.',
+              'Approval ended'
+            ),
+          });
+          return;
+        }
+        this.endReviewCapability();
         await this.initializeRemoteSignerFlow();
       }
     } catch (error) {
+      if (generation !== this.cancelledFlowGeneration) return;
       const errorObj =
         error instanceof Error ? error : new Error(String(error));
+      this.settleReviewCapability();
       this.updateState({
         state: 'error',
         error: errorObj,
       });
     }
+  }
+
+  private getRequestNetworkId(): NetworkId {
+    const request = this.currentRequest;
+    return (
+      request?.walletConnectParams?.sessionBinding?.networkId ??
+      request?.transferParams?.networkId ??
+      request?.rekeyParams?.networkId ??
+      request?.keyregParams?.networkId ??
+      request?.applParams?.networkId ??
+      request?.networkId ??
+      NetworkService.getInstance().getCurrentNetworkId()
+    );
   }
 
   /**
@@ -545,39 +612,16 @@ export class TransactionAuthController {
       const isEnrolled = await LocalAuthentication.isEnrolledAsync();
       const biometricAvailable = hasHardware && isEnrolled;
 
-      // Check if this is a remote signer (air-gapped QR) account
-      // This takes precedence over other flow types
-      // Also look up the account from storage to handle cases where type might be lost
-      // during navigation param serialization (e.g., WalletConnect flows)
-      let isRemoteSigner = account.type === AccountType.REMOTE_SIGNER;
-
-      if (!isRemoteSigner && account.address) {
-        try {
-          const allAccounts = await MultiAccountWalletService.getAllAccounts();
-          const storedAccount = allAccounts.find(
-            (acc) => acc.address === account.address
-          );
-          if (storedAccount?.type === AccountType.REMOTE_SIGNER) {
-            isRemoteSigner = true;
-          }
-
-          // For rekeyed accounts, check if the auth address is a REMOTE_SIGNER
-          // This enables unrekey/re-rekey transactions to route through the airgap flow
-          if (!isRemoteSigner && storedAccount?.type === AccountType.REKEYED) {
-            const rekeyedAccount = storedAccount as RekeyedAccountMetadata;
-            if (rekeyedAccount.authAddress) {
-              const authAccount = allAccounts.find(
-                (acc) => acc.address === rekeyedAccount.authAddress
-              );
-              if (authAccount?.type === AccountType.REMOTE_SIGNER) {
-                isRemoteSigner = true;
-              }
-            }
-          }
-        } catch {
-          // Ignore lookup errors, continue with passed account type
-        }
-      }
+      const signingInfo = await SecureKeyManager.getSigningInfo(
+        account.address,
+        this.getRequestNetworkId()
+      );
+      const allAccounts = await MultiAccountWalletService.getAllAccounts();
+      const isRemoteSigner = allAccounts.some(
+        (acc) =>
+          acc.address === signingInfo.signingAddress &&
+          acc.type === AccountType.REMOTE_SIGNER
+      );
 
       if (isRemoteSigner) {
         this.updateState({
@@ -596,10 +640,6 @@ export class TransactionAuthController {
       let ledgerInfo: LedgerSigningInfo | null = null;
 
       try {
-        const signingInfo = await SecureKeyManager.getSigningInfo(
-          account.address
-        );
-
         // Try to get Ledger signing info
         if (signingInfo.signingAccountId) {
           ledgerInfo = await SecureKeyManager.getLedgerSigningInfo(
@@ -628,8 +668,18 @@ export class TransactionAuthController {
         // Ledger info not available, continue with regular flow
       }
 
-      // Check if user has a PIN set - only require PIN if one exists
-      const hasPin = await AccountSecureStorage.hasPin();
+      // Every software-signing flow through this controller (WalletConnect review,
+      // in-app send, swap, claim) requires PIN setup; Ledger and remote signers are exempt.
+      // AuthContext's boot routing sends hasKeyBearingAccount && !hasPin to PIN-setup
+      // resume or recovery, locked and unauthenticated, never Main, so a key that
+      // exists at boot does not reach this check without a PIN. A software key can
+      // still be added in a running session while no PIN exists (a backup holding
+      // only keyless accounts restored and the app closed before PIN setup, then an
+      // account added from Settings, which does not route through SecuritySetup);
+      // the refusal fails safe there and the user is not told how to finish setup.
+      const hasPin = isLedgerFlow
+        ? await AccountSecureStorage.hasPin()
+        : await this.requireSoftwarePin();
 
       // Biometric-to-sign for a SOFTWARE key is only viable when the IN-APP
       // biometric-unlock feature is enabled — that feature stores the convenience
@@ -664,16 +714,48 @@ export class TransactionAuthController {
         ledgerStatus: isLedgerFlow ? 'idle' : 'idle', // Start as idle, will be set to searching when signing starts
       });
     } catch (error) {
+      if (error instanceof WalletSecuritySettingsError) throw error;
       throw new Error(
         `Failed to determine auth requirements: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
 
+  private async requireSoftwarePin(): Promise<true> {
+    let hasPin: boolean;
+    try {
+      hasPin = await AccountSecureStorage.hasPin();
+    } catch {
+      throw new WalletSecuritySettingsError(
+        "Couldn't read your wallet security settings. Try again."
+      );
+    }
+    if (hasPin !== true) {
+      throw new WalletSecuritySettingsError(
+        'Wallet setup is not finished. Finish setup, then try the request again.'
+      );
+    }
+    return true;
+  }
+
+  /** No ambient-network fallback is allowed for a scoped signing permission. */
+  private getReviewDigest(): string | null {
+    const request = this.currentRequest;
+    const params = request?.walletConnectParams;
+    if (!params) return null;
+    return walletConnectReviewDigest({
+      requestNetworkId: request?.networkId,
+      sessionBindingNetworkId: params.sessionBinding?.networkId,
+      transactions: params.transactions,
+      reviewedSigners: params.reviewedSigners,
+    });
+  }
+
   /**
    * Initialize Ledger flow
    */
   private async initializeLedgerFlow(): Promise<void> {
+    if (this.reviewFlowEnded) return;
     if (!this.ledgerSigningInfo) return;
 
     // Always start with searching - don't assume device is ready
@@ -1052,6 +1134,7 @@ export class TransactionAuthController {
     if (this.ledgerListenersSetup) return;
     this.ledgerListenersSetup = true;
     const onConnected = async (device: LedgerDeviceInfo) => {
+      if (this.reviewFlowEnded) return;
       if (
         device.id !== this.ledgerSigningInfo?.deviceId ||
         this.activeFlowGeneration !== this.cancelledFlowGeneration ||
@@ -1146,6 +1229,7 @@ export class TransactionAuthController {
     };
 
     const onDeviceDiscovered = async (info: LedgerDeviceInfo) => {
+      if (this.reviewFlowEnded) return;
       if (
         !this.currentState.isLedgerFlow ||
         this.userExplicitlyRejected ||
@@ -1235,6 +1319,7 @@ export class TransactionAuthController {
     ledgerTransportService.on('deviceDiscovered', onDeviceDiscovered);
     // React to device updates (e.g., after unlocking or opening app)
     ledgerTransportService.on('deviceUpdated', async (info) => {
+      if (this.reviewFlowEnded) return;
       if (
         !this.currentState.isLedgerFlow ||
         this.userExplicitlyRejected ||
@@ -1322,10 +1407,13 @@ export class TransactionAuthController {
       );
     }
 
+    const generation = this.cancelledFlowGeneration;
     try {
       const isValid = await AccountSecureStorage.verifyPin(pin);
+      if (generation !== this.cancelledFlowGeneration) return false;
 
       if (isValid) {
+        this.reviewFlowEnded = false;
         // Reset attempts and proceed with signing
         // If ledger flow, wait until device is ready to start signing
         if (
@@ -1381,10 +1469,13 @@ export class TransactionAuthController {
   /**
    * Authenticate with biometrics
    */
-  public async authenticateWithBiometrics(): Promise<boolean> {
+  public async authenticateWithBiometrics(
+    prompt = 'Authenticate to sign transaction'
+  ): Promise<boolean> {
     if (!this.currentState.biometricAvailable) {
       throw new Error('Biometric authentication not available');
     }
+    if (!this.canStartAuth()) return false;
 
     try {
       // LEDGER: biometric is a pure UI gate — the signing key lives on the
@@ -1392,15 +1483,16 @@ export class TransactionAuthController {
       // unlock). Unchanged from prior behavior.
       if (this.currentState.isLedgerFlow) {
         const result = await LocalAuthentication.authenticateAsync({
-          promptMessage: 'Authenticate to sign transaction',
+          promptMessage: prompt,
           fallbackLabel: 'Use PIN',
           cancelLabel: 'Cancel',
-          requireConfirmation: false,
+          requireConfirmation: true,
         });
 
         if (!result.success) {
           return false;
         }
+        this.reviewFlowEnded = false;
 
         if (this.currentState.ledgerStatus !== 'ready') {
           this.pendingStartAfterReady = true;
@@ -1420,13 +1512,22 @@ export class TransactionAuthController {
       // unlockVaultWithBiometrics owns the OS prompt (the auth-gated read IS the
       // prompt) AND the invariant that an enrollment-change invalidation falls
       // back to PIN, NEVER the mnemonic (HT-133).
-      const outcome = await unlockVaultWithBiometrics(
-        'Authenticate to sign transaction'
-      );
+      const wasLocked = !AppLockSignal.isUnlocked();
+      const generation = this.cancelledFlowGeneration;
+      const outcome = await unlockVaultWithBiometrics(prompt);
+      if (generation !== this.cancelledFlowGeneration) {
+        if (!AppLockSignal.isUnlocked()) clearSessionSecurity();
+        return false;
+      }
 
       if (outcome.status === 'unlocked') {
+        this.reviewFlowEnded = false;
         this.updateState({ state: 'signing' });
-        await this.startSigning();
+        try {
+          await this.startSigning();
+        } finally {
+          if (wasLocked && !AppLockSignal.isUnlocked()) clearSessionSecurity();
+        }
         return true;
       }
 
@@ -1462,9 +1563,197 @@ export class TransactionAuthController {
   /**
    * Start the actual signing process
    */
+  private reviewFlowEnded = false;
+  private reviewAuthorized = false;
+  private reviewSigningStarted = false;
+  private signerEnteredForRequest = false;
+  private signatureReceivedForRequest = false;
+
+  public hasEnteredSigner(): boolean {
+    return this.signerEnteredForRequest;
+  }
+
+  public hasReceivedSignature(): boolean {
+    return this.signatureReceivedForRequest;
+  }
+
+  private endReviewCapability(): void {
+    const key = this.currentRequest?.reviewGrantKey;
+    if (this.currentRequest) this.currentRequest.reviewGrantKey = undefined;
+    this.reviewAuthorized = false;
+    this.reviewSigningStarted = false;
+    if (key) {
+      this.reviewFlowEnded = true;
+      this.hasStartedSigning = false;
+      reviewGrant.leave(key);
+    }
+  }
+
+  public get wasUserCancelled(): boolean {
+    return this.userCancelled;
+  }
+
+  public clearUserCancellation(): void {
+    this.userCancelled = false;
+  }
+
+  public hasEndedReviewFlow(): boolean {
+    return this.reviewFlowEnded;
+  }
+
+  private settleReviewCapability(): void {
+    const key = this.currentRequest?.reviewGrantKey;
+    if (this.currentRequest) this.currentRequest.reviewGrantKey = undefined;
+    this.reviewAuthorized = false;
+    this.reviewSigningStarted = false;
+    if (key) {
+      this.reviewFlowEnded = true;
+      this.hasStartedSigning = false;
+      this.cancelLedgerAutoRecovery();
+      reviewGrant.settle(key);
+    }
+  }
+
+  public async authenticateWithReviewGrant(key: string): Promise<boolean> {
+    if (!this.canStartAuth()) return false;
+    if (
+      this.currentState.state !== 'authenticating' ||
+      this.reviewAuthorized ||
+      this.currentRequest?.reviewGrantKey !== key
+    )
+      return false;
+    const digest = this.getReviewDigest();
+    if (digest === null || !reviewGrant.consume(key, digest)) {
+      this.settleReviewCapability();
+      this.updateState({
+        state: 'error',
+        error: new ReviewEndedError(
+          'Unlock to review this request again.',
+          'Approval ended'
+        ),
+      });
+      return false;
+    }
+    this.reviewAuthorized = true;
+    if (
+      this.currentState.isLedgerFlow &&
+      this.currentState.ledgerStatus !== 'ready'
+    ) {
+      this.pendingStartAfterReady = true;
+      await this.ensureLedgerDeviceReady();
+      return true;
+    }
+    await this.startSigning();
+    return true;
+  }
+
+  private unsubscribeReviewLapse(): void {
+    const unsubscribe = this.reviewLapseUnsubscribe;
+    this.reviewLapseUnsubscribe = null;
+    unsubscribe?.();
+  }
+
+  private refuseWhileSignerAlive(): boolean {
+    if (!this.signerRunToken) return false;
+    this.settleReviewCapability();
+    this.updateState({
+      state: 'error',
+      result: null,
+      error: new ReviewEndedError(
+        'Your Ledger is still finishing the previous request. Wait for it to stop, then start the request again.',
+        'Ledger busy'
+      ),
+    });
+    return true;
+  }
+
+  private deferSigning(pin?: string): void {
+    this.hasStartedSigning = false;
+    // A refused start means the app is covered. If a biometric unlock finished
+    // after the lock and refilled the session vault (wasLocked was read before
+    // the prompt, so its finally would skip the clear), a lock must still drop
+    // the session key material.
+    if (!AppLockSignal.isUnlocked()) clearSessionSecurity();
+    if (this.currentRequest?.reviewGrantKey) {
+      this.settleReviewCapability();
+      this.updateState({
+        state: 'error',
+        error: new ReviewEndedError(
+          'Unlock to review this request again.',
+          'Approval ended'
+        ),
+      });
+      return;
+    }
+    if (this.currentState.state === 'signing') {
+      this.updateState({ state: 'authenticating' });
+    }
+    if (this.currentState.isLedgerFlow) {
+      this.startDeferredByCover = true;
+      this.pendingStartAfterReady = true;
+      this.pendingPinForStart = pin;
+    }
+  }
+
+  public async resumeDeferredStart(): Promise<void> {
+    if (!this.startDeferredByCover) return;
+    this.startDeferredByCover = false;
+    await this.maybeStartSigningIfReady();
+  }
+
   private async startSigning(pin?: string): Promise<void> {
     if (!this.currentRequest) {
       throw new Error('No transaction request to sign');
+    }
+
+    const flowGeneration = this.cancelledFlowGeneration;
+    const request = this.currentRequest;
+    const reviewKey = request.reviewGrantKey;
+    const lockedReview = !!reviewKey && reviewGrant.isLockedSitting(reviewKey);
+    const isWalletConnect = !!request.walletConnectParams?.sessionBinding;
+    const signedThenLapsedBatchMessage = SIGNED_THEN_LAPSED_BATCH_MESSAGE;
+
+    if (reviewKey && this.reviewSigningStarted) return;
+    if (this.refuseWhileSignerAlive()) return;
+    if (
+      !this.currentState.isLedgerFlow &&
+      !this.currentState.isRemoteSignerFlow
+    ) {
+      try {
+        await this.requireSoftwarePin();
+      } catch (error) {
+        if (flowGeneration !== this.cancelledFlowGeneration) return;
+        // PIN-presence validation failed before entering the signer or reading keys.
+        this.settleReviewCapability();
+        this.updateState({ state: 'error', error: error as Error });
+        return;
+      }
+    }
+    if (flowGeneration !== this.cancelledFlowGeneration) return;
+    const digest = reviewKey ? this.getReviewDigest() : null;
+    if (
+      reviewKey &&
+      (!this.reviewAuthorized ||
+        digest === null ||
+        !reviewGrant.isConsumedFor(reviewKey, digest))
+    ) {
+      this.settleReviewCapability();
+      this.updateState({
+        state: 'error',
+        error: new ReviewEndedError(
+          'Unlock to review this request again.',
+          'Approval ended'
+        ),
+      });
+      return;
+    }
+    if (reviewKey && this.reviewSigningStarted) return;
+
+    if (this.refuseWhileSignerAlive()) return;
+
+    if (!this.canStartAuth()) {
+      this.deferSigning(pin);
+      return;
     }
 
     // Update request with PIN if provided
@@ -1472,19 +1761,29 @@ export class TransactionAuthController {
       this.currentRequest.pin = pin;
     }
 
+    let signerFinished = false;
+    const runToken = Symbol('signer run');
     try {
       this.isSigningInProgress = true;
       this.signingAbortController = new AbortController(); // Create abort controller for this signing session
       this.lastProgressUpdateTime = 0; // Reset throttle timer for new signing session
       this.updateState({ state: 'signing' });
 
+      // onError ends the permission before the signer's following onComplete.
+      // Preserve whether it had already lapsed so that failure stays E2.
+      let reviewEndedOnError = false;
+      let reviewLapseOnError: ReturnType<typeof reviewGrant.endReason> = null;
       const callbacks: UnifiedSigningCallbacks = {
         onSigningStart: () => {
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           this.isSigningInProgress = true;
           this.updateState({ state: 'signing' });
         },
 
         onLedgerPrompt: (ctx) => {
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           // Throttle progress updates to reduce re-renders
           if (this.shouldUpdateProgress(ctx.index, ctx.total)) {
             // If we're getting a prompt callback, the device is ready for confirmation
@@ -1501,6 +1800,8 @@ export class TransactionAuthController {
         },
 
         onLedgerSigned: (ctx) => {
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           // Throttle progress updates to reduce re-renders
           if (this.shouldUpdateProgress(ctx.index, ctx.total)) {
             this.updateState({
@@ -1515,6 +1816,8 @@ export class TransactionAuthController {
         },
 
         onLedgerRejected: (ctx) => {
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           const errorMessage = ctx.error?.message || 'Unknown error';
           const lower = errorMessage.toLowerCase();
 
@@ -1578,6 +1881,8 @@ export class TransactionAuthController {
         },
 
         onNetworkSubmit: () => {
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           this.hasSubmittedToNetwork = true;
           this.updateState({
             state: 'processing',
@@ -1586,6 +1891,8 @@ export class TransactionAuthController {
         },
 
         onNetworkConfirmed: (txId, confirmed) => {
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           this.isSigningInProgress = false;
           this.updateState({
             state: 'completed',
@@ -1602,7 +1909,39 @@ export class TransactionAuthController {
         },
 
         onError: (error) => {
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
+          if (reviewKey) {
+            reviewLapseOnError = reviewGrant.isValid(reviewKey)
+              ? null
+              : reviewGrant.endReason(reviewKey);
+            reviewEndedOnError = true;
+            this.settleReviewCapability();
+          }
           this.isSigningInProgress = false;
+          if (reviewLapseOnError !== null) {
+            this.updateState({
+              state: 'error',
+              result: null,
+              error: new ReviewEndedError(
+                this.hasSubmittedToNetwork
+                  ? request.type === 'batch_transaction'
+                    ? signedThenLapsedBatchMessage
+                    : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
+                  : this.hasEnteredSigner()
+                    ? isWalletConnect
+                      ? 'Your approval ended before signing finished. Try again in the dApp.'
+                      : 'Your approval ended before signing finished. Start the request again.'
+                    : 'Unlock to review this request again.',
+                this.hasEnteredSigner() ? 'Request ended' : 'Approval ended'
+              ),
+            });
+            return;
+          }
+          if (lockedReview) {
+            this.updateState({ state: 'error', result: null, error });
+            return;
+          }
           const message = this.sanitizeLedgerError(error);
           const lower = message.toLowerCase();
           if (__DEV__) {
@@ -1671,7 +2010,15 @@ export class TransactionAuthController {
               lower.includes('pending') ||
               lower.includes('communication')
             ) {
-              // Race condition errors during signing - don't change state, let signing retry
+              // A capability attempt has ended; leave an ordinary Ledger retry.
+              if (reviewKey) {
+                this.updateState({
+                  state: 'authenticating',
+                  ledgerStatus: 'error',
+                  ledgerError: message,
+                  error: null,
+                });
+              }
               return;
             } else if (
               lower.includes('app') ||
@@ -1698,6 +2045,47 @@ export class TransactionAuthController {
         },
 
         onComplete: (result) => {
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
+          if (result.signedTransactions?.length)
+            this.signatureReceivedForRequest = true;
+          signerFinished = true;
+          if (
+            reviewKey &&
+            (reviewEndedOnError
+              ? reviewLapseOnError !== null
+              : !reviewGrant.isValid(reviewKey))
+          ) {
+            this.isSigningInProgress = false;
+            this.settleReviewCapability();
+            // E3e: signed, then lapsed.
+            // The row "submitted, then lapsed" is NOT APPLICABLE: a capability
+            // only reaches a WalletConnect algo_signTxn request (the screen sets
+            // reviewGrantKey only when walletConnect is present; grants are minted
+            // only for WalletConnect queue keys; Swap and Claim never carry one);
+            // algo_signAndPostTxn has no handler; the batch signer's onNetworkSubmit
+            // (unifiedSigner.ts, signWalletConnectBatch) fires after signing with no
+            // broadcast behind it; the sign controller's success handler
+            // only answers the dApp.
+            this.updateState({
+              state: 'error',
+              result: null,
+              signingProgress: null,
+              error: new ReviewEndedError(
+                this.hasSubmittedToNetwork
+                  ? request.type === 'batch_transaction'
+                    ? signedThenLapsedBatchMessage
+                    : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
+                  : this.hasEnteredSigner()
+                    ? isWalletConnect
+                      ? 'Your approval ended before signing finished. Try again in the dApp.'
+                      : 'Your approval ended before signing finished. Start the request again.'
+                    : 'Unlock to review this request again.',
+                this.hasEnteredSigner() ? 'Request ended' : 'Approval ended'
+              ),
+            });
+            return;
+          }
           this.isSigningInProgress = false;
           if (__DEV__) {
             console.log('Signing onComplete', {
@@ -1706,6 +2094,17 @@ export class TransactionAuthController {
             });
           }
           if (!result.success && !this.hasSubmittedToNetwork) {
+            // A failed signer cannot deliver an answer under this permission.
+            this.settleReviewCapability();
+            if (lockedReview) {
+              this.updateState({
+                state: 'error',
+                result: null,
+                error:
+                  result.error ?? new Error('Signing failed before submission'),
+              });
+              return;
+            }
             if (!this.currentState.isLedgerFlow) {
               // SOFTWARE flow: onError already routed to PIN entry; keep it
               // PIN-shaped and NEVER Ledger-shape it here (PR6.1) — the signer
@@ -1733,6 +2132,7 @@ export class TransactionAuthController {
             });
             return;
           }
+          this.settleReviewCapability();
           this.updateState({
             result,
             state: result.success ? 'completed' : 'error',
@@ -1745,10 +2145,89 @@ export class TransactionAuthController {
         },
       };
 
-      // Execute the signing
-      await this.unifiedSigner.signTransaction(this.currentRequest, callbacks);
+      // Crossing into the signer permanently spends this attempt's permission.
+      if (reviewKey) {
+        if (!reviewGrant.pauseIdle(reviewKey)) {
+          this.unsubscribeReviewLapse();
+          this.isSigningInProgress = false;
+          this.settleReviewCapability();
+          this.updateState({
+            state: 'error',
+            error: new ReviewEndedError(
+              'Unlock to review this request again.',
+              'Approval ended'
+            ),
+          });
+          return;
+        }
+        this.reviewSigningStarted = true;
+        // This block runs only for a request that holds a review capability. Cancel
+        // and a lapse abort the Ledger loop before its next entry. A request with
+        // no grant has no watch, so a lock or background does not abort it.
+        // For software, the pre-parallel check sees Cancel and cleanup, not a lapse.
+        // A software lapse only withholds delivery via onComplete's grant re-check;
+        // the window between pauseIdle and the parallel branch is not covered.
+        if (signsSequentially(request)) {
+          this.reviewLapseUnsubscribe = reviewGrant.subscribe(() => {
+            // Keep the outcome callback live so it publishes the lapse's own text.
+            if (
+              !reviewGrant.isValid(reviewKey) &&
+              this.signingAbortController &&
+              !this.signingAbortController.signal.aborted
+            ) {
+              this.signingAbortController.abort();
+            }
+          });
+        }
+      }
+      this.signerRunToken = runToken;
+      try {
+        this.signerEnteredForRequest = true;
+        await this.unifiedSigner.signTransaction(request, callbacks, {
+          signal: this.signingAbortController.signal,
+        });
+      } finally {
+        signerFinished = true;
+        if (this.signerRunToken === runToken) {
+          this.unsubscribeReviewLapse();
+          this.signerRunToken = null;
+        }
+      }
     } catch (error) {
+      // Reachable only through a throwing callback; the signer resolves its own failures.
+      if (flowGeneration !== this.cancelledFlowGeneration) return;
       this.isSigningInProgress = false;
+      const reviewLapsed =
+        !!request.reviewGrantKey &&
+        !!reviewKey &&
+        !reviewGrant.isValid(reviewKey);
+      this.settleReviewCapability();
+      if (reviewLapsed) {
+        this.updateState({
+          state: 'error',
+          result: null,
+          error: new ReviewEndedError(
+            this.hasSubmittedToNetwork
+              ? request.type === 'batch_transaction'
+                ? signedThenLapsedBatchMessage
+                : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
+              : this.hasEnteredSigner()
+                ? isWalletConnect
+                  ? 'Your approval ended before signing finished. Try again in the dApp.'
+                  : 'Your approval ended before signing finished. Start the request again.'
+                : 'Unlock to review this request again.',
+            this.hasEnteredSigner() ? 'Request ended' : 'Approval ended'
+          ),
+        });
+        return;
+      }
+      if (lockedReview) {
+        this.updateState({
+          state: 'error',
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+        return;
+      }
       const message = this.sanitizeLedgerError(error);
       const lower = message.toLowerCase();
 
@@ -1808,7 +2287,7 @@ export class TransactionAuthController {
               if (__DEV__) {
                 console.warn(
                   'Failed to (re)start Ledger discovery during retry preparation',
-                  startError
+                  redactError(startError)
                 );
               }
             });
@@ -1826,7 +2305,7 @@ export class TransactionAuthController {
             if (__DEV__) {
               console.error(
                 'Failed to restart Ledger discovery after signing error',
-                initError
+                redactError(initError)
               );
             }
           });
@@ -1902,7 +2381,9 @@ export class TransactionAuthController {
    * If Ledger is ready and we have a pending start (or this is a Ledger flow without PIN requirement), start signing once.
    */
   private async maybeStartSigningIfReady(): Promise<void> {
+    if (this.reviewFlowEnded) return;
     if (!this.currentState.isLedgerFlow) return;
+    if (this.currentRequest?.reviewGrantKey && !this.reviewAuthorized) return;
     if (this.currentState.ledgerStatus !== 'ready') return;
     if (this.hasStartedSigning) return;
 
@@ -1929,6 +2410,7 @@ export class TransactionAuthController {
    * Ensure the current Ledger device (if any) is ready. Safe against null device.
    */
   private async ensureLedgerDeviceReady(): Promise<void> {
+    if (this.reviewFlowEnded) return;
     const device = this.currentState.ledgerDevice;
     if (
       !device ||
@@ -1994,7 +2476,9 @@ export class TransactionAuthController {
   /**
    * Cancel the current signing process
    */
-  public cancel(): void {
+  public cancel(options: { byUser?: boolean } = {}): void {
+    this.unsubscribeReviewLapse();
+    this.userCancelled = options.byUser === true;
     this.clearLedgerConnectionTimeout();
     this.ledgerCancelRequested = true;
     this.isSigningInProgress = false;
@@ -2004,7 +2488,10 @@ export class TransactionAuthController {
       ledgerTransportService.stopDiscovery({ ble: true, usb: true });
     } catch (stopError) {
       if (__DEV__) {
-        console.warn('Failed to stop Ledger discovery on cancel', stopError);
+        console.warn(
+          'Failed to stop Ledger discovery on cancel',
+          redactError(stopError)
+        );
       }
     }
 
@@ -2016,9 +2503,12 @@ export class TransactionAuthController {
 
     // invalidate current flow; any late async callbacks will be ignored
     this.cancelledFlowGeneration += 1;
+    this.startDeferredByCover = false;
     try {
       ledgerTransportService.cancelConnect();
     } catch {}
+    this.remoteBatchPlan = null;
+    this.endReviewCapability();
     this.currentRequest = null;
     this.ledgerSigningInfo = null;
 
@@ -2039,6 +2529,8 @@ export class TransactionAuthController {
    * Ensures subsequent transactions can start fresh even after an error.
    */
   public resetAfterDismiss(): void {
+    this.unsubscribeReviewLapse();
+    this.userCancelled = false;
     this.clearLedgerConnectionTimeout();
     this.ledgerCancelRequested = false;
     this.userExplicitlyRejected = false;
@@ -2046,6 +2538,7 @@ export class TransactionAuthController {
     this.pendingStartAfterReady = false;
     this.pendingPinForStart = undefined;
     this.hasStartedSigning = false;
+    this.startDeferredByCover = false;
     this.hasSubmittedToNetwork = false;
     this.ledgerVerificationCache = null;
     this.deviceVerificationInProgress = false;
@@ -2054,7 +2547,10 @@ export class TransactionAuthController {
       ledgerTransportService.stopDiscovery({ ble: true, usb: true });
     } catch (stopError) {
       if (__DEV__) {
-        console.warn('Failed to stop Ledger discovery during reset', stopError);
+        console.warn(
+          'Failed to stop Ledger discovery during reset',
+          redactError(stopError)
+        );
       }
     }
 
@@ -2063,6 +2559,8 @@ export class TransactionAuthController {
       this.signingAbortController = null;
     }
 
+    this.remoteBatchPlan = null;
+    this.endReviewCapability();
     this.currentRequest = null;
     this.ledgerSigningInfo = null;
     this.connectingDeviceId = null;
@@ -2146,6 +2644,12 @@ export class TransactionAuthController {
       throw new Error('No transaction request available');
     }
 
+    // TASK-418: a replaced or cancelled flow must not publish its plan or
+    // results onto the next one. Every await below re-checks the generation.
+    const generation = this.cancelledFlowGeneration;
+    const isStale = () => generation !== this.cancelledFlowGeneration;
+    const request = this.currentRequest;
+
     try {
       this.updateState({
         state: 'signing',
@@ -2153,38 +2657,51 @@ export class TransactionAuthController {
       });
 
       // Build the unsigned transactions based on request type
-      const unsignedTxns = await this.buildUnsignedTransactions();
+      const built: Parameters<typeof this.buildUnsignedTransactions>[0] = {};
+      const unsignedTxns = await this.buildUnsignedTransactions(built);
+      if (isStale()) return;
+      this.remoteBatchPlan = built.batchPlan ?? null;
 
-      // Determine the actual signer address
-      // For rekeyed accounts, we need to use the auth address as the signer
-      let signerAddress = this.currentRequest.account.address;
-      const account = this.currentRequest.account;
-
-      if (account.type === AccountType.REKEYED) {
-        const rekeyedAccount = account as RekeyedAccountMetadata;
-        if (rekeyedAccount.authAddress) {
-          signerAddress = rekeyedAccount.authAddress;
-        }
+      if (this.remoteBatchPlan && unsignedTxns.length === 0) {
+        this.updateState({
+          state: 'completed',
+          remoteSignerStatus: 'idle',
+          result: {
+            success: true,
+            signedTransactions: this.remoteBatchPlan.map((plan) =>
+              plan.action === 'passthrough' ? plan.value : null
+            ),
+          },
+        });
+        return;
       }
+      const networkId = this.getRequestNetworkId();
+      const rekey = await getRekeyStateStrict(
+        request.account.address,
+        networkId
+      );
+      if (isStale()) return;
+      const signerAddress = rekey.authAddress ?? request.account.address;
 
       // Create the remote signer request
       const signerRequest = await RemoteSignerService.createSigningRequest(
         unsignedTxns,
         [signerAddress], // signer addresses - use auth address for rekeyed accounts
         {
-          authAddresses:
-            account.type === AccountType.REKEYED
-              ? [(account as RekeyedAccountMetadata).authAddress]
-              : undefined,
+          networkId,
+          authAddresses: rekey.authAddress ? [rekey.authAddress] : undefined,
           description: this.getTransactionDescription(),
         }
       );
 
+      if (isStale()) return;
+      this.signerEnteredForRequest = true;
       this.updateState({
         remoteSignerRequest: signerRequest,
         remoteSignerStatus: 'displaying_request',
       });
     } catch (error) {
+      if (isStale()) return;
       const errorMessage =
         error instanceof Error
           ? error.message
@@ -2201,7 +2718,11 @@ export class TransactionAuthController {
   /**
    * Build unsigned transactions from the current request
    */
-  private async buildUnsignedTransactions(): Promise<algosdk.Transaction[]> {
+  private async buildUnsignedTransactions(
+    out: {
+      batchPlan?: Awaited<ReturnType<UnifiedTransactionSigner['planBatch']>>;
+    } = {}
+  ): Promise<algosdk.Transaction[]> {
     if (!this.currentRequest) {
       throw new Error('No transaction request available');
     }
@@ -2253,15 +2774,11 @@ export class TransactionAuthController {
 
       case 'batch_transaction':
       case 'walletconnect_batch':
-        if (!this.currentRequest.walletConnectParams?.transactions) {
-          throw new Error('Batch transactions required');
-        }
-        // Decode the WalletConnect transactions
-        return this.currentRequest.walletConnectParams.transactions.map(
-          (wtxn) => {
-            const txnBytes = Buffer.from(wtxn.txn, 'base64');
-            return algosdk.decodeUnsignedTransaction(txnBytes);
-          }
+        // The plan is published by the caller only if the flow is still
+        // current (TASK-418): a stale planning call must not overwrite it.
+        out.batchPlan = await this.unifiedSigner.planBatch(this.currentRequest);
+        return out.batchPlan.flatMap((plan) =>
+          plan.action === 'sign' ? [plan.txn] : []
         );
 
       default:
@@ -2322,12 +2839,19 @@ export class TransactionAuthController {
       throw new Error('No active remote signer flow');
     }
 
+    const request = this.currentState.remoteSignerRequest;
+    const transactionRequest = this.currentRequest;
+    const requestType = transactionRequest?.type;
+    const batchPlan = this.remoteBatchPlan;
+    const generation = this.cancelledFlowGeneration;
+    const isStale = () => generation !== this.cancelledFlowGeneration;
+
     this.updateState({
       remoteSignerStatus: 'processing_response',
     });
 
     try {
-      const request = this.currentState.remoteSignerRequest;
+      if (isStale()) return;
 
       // Validate the response matches our request
       if (response.id !== request.id) {
@@ -2349,6 +2873,8 @@ export class TransactionAuthController {
           `Invalid signed response: ${envelope.error ?? 'envelope validation failed'}`
         );
       }
+      // Signature bytes are present; verification below still fails closed.
+      this.signatureReceivedForRequest = true;
 
       // Content-bind + network-correct signature verification (FAIL CLOSED):
       // every returned txn must byte-equal the exact txn the wallet built AND be
@@ -2357,8 +2883,10 @@ export class TransactionAuthController {
       // (never the single global authAddress on wallet metadata, which is
       // overwritten by whichever network's balance loaded last).
       const { NetworkService } = await import('@/services/network');
+      if (isStale()) return;
       const netService = NetworkService.getInstance(request.net as NetworkId);
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
+      if (isStale()) return;
       const pairedRemoteSigners = new Set(
         allAccounts
           .filter((acc) => acc.type === AccountType.REMOTE_SIGNER)
@@ -2368,10 +2896,12 @@ export class TransactionAuthController {
       const verification = await verifyRemoteSignerResponse(request, response, {
         resolveExpectedSigner: async (sender) => {
           const info = await netService.getAccountRekeyInfo(sender, true);
+          if (isStale()) throw new Error('Stale signing response');
           return info.isRekeyed && info.authAddress ? info.authAddress : sender;
         },
         isPairedRemoteSigner: (address) => pairedRemoteSigners.has(address),
       });
+      if (isStale()) return;
       if (!verification.valid) {
         throw new Error(
           `Signed response verification failed: ${verification.error ?? 'unknown reason'}`
@@ -2386,8 +2916,34 @@ export class TransactionAuthController {
         throw new Error('No signed transactions in response');
       }
 
+      if (
+        requestType === 'batch_transaction' ||
+        requestType === 'walletconnect_batch'
+      ) {
+        // Batch callers own submission. Return the same ARC-0001 shape as
+        // local signing, restoring declined/passthrough slots in request order.
+        const signatures = signedTxns.map((txn) =>
+          Buffer.from(txn).toString('base64')
+        );
+        let index = 0;
+        const signedTransactions = batchPlan!.map((plan) =>
+          plan.action === 'sign'
+            ? signatures[index++]
+            : plan.action === 'passthrough'
+              ? plan.value
+              : null
+        );
+        this.updateState({
+          state: 'completed',
+          remoteSignerStatus: 'idle',
+          result: { success: true, signedTransactions },
+        });
+        return;
+      }
+
       // Submit to network
       this.updateState({ state: 'processing' });
+      if (isStale()) return;
 
       // Submit on the REQUEST's network (the same instance verification used),
       // NOT the globally-active one — if the user switched networks during the
@@ -2395,11 +2951,29 @@ export class TransactionAuthController {
       // response we verified against request.net.
       const networkService = netService;
 
+      // A QR round trip can outlast the builder's custody check, so the key
+      // receiving authority is checked again right before submitting
+      // (TASK-425 U3 Codex confirm 3).
+      if (requestType === 'rekey' || requestType === 'rekey_reverse') {
+        const { TransactionService } = await import('@/services/transactions');
+        const rekey = transactionRequest?.rekeyParams;
+        const receiver =
+          requestType === 'rekey' ? rekey?.rekeyToAddress : rekey?.fromAddress;
+        if (!receiver) throw new Error('Rekey parameters missing');
+        await TransactionService.assertSignsAfterRekey(receiver);
+        if (isStale()) return;
+      }
+
       // Submit the signed transactions
       const { txId: transactionId, confirmed } =
         await networkService.submitTransaction(
           signedTxns.length === 1 ? signedTxns[0] : signedTxns
         );
+
+      if (requestType === 'rekey' || requestType === 'rekey_reverse') {
+        invalidateRekeyStatus();
+      }
+      if (isStale()) return;
 
       // Success! `confirmed === false` means the tx was submitted but not yet
       // confirmed within the round window (pending, not failed); the result
@@ -2417,6 +2991,7 @@ export class TransactionAuthController {
         result: successResult,
       });
     } catch (error) {
+      if (isStale()) return;
       const errorMessage =
         error instanceof Error
           ? error.message
@@ -2436,6 +3011,8 @@ export class TransactionAuthController {
   public cancelRemoteSignerFlow(): void {
     if (!this.currentState.isRemoteSignerFlow) return;
 
+    this.cancelledFlowGeneration += 1;
+    this.remoteBatchPlan = null;
     this.userExplicitlyRejected = true;
     this.updateState({
       state: 'error',
@@ -2458,6 +3035,9 @@ export class TransactionAuthController {
    * Clean up resources
    */
   public cleanup(): void {
+    this.unsubscribeReviewLapse();
+    this.userCancelled = false;
+    this.cancelledFlowGeneration += 1;
     this.clearLedgerConnectionTimeout();
 
     // Abort any active signing process
@@ -2466,10 +3046,14 @@ export class TransactionAuthController {
       this.signingAbortController = null;
     }
 
+    this.isSigningInProgress = false;
     this.stateListeners.length = 0;
+    this.remoteBatchPlan = null;
+    this.endReviewCapability();
     this.currentRequest = null;
     this.ledgerSigningInfo = null;
     this.userExplicitlyRejected = false;
+    this.updateState(this.getInitialState());
   }
 }
 

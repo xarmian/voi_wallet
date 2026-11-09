@@ -2,12 +2,10 @@
  * BackupWarningBanner — Home banner shown while the active account's recovery
  * phrase has not been confirmed on this device (TASK-45 / DR-10).
  *
- * Driven by the persisted `backupVerified` flag, read through
- * `isBackupVerified()` so it fails closed: a legacy record, a restored account,
- * or a skipped quiz all keep the warning up. Deliberately NOT dismissible —
- * tapping it opens the verification flow, which is the only thing that clears
- * it. Follows the screen-local banner precedent (SignerModeBanner /
- * UpdateBanner / ClaimableBanner).
+ * The active account reminds while local custody is present or unresolved,
+ * its own backupVerified is not literal true, and delegation is not confirmed
+ * on every configured network. Pending/error probes and UNKNOWN networks never
+ * suppress it. Not dismissible; tapping opens address-only verification.
  */
 
 import React from 'react';

@@ -1,0 +1,657 @@
+const mockSecureValues = new Map<string, string>();
+const mockPlainValues = new Map<string, string>();
+let mockNonceCounter = 0;
+let mockHeldWrite: { key: string; value: string; land: () => void } | undefined;
+let mockHoldNext = false;
+let mockHoldJournalNext = false;
+let mockLandJournal: (() => void) | undefined;
+jest.mock('@/platform', () => ({
+  crypto: {
+    getRandomBytes: async (n: number) =>
+      Uint8Array.from({ length: n }, () => ++mockNonceCounter % 256),
+    sha256: async () => 'test',
+    randomUUID: () => 'test-id',
+  },
+  secureStorage: {
+    getItem: jest.fn(async (key: string) => mockSecureValues.get(key) ?? null),
+    setItem: jest.fn((key: string, value: string) => {
+      if (mockHoldNext) {
+        mockHoldNext = false;
+        return new Promise<void>((resolve) => {
+          mockHeldWrite = {
+            key,
+            value,
+            land: () => {
+              mockSecureValues.set(key, value);
+              resolve();
+            },
+          };
+        });
+      }
+      mockSecureValues.set(key, value);
+      return Promise.resolve();
+    }),
+    deleteItem: jest.fn(async (key: string) => {
+      mockSecureValues.delete(key);
+    }),
+  },
+  storage: {
+    getItem: jest.fn(async (key: string) => mockPlainValues.get(key) ?? null),
+    setItem: jest.fn(async (key: string, value: string) => {
+      if (key === 'voi_unknown_secure_writes' && mockHoldJournalNext) {
+        mockHoldJournalNext = false;
+        await new Promise<void>((resolve) => {
+          mockLandJournal = () => {
+            mockPlainValues.set(key, value);
+            resolve();
+          };
+        });
+        return;
+      }
+      mockPlainValues.set(key, value);
+    }),
+    removeItem: jest.fn(async (key: string) => {
+      mockPlainValues.delete(key);
+    }),
+    multiRemove: jest.fn(async (keys: string[]) => {
+      keys.forEach((key) => mockPlainValues.delete(key));
+    }),
+  },
+  biometrics: {},
+  deviceId: {},
+}));
+import { AccountSecureStorage } from '../AccountSecureStorage';
+import { WipeIncompleteError } from '../../../types/wallet';
+import {
+  WriteOutcomeUnknownError,
+  WriteUnresolvedError,
+  UNKNOWN_WRITES_STORAGE_KEY,
+  BOOKKEEPING_KEYS,
+  BOOKKEEPING_KEY_PREFIXES,
+} from '../boundedWrites';
+const account = AccountSecureStorage as unknown as {
+  saveSecret(id: string, payload: unknown): Promise<void>;
+  saveSecretV2Checked(id: string, payload: unknown): Promise<void>;
+  appendBlob(payload: unknown, blob: unknown): unknown;
+  runKeyMutationExclusive<T>(task: () => Promise<T>): Promise<T>;
+  boundedSecureSet(
+    key: string,
+    value: string,
+    verifier: 'presence'
+  ): Promise<void>;
+};
+const payload = {
+  accountId: 'one',
+  encryptedPrivateKey: 'cipher',
+  authMethod: 'pin',
+};
+const key = 'voi_account_secret_one';
+const nonce = () => JSON.parse(mockSecureValues.get(key)!).writeNonce as string;
+// TASK-469: clearAll now reports a wipe incomplete while an earlier write can
+// still land. Several tests here deliberately hang a native write; let it land
+// after each test so a leftover unsettled record cannot leak into the next one.
+afterEach(async () => {
+  mockHeldWrite?.land();
+  mockHeldWrite = undefined;
+  mockLandJournal?.();
+  mockLandJournal = undefined;
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+});
+
+beforeEach(() => {
+  mockSecureValues.clear();
+  mockPlainValues.clear();
+  mockNonceCounter = 0;
+  mockHoldNext = false;
+  mockHeldWrite = undefined;
+  mockHoldJournalNext = false;
+  mockLandJournal = undefined;
+  // Tests seed the journal in storage directly; drop the in-memory desired state.
+  (
+    AccountSecureStorage as unknown as Record<string, unknown>
+  ).unknownJournalDesired = undefined;
+});
+
+test('every secret payload write remints a 32-hex nonce, including append and reused object', async () => {
+  await account.saveSecret('one', payload);
+  const first = nonce();
+  await account.saveSecret('one', payload);
+  const second = nonce();
+  const reused = JSON.parse(mockSecureValues.get(key)!);
+  await account.saveSecretV2Checked('one', reused);
+  const third = nonce();
+  await account.saveSecretV2Checked(
+    'one',
+    account.appendBlob(reused, { mac: 'blob' })
+  );
+  const fourth = nonce();
+  expect(new Set([first, second, third, fourth]).size).toBe(4);
+  for (const item of [first, second, third, fourth])
+    expect(item).toMatch(/^[0-9a-f]{32}$/);
+  expect(payload).not.toHaveProperty('writeNonce');
+});
+
+test('UNKNOWN secret is journaled before the mutex releases, and later mutation waits for its nonce', async () => {
+  jest.useFakeTimers();
+  try {
+    mockHoldNext = true;
+    const first = account.runKeyMutationExclusive(() =>
+      account.saveSecret('one', payload)
+    );
+    const firstAssertion = expect(first).rejects.toBeInstanceOf(
+      WriteOutcomeUnknownError
+    );
+    await jest.advanceTimersByTimeAsync(5001);
+    await firstAssertion;
+    const entry = JSON.parse(mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY)!)[
+      key
+    ];
+    expect(entry.verifier).toBe('nonce');
+    expect(entry.attempt).toBe(JSON.parse(mockHeldWrite!.value).writeNonce);
+    expect(JSON.stringify(entry)).not.toContain('cipher');
+    await expect(
+      account.runKeyMutationExclusive(() => account.saveSecret('one', payload))
+    ).rejects.toBeInstanceOf(WriteUnresolvedError);
+    mockHeldWrite!.land();
+    await account.runKeyMutationExclusive(() =>
+      account.saveSecret('one', payload)
+    );
+    expect(nonce()).not.toBe(entry.attempt);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('non-payload writes use presence verifier', async () => {
+  jest.useFakeTimers();
+  try {
+    mockHoldNext = true;
+    const result = account.boundedSecureSet(
+      'voi_wallet_pin',
+      'legacy-test',
+      'presence'
+    );
+    const assertion = expect(result).rejects.toBeInstanceOf(
+      WriteOutcomeUnknownError
+    );
+    await jest.advanceTimersByTimeAsync(5001);
+    await assertion;
+    const entry = JSON.parse(
+      mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY)!
+    ).voi_wallet_pin;
+    expect(entry.verifier).toBe('presence');
+    expect(entry).not.toHaveProperty('value');
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+const earlierEntry = (over: Record<string, unknown> = {}) => ({
+  [key]: {
+    key,
+    op: 'set',
+    verifier: 'nonce',
+    attempt: 'a'.repeat(32),
+    sessionId: 'earlier',
+    at: 1,
+    ...over,
+  },
+});
+const seedEntry = (over: Record<string, unknown> = {}) =>
+  mockPlainValues.set(
+    UNKNOWN_WRITES_STORAGE_KEY,
+    JSON.stringify(earlierEntry(over))
+  );
+
+test('boot: an earlier-session nonce entry over a legacy payload is resolved', async () => {
+  mockSecureValues.set(key, JSON.stringify(payload));
+  seedEntry();
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    true
+  );
+  expect(
+    Object.keys(await AccountSecureStorage.readUnknownWritesStrict())
+  ).toEqual([key]);
+});
+
+test('reconcile after JS reload leaves a current-process unknown set unresolved', async () => {
+  seedEntry({ sessionId: 'test-process-id' });
+  mockSecureValues.set(key, JSON.stringify(payload));
+  jest.resetModules();
+  const reloaded =
+    require('../AccountSecureStorage') as typeof import('../AccountSecureStorage');
+  await expect(
+    reloaded.AccountSecureStorage.resolveUnknownWrite(key)
+  ).resolves.toBe(false);
+  expect(
+    Object.keys(await reloaded.AccountSecureStorage.readUnknownWritesStrict())
+  ).toEqual([key]);
+});
+
+test('boot: a payload carrying a different nonce resolves; the matching nonce also resolves', async () => {
+  seedEntry();
+  mockSecureValues.set(
+    key,
+    JSON.stringify({ ...payload, writeNonce: 'b'.repeat(32) })
+  );
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    true
+  );
+  mockSecureValues.set(
+    key,
+    JSON.stringify({ ...payload, writeNonce: 'a'.repeat(32) })
+  );
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    true
+  );
+});
+
+test('boot: an absent key and a corrupt value resolve; resolving never removes the entry', async () => {
+  seedEntry();
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    true
+  );
+  mockSecureValues.set(key, '{corrupt');
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    true
+  );
+  expect(
+    Object.keys(await AccountSecureStorage.readUnknownWritesStrict())
+  ).toEqual([key]);
+});
+
+test('boot: a presence-verifier entry resolves on any successful probe', async () => {
+  seedEntry({ verifier: 'presence', attempt: '' });
+  mockSecureValues.set(key, 'anything');
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    true
+  );
+});
+
+test('guard: a later mutation over an earlier-session legacy payload proceeds', async () => {
+  seedEntry();
+  mockSecureValues.set(key, JSON.stringify(payload));
+  await expect(account.saveSecret('one', payload)).resolves.toBeUndefined();
+  expect(JSON.parse(mockSecureValues.get(key)!).writeNonce).toBeDefined();
+});
+
+test('legacy payload without an UNKNOWN entry remains readable', async () => {
+  mockSecureValues.set(key, JSON.stringify(payload));
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    true
+  );
+  expect(JSON.parse(mockSecureValues.get(key)!)).not.toHaveProperty(
+    'writeNonce'
+  );
+});
+
+test('corrupt UNKNOWN journal blocks a new mutation', async () => {
+  mockPlainValues.set(UNKNOWN_WRITES_STORAGE_KEY, '{corrupt');
+  await expect(account.saveSecret('one', payload)).rejects.toBeInstanceOf(
+    WriteUnresolvedError
+  );
+  expect(mockSecureValues.has(key)).toBe(false);
+});
+
+test('corrupt UNKNOWN journal does not refuse saveSecret(null), deleteAccount, or clearAll', async () => {
+  mockSecureValues.set(key, JSON.stringify(payload));
+  mockPlainValues.set(UNKNOWN_WRITES_STORAGE_KEY, '{corrupt');
+  await expect(account.saveSecret('one', null)).resolves.toBeUndefined();
+  mockSecureValues.set(key, JSON.stringify(payload));
+  await expect(
+    AccountSecureStorage.deleteAccount('one')
+  ).resolves.toBeUndefined();
+  await expect(AccountSecureStorage.clearAll()).resolves.toBeUndefined();
+  expect(mockPlainValues.has(UNKNOWN_WRITES_STORAGE_KEY)).toBe(false);
+});
+
+test('clearAll deletes and clears quarantined ids even when they are unindexed', async () => {
+  mockSecureValues.set('voi_account_secret_hidden', JSON.stringify(payload));
+  mockPlainValues.set(
+    'voi_reconcile_quarantined_ids',
+    JSON.stringify(['hidden'])
+  );
+  await expect(
+    AccountSecureStorage.readQuarantinedIdsStrict()
+  ).resolves.toEqual(['hidden']);
+  await AccountSecureStorage.clearAll();
+  expect(mockSecureValues.has('voi_account_secret_hidden')).toBe(false);
+  expect(mockPlainValues.has('voi_reconcile_quarantined_ids')).toBe(false);
+});
+
+test('clearAll salvages quarantined ids from a corrupt registry and deletes their secrets', async () => {
+  mockSecureValues.set('voi_account_secret_hidden', JSON.stringify(payload));
+  mockPlainValues.set('voi_reconcile_quarantined_ids', '["hidden", {oops');
+  await expect(AccountSecureStorage.clearAll()).resolves.toBeUndefined();
+  expect(mockSecureValues.has('voi_account_secret_hidden')).toBe(false);
+  expect(mockPlainValues.has('voi_reconcile_quarantined_ids')).toBe(false);
+});
+
+test('deleteAccount succeeds even when the cleanup records are corrupt', async () => {
+  mockSecureValues.set('voi_account_secret_one', JSON.stringify(payload));
+  mockPlainValues.set('voi_reconcile_quarantined_ids', '{not json');
+  mockPlainValues.set('voi_reconcile_unexplained_removals', '{not json');
+  await expect(
+    AccountSecureStorage.deleteAccount('one')
+  ).resolves.toBeUndefined();
+  expect(mockSecureValues.has('voi_account_secret_one')).toBe(false);
+});
+
+test('recordUnexplainedRemovals replaces a corrupt map instead of blocking the prune', async () => {
+  mockPlainValues.set('voi_reconcile_unexplained_removals', '{not json');
+  await AccountSecureStorage.recordUnexplainedRemovals([
+    { id: 'a', address: 'ADDR', label: 'Main' },
+  ]);
+  expect(
+    JSON.parse(mockPlainValues.get('voi_reconcile_unexplained_removals')!)
+  ).toEqual({ a: { address: 'ADDR', label: 'Main' } });
+});
+
+test('clearAll still completes and drops the registry when it is corrupt', async () => {
+  mockPlainValues.set('voi_reconcile_quarantined_ids', '{not json');
+  await expect(AccountSecureStorage.clearAll()).resolves.toBeUndefined();
+  expect(mockPlainValues.has('voi_reconcile_quarantined_ids')).toBe(false);
+});
+
+test('clearAll removes unexplained removal records and deleteAccount removes its id', async () => {
+  const key = 'voi_reconcile_unexplained_removals';
+  mockPlainValues.set(
+    key,
+    JSON.stringify({
+      one: { address: 'A', label: 'One' },
+      two: { address: 'B', label: 'Two' },
+    })
+  );
+  await AccountSecureStorage.deleteAccount('one');
+  expect(JSON.parse(mockPlainValues.get(key)!)).toEqual({
+    two: { address: 'B', label: 'Two' },
+  });
+  mockPlainValues.set(
+    key,
+    JSON.stringify({ two: { address: 'B', label: 'Two' } })
+  );
+  await AccountSecureStorage.clearAll();
+  expect(mockPlainValues.has(key)).toBe(false);
+});
+
+test('unexplained removal records overwrite by account id and expose only public fields', async () => {
+  await AccountSecureStorage.recordUnexplainedRemovals([
+    { id: 'same', address: 'ADDR1', label: 'First' },
+  ]);
+  await AccountSecureStorage.recordUnexplainedRemovals([
+    { id: 'same', address: 'ADDR2', label: 'Second' },
+  ]);
+  expect(await AccountSecureStorage.readUnexplainedRemovals()).toEqual([
+    { id: 'same', address: 'ADDR2', label: 'Second' },
+  ]);
+  expect(
+    JSON.parse(mockPlainValues.get('voi_reconcile_unexplained_removals')!)
+  ).toEqual({
+    same: { address: 'ADDR2', label: 'Second' },
+  });
+});
+
+test('clearAll keeps quarantine registry and throws when a quarantined delete fails', async () => {
+  mockPlainValues.set(
+    'voi_reconcile_quarantined_ids',
+    JSON.stringify(['hidden'])
+  );
+  await expect(
+    AccountSecureStorage.readQuarantinedIdsStrict()
+  ).resolves.toEqual(['hidden']);
+  const deleteLocked = jest
+    .spyOn(
+      AccountSecureStorage as unknown as {
+        deleteAccountLocked: (id: string) => Promise<void>;
+      },
+      'deleteAccountLocked'
+    )
+    .mockRejectedValue(new Error('delete failed'));
+  await expect(AccountSecureStorage.clearAll()).rejects.toThrow('1 account(s)');
+  expect(deleteLocked).toHaveBeenCalledWith('hidden');
+  expect(mockPlainValues.has('voi_reconcile_quarantined_ids')).toBe(true);
+  deleteLocked.mockRestore();
+});
+
+test('user delete removes the id from the quarantine registry', async () => {
+  mockSecureValues.set('voi_account_secret_hidden', JSON.stringify(payload));
+  mockPlainValues.set(
+    'voi_reconcile_quarantined_ids',
+    JSON.stringify(['hidden', 'other'])
+  );
+  await AccountSecureStorage.deleteAccount('hidden');
+  expect(
+    JSON.parse(mockPlainValues.get('voi_reconcile_quarantined_ids')!)
+  ).toEqual(['other']);
+});
+
+test('clearAll tombstones a timed-out secret write that lands after the wipe', async () => {
+  jest.useFakeTimers();
+  try {
+    mockPlainValues.set('voi_account_list', JSON.stringify(['one']));
+    mockHoldNext = true;
+    const first = account.saveSecret('one', payload);
+    const assertion = expect(first).rejects.toBeInstanceOf(
+      WriteOutcomeUnknownError
+    );
+    await jest.advanceTimersByTimeAsync(5001);
+    await assertion;
+    // TASK-469: the set is still unsettled, so the wipe says it is incomplete.
+    await expect(AccountSecureStorage.clearAll()).rejects.toBeInstanceOf(
+      WipeIncompleteError
+    );
+    // The set is still tracked in memory: its durable entry is retained through the
+    // wipe (a JS reload now would lose the in-memory tombstone).
+    expect(
+      JSON.parse(mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY) ?? '{}')
+    ).toHaveProperty(key);
+    mockHeldWrite!.land();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(mockSecureValues.has(key)).toBe(false);
+    const journal = JSON.parse(
+      mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY) ?? '{}'
+    );
+    expect(journal).not.toHaveProperty(key);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('a late journal write cannot restore an entry removed by a later mutation', async () => {
+  jest.useFakeTimers();
+  try {
+    const lateKey = 'voi_account_secret_late';
+    await AccountSecureStorage.resetUnknownWrites();
+    mockHoldNext = true;
+    mockHoldJournalNext = true;
+    const first = account.saveSecret('late', { ...payload, accountId: 'late' });
+    const assertion = expect(first).rejects.toBeInstanceOf(
+      WriteOutcomeUnknownError
+    );
+    await jest.advanceTimersByTimeAsync(10002);
+    await assertion;
+    await AccountSecureStorage.dropUnknownWrite(lateKey);
+    mockLandJournal!();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(
+      JSON.parse(mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY)!)
+    ).not.toHaveProperty(lateKey);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('bookkeeping key literals in boundedWrites match AccountSecureStorage (drift guard)', () => {
+  const asPrivate = AccountSecureStorage as unknown as Record<string, string>;
+  expect(BOOKKEEPING_KEYS).toContain(asPrivate.METADATA_LIST_KEY);
+  expect(BOOKKEEPING_KEYS).toContain(asPrivate.PENDING_CREATES_KEY);
+  expect(BOOKKEEPING_KEY_PREFIXES).toContain(asPrivate.METADATA_KEY);
+  // PIN, salt and every secret key must NOT be bookkeeping keys.
+  for (const secretish of [
+    asPrivate.PIN_KEY,
+    asPrivate.SALT_KEY,
+    `${asPrivate.STORAGE_KEY_PREFIX}x`,
+  ]) {
+    expect(BOOKKEEPING_KEYS).not.toContain(secretish);
+    expect(
+      BOOKKEEPING_KEY_PREFIXES.some((prefix) => secretish.startsWith(prefix))
+    ).toBe(false);
+  }
+});
+
+test('clearAll keeps an inherited same-process SET entry as a delete entry (ruling A)', async () => {
+  mockPlainValues.set(
+    UNKNOWN_WRITES_STORAGE_KEY,
+    JSON.stringify({
+      [key]: {
+        key,
+        op: 'set',
+        verifier: 'nonce',
+        attempt: 'a'.repeat(32),
+        sessionId: 'test-process-id',
+        at: 1,
+      },
+      voi_account_list: {
+        key: 'voi_account_list',
+        op: 'set',
+        verifier: 'presence',
+        attempt: '',
+        sessionId: 'earlier-process',
+        at: 1,
+      },
+    })
+  );
+  // TASK-469: a surviving same-session entry means the wipe is incomplete (the
+  // entry is still converted and kept, ruling A).
+  await expect(AccountSecureStorage.clearAll()).rejects.toBeInstanceOf(
+    WipeIncompleteError
+  );
+  const left = await AccountSecureStorage.readUnknownWritesStrict();
+  expect(Object.keys(left)).toEqual([key]);
+  expect(left[key].op).toBe('delete');
+  await expect(account.saveSecret('one', payload)).rejects.toBeInstanceOf(
+    WriteUnresolvedError
+  );
+});
+
+test('clearAll keeps the delete entry its own account deletion created, and pre-existing same-process delete entries (ruling A)', async () => {
+  mockPlainValues.set('voi_account_list', JSON.stringify(['one']));
+  mockPlainValues.set(
+    UNKNOWN_WRITES_STORAGE_KEY,
+    JSON.stringify({
+      [key]: {
+        key,
+        op: 'set',
+        verifier: 'nonce',
+        attempt: 'a'.repeat(32),
+        sessionId: 'test-process-id',
+        at: 1,
+      },
+      voi_pending_account_creates: {
+        key: 'voi_pending_account_creates',
+        op: 'delete',
+        verifier: 'presence',
+        attempt: '',
+        sessionId: 'test-process-id',
+        at: 1,
+      },
+    })
+  );
+  // TASK-469: surviving same-session entries make the wipe incomplete; they are
+  // still kept (ruling A).
+  await expect(AccountSecureStorage.clearAll()).rejects.toBeInstanceOf(
+    WipeIncompleteError
+  );
+  const left = await AccountSecureStorage.readUnknownWritesStrict();
+  expect(left[key]?.op).toBe('delete'); // converted by the account deletion, kept by the wipe
+  expect(left.voi_pending_account_creates?.op).toBe('delete'); // pre-existing, kept
+});
+
+test('clearAll leaves the journal untouched on a transient (non-corrupt) read failure', async () => {
+  const entries = {
+    [key]: {
+      key,
+      op: 'set',
+      verifier: 'nonce',
+      attempt: 'a'.repeat(32),
+      sessionId: 'test-process-id',
+      at: 1,
+    },
+  };
+  mockPlainValues.set(UNKNOWN_WRITES_STORAGE_KEY, JSON.stringify(entries));
+  const spy = jest
+    .spyOn(AccountSecureStorage, 'readUnknownWritesStrict')
+    .mockRejectedValue(new Error('unknown-write journal read timed out'));
+  // TASK-469: with the journal unreadable the wipe cannot verify completeness,
+  // so it reports incomplete naming the journal key; the journal stays untouched.
+  let strictReads = 0;
+  try {
+    await expect(AccountSecureStorage.clearAll()).rejects.toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: [UNKNOWN_WRITES_STORAGE_KEY],
+    });
+    strictReads = spy.mock.calls.length;
+  } finally {
+    spy.mockRestore();
+  }
+  // The wipe rewrite really took the strict-read path (desired state was unset).
+  expect(strictReads).toBeGreaterThan(0);
+  expect(JSON.parse(mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY)!)).toEqual(
+    entries
+  );
+});
+
+test('dropUnknownWrite(key, expected) never erases an entry journaled after the one it resolved', async () => {
+  const old = {
+    key,
+    op: 'set' as const,
+    verifier: 'nonce' as const,
+    attempt: 'a'.repeat(32),
+    sessionId: 'earlier-process',
+    at: 1,
+  };
+  const fresh = {
+    ...old,
+    op: 'delete' as const,
+    verifier: 'presence' as const,
+    attempt: '',
+    sessionId: 'test-process-id',
+    at: 2,
+  };
+  mockPlainValues.set(
+    UNKNOWN_WRITES_STORAGE_KEY,
+    JSON.stringify({ [key]: fresh })
+  );
+  await AccountSecureStorage.dropUnknownWrite(key, old); // the reconcile resolved `old`
+  expect(await AccountSecureStorage.readUnknownWritesStrict()).toEqual({
+    [key]: fresh,
+  });
+  await AccountSecureStorage.dropUnknownWrite(key, fresh);
+  expect(await AccountSecureStorage.readUnknownWritesStrict()).toEqual({});
+});
+
+test('deleteAccount and clearAll are not refused by an unresolved same-process entry on the account-list key', async () => {
+  const listEntry = {
+    key: 'voi_account_list',
+    op: 'delete',
+    verifier: 'presence',
+    attempt: 'dx-1',
+    sessionId: 'test-process-id',
+    at: 1,
+  };
+  mockPlainValues.set('voi_account_list', JSON.stringify(['one', 'two']));
+  mockSecureValues.set(key, JSON.stringify(payload));
+  mockPlainValues.set(
+    UNKNOWN_WRITES_STORAGE_KEY,
+    JSON.stringify({ voi_account_list: listEntry })
+  );
+  await expect(
+    AccountSecureStorage.deleteAccount('one')
+  ).resolves.toBeUndefined();
+  expect(JSON.parse(mockPlainValues.get('voi_account_list')!)).toEqual(['two']);
+  // TASK-469: not refused (it runs to the end), but a surviving same-session
+  // entry makes the wipe report incomplete.
+  await expect(AccountSecureStorage.clearAll()).rejects.toBeInstanceOf(
+    WipeIncompleteError
+  );
+});

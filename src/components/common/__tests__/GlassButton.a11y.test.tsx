@@ -55,8 +55,8 @@ beforeEach(() => {
 });
 
 describe('GlassButton accessibility', () => {
-  it('exposes the visible label as the accessible name with a button role', () => {
-    const { getByTestId } = render(
+  it('exposes the visible label as the accessible name with a button role', async () => {
+    const { getByTestId } = await render(
       <GlassButton label="Send" onPress={() => {}} testID="btn" />
     );
 
@@ -65,8 +65,8 @@ describe('GlassButton accessibility', () => {
     expect(button.props.accessibilityRole).toBe('button');
   });
 
-  it('lets callers override the accessible name and add a hint', () => {
-    const { getByTestId } = render(
+  it('lets callers override the accessible name and add a hint', async () => {
+    const { getByTestId } = await render(
       <GlassButton
         label="Max"
         accessibilityLabel="Send maximum spendable amount"
@@ -85,8 +85,8 @@ describe('GlassButton accessibility', () => {
     );
   });
 
-  it('surfaces `disabled` as accessibilityState', () => {
-    const { getByTestId } = render(
+  it('surfaces `disabled` as accessibilityState', async () => {
+    const { getByTestId } = await render(
       <GlassButton label="Send" disabled onPress={() => {}} testID="btn" />
     );
 
@@ -96,8 +96,8 @@ describe('GlassButton accessibility', () => {
     });
   });
 
-  it('surfaces `loading` as both busy and disabled', () => {
-    const { getByTestId } = render(
+  it('surfaces `loading` as both busy and disabled', async () => {
+    const { getByTestId } = await render(
       <GlassButton label="Send" loading onPress={() => {}} testID="btn" />
     );
 
@@ -107,8 +107,8 @@ describe('GlassButton accessibility', () => {
     });
   });
 
-  it('reports neither busy nor disabled in the resting state', () => {
-    const { getByTestId } = render(
+  it('reports neither busy nor disabled in the resting state', async () => {
+    const { getByTestId } = await render(
       <GlassButton label="Send" onPress={() => {}} testID="btn" />
     );
 
@@ -120,24 +120,28 @@ describe('GlassButton accessibility', () => {
 });
 
 describe('GlassButton reduce-motion (DR-13)', () => {
-  it('starts the infinite glow pulse when motion is allowed', () => {
-    render(<GlassButton label="Send" glow onPress={() => {}} testID="btn" />);
+  it('starts the infinite glow pulse when motion is allowed', async () => {
+    await render(
+      <GlassButton label="Send" glow onPress={() => {}} testID="btn" />
+    );
 
     expect(mockWithRepeat).toHaveBeenCalled();
     // -1 == repeat forever; that is precisely what Reduce Motion must suppress.
     expect(mockWithRepeat.mock.calls[0][1]).toBe(-1);
   });
 
-  it('never starts the infinite glow pulse under Reduce Motion', () => {
+  it('never starts the infinite glow pulse under Reduce Motion', async () => {
     mockUseReducedMotion.mockReturnValue(true);
 
-    render(<GlassButton label="Send" glow onPress={() => {}} testID="btn" />);
+    await render(
+      <GlassButton label="Send" glow onPress={() => {}} testID="btn" />
+    );
 
     expect(mockWithRepeat).not.toHaveBeenCalled();
   });
 
-  it('does not start a pulse when `glow` is off, regardless of the preference', () => {
-    render(<GlassButton label="Send" onPress={() => {}} testID="btn" />);
+  it('does not start a pulse when `glow` is off, regardless of the preference', async () => {
+    await render(<GlassButton label="Send" onPress={() => {}} testID="btn" />);
 
     expect(mockWithRepeat).not.toHaveBeenCalled();
   });

@@ -479,7 +479,7 @@ const styles = StyleSheet.create({
     height: '50%',
   },
   glowLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     transform: [{ scale: 1.15 }],
   },
 });

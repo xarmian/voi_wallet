@@ -42,6 +42,7 @@
 // only the literal marker string 'true'.
 
 import { storage } from '../../platform';
+import { redactError } from '@/utils/logRedaction';
 
 /** Plaintext AsyncStorage key for the restore-before-PIN breadcrumb. */
 export const PIN_SETUP_PENDING_KEY = 'pin_setup_pending';
@@ -131,6 +132,16 @@ export async function clearPinSetupPending(): Promise<boolean> {
 }
 
 /**
+ * STRICT read of the breadcrumb, for a decision that must stop when it cannot
+ * be made (TASK-504 "fresh"): a read error THROWS, and any stored value counts
+ * as present. isPinSetupPending() reads an error as "absent", which is the safe
+ * direction for the boot route and the unsafe one here.
+ */
+export async function readPinSetupPendingStrict(): Promise<boolean> {
+  return (await storage.getItem(PIN_SETUP_PENDING_KEY)) !== null;
+}
+
+/**
  * Read the breadcrumb. FAIL-CLOSED on a read error: a breadcrumb that cannot be
  * read is treated as ABSENT, so the key-bearing guard routes to RECOVERY (never
  * SecuritySetup). Never throws.
@@ -139,7 +150,27 @@ export async function isPinSetupPending(): Promise<boolean> {
   try {
     return (await storage.getItem(PIN_SETUP_PENDING_KEY)) === PENDING_VALUE;
   } catch (error) {
-    console.warn('Failed to read pin_setup_pending breadcrumb:', error);
+    console.warn(
+      'Failed to read pin_setup_pending breadcrumb:',
+      redactError(error)
+    );
     return false;
   }
+}
+
+/**
+ * The unfinished-PIN-setup state ("S2"): the restore-before-PIN breadcrumb is
+ * set, a locally key-bearing account exists, and there is no PIN. This is the
+ * one predicate behind both AuthContext's resume-setup branch and the
+ * WalletConnect entry guard, so the two cannot drift. The breadcrumb alone is
+ * not the state: a wallet restored with only Ledger, remote-signer or
+ * watch-only accounts has the breadcrumb and no PIN, boots unlocked, and is
+ * usable.
+ */
+export function isSetupResumeState(input: {
+  pending: boolean;
+  hasKeyBearingAccount: boolean;
+  hasPin: boolean;
+}): boolean {
+  return input.pending && input.hasKeyBearingAccount && !input.hasPin;
 }

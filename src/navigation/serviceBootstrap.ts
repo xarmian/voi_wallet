@@ -10,6 +10,7 @@ import { WalletConnectService } from '@/services/walletconnect';
 import { DeepLinkService } from '@/services/deeplink';
 import { extensionDeepLinkHandler } from '@/services/deeplink/extensionHandler';
 import { isWalletConnectUri } from '@/services/walletconnect/utils';
+import { redactError, redactSensitiveForLog } from '@/utils/logRedaction';
 import { notificationService } from '@/services/notifications';
 import {
   takeAccountSubscribeToken,
@@ -17,7 +18,20 @@ import {
 } from '@/services/notifications/subscribePass';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { ledgerTransportService } from '@/services/ledger/transport';
-import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
+import { settleLegacyQueue } from '@/services/walletconnect/legacyQueueMigration';
+import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
+import { createCoordinatorTransport } from '@/services/walletconnect/coordinatorTransport';
+import { setupIncompleteGuard } from '@/services/walletconnect/entryGuard';
+import { feedQueue } from '@/services/walletconnect/feedQueue';
+import {
+  proposalArrival,
+  requestArrival,
+} from '@/services/walletconnect/arrivalItems';
+import {
+  requestRefFor,
+  proposalRefFor,
+  requestExpiryOf,
+} from '@/services/walletconnect/requestRefs';
 
 /**
  * Whole-app service boot, extracted verbatim from AppNavigator's mount effect
@@ -98,6 +112,16 @@ export const initializeServices = async ({
     let onProposal: ((proposal: any) => void) | null = null;
     let onRequest: ((requestEvent: any) => Promise<void>) | null = null;
 
+    const onSessionGone = (event: { topic?: string }) => {
+      if (event?.topic) {
+        void RequestCoordinator.getInstance().onSessionEnded(event.topic);
+      }
+    };
+    const onSessionDisconnected = (topic: string) => {
+      if (topic) void RequestCoordinator.getInstance().onSessionEnded(topic);
+    };
+    // The v1 disconnect path is not wired to the coordinator in this unit.
+
     // Whether the deferred (off-critical-path) per-account subscribe should
     // run. Set once the notification service is initialized and a push token
     // is registered; the actual subscribe is scheduled after startup.
@@ -115,65 +139,103 @@ export const initializeServices = async ({
       // AppNavigator navigation handlers must attach to that same initialized
       // instance, so init and .on(...) stay together in one unit.
       const initWalletConnect = async () => {
+        RequestCoordinator.getInstance().setTransport(
+          createCoordinatorTransport()
+        );
+        // Every new request and proposal, v2 here and v1 through DeepLinkService,
+        // is admitted by this one coordinator, so one guard covers all of them.
+        // While PIN setup is unfinished the dApp is answered at once and no
+        // route, queue entry or review is created.
+        RequestCoordinator.getInstance().setEntryGuard(setupIncompleteGuard);
         try {
           wcService = WalletConnectService.getInstance();
           await wcService.initialize();
 
-          // Listen for WalletConnect session proposals and navigate to approval screen
-          onProposal = (proposal: any) => {
+          // A signing queue persisted by an earlier build is answered as
+          // expired and cleared, never admitted or shown. Only after
+          // initialize() resolves: until then neither the v2 provider nor the
+          // v1 client can publish, the coordinator would keep the failed
+          // answer in memory only, and the migration clears its keys. If
+          // initialize() throws this is never reached, so the keys survive
+          // for the next launch. Not awaited, so startup does not wait on it.
+          void settleLegacyQueue(RequestCoordinator.getInstance());
+
+          // Listen for WalletConnect session proposals. An admitted proposal
+          // enters the review queue and the host draws it; no route is pushed.
+          onProposal = async (proposal: any) => {
+            const coordinator = RequestCoordinator.getInstance();
+            const ref = proposalRefFor(proposal);
+            const admission = await coordinator.admit(
+              ref,
+              proposal.expiryTimestamp
+            );
+            if (admission.action !== 'show') return;
+            // Close only the QR scanner, so the person lands on the host
+            // rather than on the scan that produced the link.
             try {
-              if (navigationRef.current?.isReady?.()) {
-                // Close any open QR scanner first when possible
-                if (navigationRef.current.canGoBack?.()) {
-                  navigationRef.current.goBack();
-                }
-                // Then navigate to session proposal
-                navigationRef.current.navigate('WalletConnectSessionProposal', {
-                  proposal,
-                });
+              const nav = navigationRef.current;
+              if (
+                nav?.isReady?.() &&
+                nav.getCurrentRoute?.()?.name === 'QRScanner' &&
+                nav.canGoBack?.()
+              ) {
+                nav.goBack();
               }
-            } catch (err) {
+            } catch (error) {
               console.error(
-                'Failed to navigate to WalletConnectSessionProposal:',
-                err
+                'Failed to close the QR scanner for a WalletConnect proposal:',
+                redactError(error)
+              );
+            }
+            try {
+              await feedQueue(
+                proposalArrival({
+                  ref,
+                  payload: proposal,
+                  metadata: proposal?.proposer?.metadata,
+                  firstSeenMs: admission.firstSeenMs,
+                })
+              );
+            } catch (error) {
+              console.error(
+                'Failed to queue WalletConnect session proposal:',
+                redactError(error)
               );
             }
           };
           wcService.on('session_proposal', onProposal);
 
+          // An admitted signing request enters the review queue and the host
+          // draws it. Duplicates are the coordinator's: admit suppresses an
+          // open ref and retries an unanswered closed one.
           onRequest = async (requestEvent: any) => {
+            const coordinator = RequestCoordinator.getInstance();
+            const ref = requestRefFor(requestEvent, 2);
+            const admission = await coordinator.admit(
+              ref,
+              requestExpiryOf(requestEvent)
+            );
+            if (admission.action !== 'show') return;
             try {
-              if (navigationRef.current?.isReady?.()) {
-                // Get current route name
-                const currentRoute = navigationRef.current.getCurrentRoute();
-
-                // Check if we're already on the TransactionRequestScreen
-                if (currentRoute?.name === 'WalletConnectTransactionRequest') {
-                  // Enqueue the request instead of navigating immediately
-                  console.log(
-                    '[AppNavigator] Currently on transaction screen, enqueueing request'
-                  );
-                  await TransactionRequestQueue.enqueue({
-                    id: requestEvent.id,
-                    topic: requestEvent.topic,
-                    params: requestEvent.params,
-                  });
-                } else {
-                  // Navigate immediately if not on transaction screen
-                  navigationRef.current.navigate(
-                    'WalletConnectTransactionRequest',
-                    { requestEvent }
-                  );
-                }
-              }
-            } catch (err) {
+              await feedQueue(
+                requestArrival({
+                  ref,
+                  requestEvent,
+                  firstSeenMs: admission.firstSeenMs,
+                  sessions: () => wcService?.getActiveSessions() ?? [],
+                })
+              );
+            } catch (error) {
               console.error(
-                'Failed to handle WalletConnect transaction request:',
-                err
+                'Failed to queue WalletConnect transaction request:',
+                redactError(error)
               );
             }
           };
           wcService.on('session_request', onRequest);
+          wcService.on('session_deleted', onSessionGone);
+          wcService.on('session_expired', onSessionGone);
+          wcService.on('session_disconnected', onSessionDisconnected);
 
           console.log('WalletConnect service initialized');
         } catch (error) {
@@ -207,7 +269,11 @@ export const initializeServices = async ({
           // Initialize extension-specific deep link handling (for WalletConnect URIs from getvoi.app)
           if (Platform.OS === 'web' && detectPlatform() === 'extension') {
             extensionDeepLinkHandler.initialize(async (uri: string) => {
-              console.log('[AppNavigator] Extension received WC URI:', uri);
+              // The URI carries the session symKey (TASK-290 sweep).
+              console.log(
+                '[AppNavigator] Extension received WC URI:',
+                redactSensitiveForLog(uri)
+              );
               if (isWalletConnectUri(uri)) {
                 await deepLinkService.testDeepLink(uri);
               }
@@ -241,8 +307,10 @@ export const initializeServices = async ({
           // Check if user has a wallet, then register the push token
           const wallet = await MultiAccountWalletService.getCurrentWallet();
           if (wallet && wallet.accounts.length > 0) {
-            // Register push token if permissions granted
-            const token = await notificationService.registerPushToken();
+            // Refresh an opted-in user's token without prompting at startup.
+            const token = await notificationService.registerPushToken({
+              prompt: false,
+            });
             if (token) {
               // Defer the per-account subscribe off the critical path; it
               // re-reads the wallet at run time so startup-created accounts
@@ -297,39 +365,6 @@ export const initializeServices = async ({
     // try/catch guarantees a single failure cannot block the others.
     await Promise.allSettled(parallelInits);
 
-    // Reset + process the TransactionRequestQueue on the critical path (NOT
-    // a deferred sibling) so stale processing state is cleared and any
-    // persisted request is handled before we accept new startup requests.
-    // Runs after WalletConnect init so queued requests can be serviced.
-    if (!isSignerMode) {
-      // Reset stale processing state from previous session (prevents deadlock after crash)
-      await TransactionRequestQueue.setProcessing(false);
-
-      // Process any pending transaction requests from the queue
-      try {
-        const hasQueuedRequests = !(await TransactionRequestQueue.isEmpty());
-        if (hasQueuedRequests) {
-          console.log(
-            '[AppNavigator] Processing queued transaction requests on startup'
-          );
-          const nextRequest = await TransactionRequestQueue.peek();
-          if (nextRequest && navigationRef.current) {
-            // Dequeue and navigate to the first request
-            await TransactionRequestQueue.dequeue();
-            navigationRef.current.navigate('WalletConnectTransactionRequest', {
-              requestEvent: nextRequest,
-              version: nextRequest.version,
-            });
-          }
-        }
-      } catch (error) {
-        console.error(
-          '[AppNavigator] Failed to process queued requests:',
-          error
-        );
-      }
-    }
-
     // Defer per-account notification subscribe OFF the critical path.
     // Re-read the wallet here so accounts created during startup are
     // included (constraint: defer only AFTER re-reading the wallet). This is
@@ -375,10 +410,17 @@ export const initializeServices = async ({
         }
         if (wcService && onRequest) {
           wcService.off?.('session_request', onRequest);
+          wcService.off?.('session_deleted', onSessionGone);
+          wcService.off?.('session_expired', onSessionGone);
+          wcService.off?.('session_disconnected', onSessionDisconnected);
         }
         if (!isSignerMode) {
           extensionDeepLinkHandler.cleanup();
           notificationService.cleanup();
+          // Removes the Linking 'url' subscription and the navigation-ready
+          // listeners. A route still queued for readiness is kept and is
+          // delivered after a remount (TASK-381).
+          DeepLinkService.getInstance().cleanup();
         }
       } catch {}
     };

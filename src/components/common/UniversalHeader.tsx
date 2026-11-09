@@ -250,7 +250,7 @@ const createStyles = (theme: Theme) =>
       borderColor: theme.colors.glassBorder,
     },
     glassOverlay: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
     },
     highlightGradient: {
       position: 'absolute',

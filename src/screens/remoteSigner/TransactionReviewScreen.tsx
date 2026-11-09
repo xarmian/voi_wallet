@@ -5,7 +5,7 @@
  * before signing on the air-gapped signer device.
  */
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   Alert,
   View,
@@ -36,7 +36,16 @@ import {
   TransactionDisplayType,
 } from '@/types/remoteSigner';
 import { formatAddress } from '@/utils/address';
-import { formatVoiBalance } from '@/utils/bigint';
+import { formatBaseUnitsToAmount } from '@/utils/bigint';
+import { NetworkService } from '@/services/network';
+import {
+  AVAILABLE_NETWORKS,
+  NETWORK_CONFIGURATIONS,
+} from '@/services/network/config';
+import type { AssetParams } from '@/types/wallet';
+import type { NetworkId } from '@/types/network';
+import TransactionDangerBanner from '@/components/transaction/TransactionDangerBanner';
+import { useTransactionDangers } from '@/hooks/useTransactionDangers';
 
 // Cross-platform alert helper
 const showAlert = (
@@ -73,6 +82,27 @@ type RouteParams = {
     request: RemoteSignerRequest;
   };
 };
+
+/** Network whose genesis hash (base64) the transaction itself commits to. */
+const networkIdForGenesisHash = (genesisHash: string): NetworkId | undefined =>
+  AVAILABLE_NETWORKS.find(
+    (id) => NETWORK_CONFIGURATIONS[id].genesisHash === genesisHash
+  );
+
+/** Native token name for the txn's own genesis hash (never a VOI default). */
+const nativeTokenFor = (genesisHash: string): string => {
+  const networkId = networkIdForGenesisHash(genesisHash);
+  return networkId
+    ? NETWORK_CONFIGURATIONS[networkId].nativeToken
+    : 'native units (unknown network)';
+};
+
+/**
+ * Exact native amount: microunits (6 decimals) on every AVM chain. Pure bigint,
+ * so large amounts are never rounded through a JS number.
+ */
+const formatNativeAmount = (microunits: bigint): string =>
+  formatBaseUnitsToAmount(microunits, 6);
 
 const TRANSACTION_TYPE_LABELS: Record<TransactionDisplayType, string> = {
   payment: 'Payment',
@@ -125,8 +155,134 @@ export default function TransactionReviewScreen() {
   }, [request]);
 
   const currentTxn = decodedTransactions[currentTxnIndex];
+
+  // Asset unit/decimals (TASK-393). Resolved on the network named by each
+  // transaction's OWN genesis hash, never the request's `net` label, via the
+  // existing cached algod lookup. An offline signer simply gets null and the
+  // amount is shown as exact base units instead of a guessed scale.
+  const [assetParams, setAssetParams] = useState<
+    Record<string, AssetParams | null>
+  >({});
+
+  const assetLookups = useMemo(() => {
+    const lookups = new Map<string, { networkId: NetworkId; id: bigint }>();
+    for (const txn of decodedTransactions) {
+      if (
+        txn.type !== 'asset_transfer' ||
+        txn.assetId === undefined ||
+        txn.assetId === 0n
+      ) {
+        continue;
+      }
+      const networkId = networkIdForGenesisHash(txn.genesisHash);
+      if (networkId) {
+        lookups.set(`${networkId}:${txn.assetId}`, {
+          networkId,
+          id: txn.assetId,
+        });
+      }
+    }
+    return lookups;
+  }, [decodedTransactions]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const resolved = await Promise.all(
+        [...assetLookups].map(async ([key, { networkId, id }]) => {
+          if (id > BigInt(Number.MAX_SAFE_INTEGER)) {
+            return [key, null] as const;
+          }
+          try {
+            const params = await NetworkService.getInstance(
+              networkId
+            ).getCachedAssetParams(Number(id));
+            return [key, params] as const;
+          } catch {
+            return [key, null] as const;
+          }
+        })
+      );
+      if (!cancelled) {
+        setAssetParams(Object.fromEntries(resolved));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [assetLookups]);
+
+  const renderAmount = (txn: DecodedTransactionInfo, amount: bigint) => {
+    const networkId = networkIdForGenesisHash(txn.genesisHash);
+    if (txn.type !== 'asset_transfer') {
+      return {
+        value: formatNativeAmount(amount),
+        unit: nativeTokenFor(txn.genesisHash),
+      };
+    }
+    const assetLabel = `ASA #${txn.assetId?.toString() ?? '?'}`;
+    const key = networkId ? `${networkId}:${txn.assetId}` : undefined;
+    // Pending, failed, offline or unknown network: show the exact integer,
+    // labelled as base units, never a guessed scale and never hidden.
+    const params = key ? assetParams[key] : null;
+    if (!params) {
+      return {
+        value: amount.toString(),
+        unit: `base units of ${assetLabel}`,
+      };
+    }
+    // unitName/name are creator-controlled (an ASA can call itself "VOI"), so
+    // the ASA id always stays beside them.
+    const metaLabel = params.unitName || params.name;
+    return {
+      value: formatBaseUnitsToAmount(amount, params.decimals),
+      unit: metaLabel ? `${metaLabel} (${assetLabel})` : assetLabel,
+    };
+  };
+  // Network shown in the badge comes from the transactions' own genesis
+  // hashes (what the signature commits to), never the request's `net` label.
+  const txnNetworkLabel = useMemo(() => {
+    const names = new Set<string>();
+    let unknown = false;
+    for (const txn of decodedTransactions) {
+      const networkId = networkIdForGenesisHash(txn.genesisHash);
+      if (networkId) {
+        names.add(NETWORK_CONFIGURATIONS[networkId].name);
+      } else {
+        unknown = true;
+      }
+    }
+    if (unknown || names.size !== 1) {
+      return {
+        text: 'Unknown or mixed network (genesis hash not recognised)',
+        unknown: true,
+      };
+    }
+    return { text: [...names][0], unknown: false };
+  }, [decodedTransactions]);
+
   const totalTxns = decodedTransactions.length;
   const isGroup = totalTxns > 1;
+
+  // TASK-440 / TASK-445: the same detector and banner as the wallet's signing
+  // review. Every dangerous operation in the request is listed with its
+  // transaction number and full addresses; asset-authority changes are
+  // checked against the asset on the transaction's own network, and an
+  // offline signer shows them as unverified. Signing waits for the
+  // acknowledgment, as it does in the wallet.
+  const dangerEntries = useMemo(
+    () =>
+      decodedTransactions.map((txn) => ({
+        dangers: txn.dangers,
+        opaque: txn.type === 'app_call',
+        networkId: networkIdForGenesisHash(txn.genesisHash),
+      })),
+    [decodedTransactions]
+  );
+  const dangerList = useTransactionDangers(dangerEntries);
+  const hasDanger = dangerList.length > 0;
+  const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
+  const signBlocked = isSigning || (hasDanger && !dangerAcknowledged);
 
   const handleReject = () => {
     showAlert(
@@ -147,6 +303,13 @@ export default function TransactionReviewScreen() {
   };
 
   const handleSign = () => {
+    if (hasDanger && !dangerAcknowledged) {
+      showAlert(
+        'Confirmation required',
+        'Please acknowledge the highlighted warning before signing.'
+      );
+      return;
+    }
     // Show auth modal for PIN/biometric authentication
     setShowAuthModal(true);
   };
@@ -195,24 +358,45 @@ export default function TransactionReviewScreen() {
           )}
         </View>
 
-        {/* Amount (for payments/transfers) */}
-        {txn.amount !== undefined && txn.amount > 0n && (
-          <View style={styles.amountContainer}>
-            <Text style={styles.amountValue}>
-              {formatVoiBalance(txn.amount)}
-            </Text>
-            <Text style={styles.amountUnit}>
-              {txn.assetId ? `ASA #${txn.assetId}` : 'VOI'}
-            </Text>
-          </View>
-        )}
+        {/* Amount (for payments/transfers). A 0-amount asset transfer (an
+            opt-in) still shows, so the asset it targets is never hidden. */}
+        {txn.amount !== undefined &&
+          (txn.amount > 0n || txn.type === 'asset_transfer') &&
+          (() => {
+            const { value, unit } = renderAmount(txn, txn.amount);
+            return (
+              <View style={styles.amountContainer}>
+                <Text style={styles.amountValue}>{value}</Text>
+                <Text style={styles.amountUnit}>{unit}</Text>
+              </View>
+            );
+          })()}
 
         {/* Key Details */}
         <View style={styles.detailsGrid}>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>From</Text>
-            <Text style={styles.detailValue}>{formatAddress(txn.sender)}</Text>
-          </View>
+          {txn.assetSender ? (
+            <>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Clawback from</Text>
+                <Text style={styles.detailValue}>
+                  {formatAddress(txn.assetSender)}
+                </Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Authority</Text>
+                <Text style={styles.detailValue}>
+                  {formatAddress(txn.sender)}
+                </Text>
+              </View>
+            </>
+          ) : (
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>From</Text>
+              <Text style={styles.detailValue}>
+                {formatAddress(txn.sender)}
+              </Text>
+            </View>
+          )}
 
           {txn.receiver && (
             <View style={styles.detailRow}>
@@ -226,38 +410,17 @@ export default function TransactionReviewScreen() {
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Fee</Text>
             <Text style={styles.detailValue}>
-              {formatVoiBalance(txn.fee)} VOI
+              {formatNativeAmount(txn.fee)} {nativeTokenFor(txn.genesisHash)}
             </Text>
           </View>
 
-          {txn.appId && (
+          {txn.appId !== undefined && txn.appId > 0n && (
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>App ID</Text>
-              <Text style={styles.detailValue}>{txn.appId}</Text>
+              <Text style={styles.detailValue}>{txn.appId.toString()}</Text>
             </View>
           )}
         </View>
-
-        {/* Warning indicators */}
-        {txn.rekeyTo && (
-          <View style={styles.warningBanner}>
-            <Ionicons name="warning" size={20} color={theme.colors.warning} />
-            <Text style={styles.warningText}>
-              This transaction rekeys the account to{' '}
-              {formatAddress(txn.rekeyTo)}
-            </Text>
-          </View>
-        )}
-
-        {txn.closeRemainderTo && (
-          <View style={styles.warningBanner}>
-            <Ionicons name="warning" size={20} color={theme.colors.error} />
-            <Text style={styles.warningText}>
-              This transaction closes the account to{' '}
-              {formatAddress(txn.closeRemainderTo)}
-            </Text>
-          </View>
-        )}
       </View>
     );
   };
@@ -314,17 +477,17 @@ export default function TransactionReviewScreen() {
         </View>
       )}
 
-      {txn.assetId && (
+      {txn.assetId !== undefined && (
         <View style={styles.fullDetailRow}>
           <Text style={styles.fullDetailLabel}>Asset ID</Text>
-          <Text style={styles.fullDetailValue}>{txn.assetId}</Text>
+          <Text style={styles.fullDetailValue}>{txn.assetId.toString()}</Text>
         </View>
       )}
 
-      {txn.appId && (
+      {txn.appId !== undefined && (
         <View style={styles.fullDetailRow}>
           <Text style={styles.fullDetailLabel}>Application ID</Text>
-          <Text style={styles.fullDetailValue}>{txn.appId}</Text>
+          <Text style={styles.fullDetailValue}>{txn.appId.toString()}</Text>
         </View>
       )}
 
@@ -339,6 +502,20 @@ export default function TransactionReviewScreen() {
         <View style={styles.fullDetailRow}>
           <Text style={styles.fullDetailLabel}>Close To</Text>
           <Text style={styles.fullDetailValueMono}>{txn.closeRemainderTo}</Text>
+        </View>
+      )}
+
+      {txn.assetSender && (
+        <View style={styles.fullDetailRow}>
+          <Text style={styles.fullDetailLabel}>Clawback From</Text>
+          <Text style={styles.fullDetailValueMono}>{txn.assetSender}</Text>
+        </View>
+      )}
+
+      {txn.assetCloseTo && (
+        <View style={styles.fullDetailRow}>
+          <Text style={styles.fullDetailLabel}>Asset Close To</Text>
+          <Text style={styles.fullDetailValueMono}>{txn.assetCloseTo}</Text>
         </View>
       )}
     </View>
@@ -373,7 +550,14 @@ export default function TransactionReviewScreen() {
 
         {/* Network Badge */}
         <View style={styles.networkBadge}>
-          <Text style={styles.networkText}>Network: {request.net}</Text>
+          <Text
+            style={[
+              styles.networkText,
+              txnNetworkLabel.unknown && { color: theme.colors.error },
+            ]}
+          >
+            Network: {txnNetworkLabel.text}
+          </Text>
         </View>
 
         {/* Transaction Group Summary */}
@@ -388,6 +572,14 @@ export default function TransactionReviewScreen() {
               Atomic Group: {totalTxns} transactions
             </Text>
           </View>
+        )}
+
+        {hasDanger && (
+          <TransactionDangerBanner
+            dangers={dangerList}
+            acknowledged={dangerAcknowledged}
+            onToggleAcknowledged={() => setDangerAcknowledged((v) => !v)}
+          />
         )}
 
         {/* Transaction Cards */}
@@ -444,9 +636,9 @@ export default function TransactionReviewScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.signButton, isSigning && styles.buttonDisabled]}
+          style={[styles.signButton, signBlocked && styles.buttonDisabled]}
           onPress={handleSign}
-          disabled={isSigning}
+          disabled={signBlocked}
         >
           {isSigning ? (
             <ActivityIndicator size="small" color={theme.colors.buttonText} />
@@ -612,20 +804,6 @@ const createStyles = (theme: Theme) =>
       fontSize: 14,
       color: theme.colors.text,
       fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    },
-    warningBanner: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: theme.spacing.sm,
-      backgroundColor: `${theme.colors.warning}15`,
-      padding: theme.spacing.sm,
-      borderRadius: theme.borderRadius.md,
-      marginTop: theme.spacing.md,
-    },
-    warningText: {
-      flex: 1,
-      fontSize: 13,
-      color: theme.colors.warning,
     },
     toggleDetailsButton: {
       flexDirection: 'row',
