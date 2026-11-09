@@ -25,7 +25,7 @@ import type { WalletTransaction } from '@/services/walletconnect/types';
  * DR-5 / DR-7 / DR-14 — the WalletConnect session an incoming dApp batch is
  * bound to.
  *
- * Resolved once at the request boundary (`TransactionRequestScreen`) and
+ * Resolved once at the request boundary (`SignRequestController`) and
  * threaded through navigation to the signer, which re-checks EVERY entry
  * against it before a key is touched. Authorization is chain-scoped (DR-14): a
  * session may approve address A on Voi but not on Algorand, so membership is

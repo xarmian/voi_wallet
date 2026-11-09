@@ -1,7 +1,4 @@
-import {
-  routeReviewBinding,
-  type ReviewBinding,
-} from '@/services/walletconnect/reviewBinding';
+import type { ReviewBinding } from '@/services/walletconnect/reviewBinding';
 import React, {
   useState,
   useMemo,
@@ -29,11 +26,8 @@ import {
 } from '@/services/walletconnect/requestRefs';
 import RequestAgeLabel from '@/components/walletconnect/RequestAgeLabel';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { RootStackParamList } from '@/navigation/AppNavigator';
 import {
   WalletConnectService,
   SessionProposal,
@@ -67,29 +61,11 @@ import {
   useSecureScreen,
 } from '@/hooks/useSecureScreen';
 
-type SessionProposalScreenNavigationProp = NativeStackNavigationProp<
-  RootStackParamList,
-  'WalletConnectSessionProposal'
->;
-type SessionProposalScreenRouteProp = RouteProp<
-  RootStackParamList,
-  'WalletConnectSessionProposal'
->;
-
-interface Props {
-  navigation: SessionProposalScreenNavigationProp;
-  route: SessionProposalScreenRouteProp;
-}
-
-type ConnectParams = RootStackParamList['WalletConnectSessionProposal'];
-
-/** The route screen: a thin wrapper that binds the review to its router. */
-export default function SessionProposalScreen({ navigation, route }: Props) {
-  const binding = useMemo(
-    () => routeReviewBinding(navigation, route.key),
-    [navigation, route.key]
-  );
-  return <ConnectReview params={route?.params} binding={binding} />;
+/** What the host hands a connect review: a v2 proposal, or a v1 session request. */
+export interface ConnectParams {
+  proposal: any;
+  version?: number;
+  sessionRequest?: any;
 }
 
 export function ConnectReview({

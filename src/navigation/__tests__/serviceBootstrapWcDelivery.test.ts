@@ -75,18 +75,12 @@ const mockNav = {
 /** Current route name; drives getCurrentRoute. */
 let mockRoute: string | undefined;
 
-let mockRouteQueue: { deliver: (key: string, run: any) => Promise<void> };
 const mockDeepLinkService = {
   setNavigationRef: jest.fn(),
   initialize: jest.fn(async () => {}),
   testDeepLink: jest.fn(async () => {}),
   cleanup: jest.fn(),
-  deliverRoute: (key: string, run: any) => mockRouteQueue.deliver(key, run),
-  // As DeepLinkService: a fresh route key per signing delivery.
-  deliverSigningRequest: (run: any) =>
-    mockRouteQueue.deliver(`wc:signing:${++mockSigningSeq}`, run),
 };
-let mockSigningSeq = 0;
 
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
@@ -142,10 +136,6 @@ jest.mock('@/platform/detection', () => ({
   isMobile: jest.fn(() => true),
 }));
 
-const { createPendingRouteQueue } = jest.requireActual(
-  '@/services/deeplink/pendingRoute'
-);
-
 const flush = async () => {
   for (let i = 0; i < 80; i++) await Promise.resolve();
 };
@@ -200,15 +190,6 @@ beforeEach(async () => {
   mockNav.canGoBack.mockReturnValue(false);
   mockNav.goBack.mockClear();
   mockWcService.off.mockClear();
-  mockRouteQueue = createPendingRouteQueue({
-    now: () => Date.now(),
-    isReady: () => mockReady,
-    onReady: (cb: () => void) => {
-      mockReadyCallbacks.add(cb);
-      return () => mockReadyCallbacks.delete(cb);
-    },
-    logger: { log: () => {}, warn: () => {}, error: () => {} },
-  });
   jest.spyOn(console, 'log').mockImplementation(() => {});
   jest.spyOn(console, 'warn').mockImplementation(() => {});
   jest.spyOn(console, 'error').mockImplementation(() => {});

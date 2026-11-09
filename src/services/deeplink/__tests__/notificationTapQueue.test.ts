@@ -250,7 +250,7 @@ describe('notification taps and the review queue', () => {
     const waiting = tap({ type: 'payment' }, 'n-1');
 
     await expect(waiting).resolves.toBeUndefined();
-    await service.deliverRoute('other-route', async () => {});
+    await service['routeQueue'].deliver('other-route', async () => {});
   });
 
   describe('a bad pairing link while a request is open', () => {

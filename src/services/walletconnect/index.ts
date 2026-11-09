@@ -252,13 +252,7 @@ export class WalletConnectService extends EventEmitter {
       // dropSlot is UNCONDITIONAL here: this removes EVERY v1 row, so no
       // session survives whose key could be destroyed, and a conditional delete
       // would strand the slot whenever it was bound to a stale row.
-      const dropped = await deleteV1Sessions(keysToRemove, { dropSlot: true });
-      if (dropped > 0) {
-        console.warn(
-          'Dropped queued v1 requests for an unrestorable session:',
-          dropped
-        );
-      }
+      await deleteV1Sessions(keysToRemove, { dropSlot: true });
     } catch (error) {
       console.error(
         'Failed to drop unrestorable v1 session:',
@@ -496,9 +490,9 @@ export class WalletConnectService extends EventEmitter {
         .filter((key) => key !== latestEntry.key);
 
       if (staleKeys.length > 0) {
-        // Central cleanup so the pruned rows' queued requests go too. dropSlot
+        // Central cleanup so the pruned rows go together with their keys. dropSlot
         // is FALSE: the selected session survives and its key must not be
-        // touched — deleteV1Sessions only reaps queues and metadata here.
+        // touched — deleteV1Sessions only reaps metadata here.
         await deleteV1Sessions(staleKeys, { dropSlot: false });
       }
 

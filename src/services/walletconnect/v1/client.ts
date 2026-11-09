@@ -796,7 +796,7 @@ export class WalletConnectV1Client extends EventEmitter {
       );
 
       if (staleKeys.length > 0) {
-        // Central cleanup so pruned rows take their queued requests with them.
+        // Central cleanup so pruned rows go together with their keys.
         // dropSlot is FALSE — the ACTIVE session survives and owns the slot.
         await deleteV1Sessions(staleKeys, { dropSlot: false });
       }

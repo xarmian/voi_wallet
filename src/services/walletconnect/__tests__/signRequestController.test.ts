@@ -1,6 +1,5 @@
 import { RequestQueue } from '../requestQueue';
 import { getHeadSession } from '@/components/wcHost/headSession';
-import { readFileSync } from 'fs';
 import { Alert } from 'react-native';
 import type { WalletTransaction } from '@/services/walletconnect';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -686,13 +685,6 @@ describe('the controller owns the signing permission after a take', () => {
       })
     );
   });
-  it('REGRESSION the surface contract has no reviewGrant: the screen adapter never touches it inside takeNext', () => {
-    const source = readFileSync(
-      'src/screens/walletconnect/TransactionRequestScreen.tsx',
-      'utf8'
-    );
-    expect(source).not.toMatch(/reviewGrant\./);
-  });
 });
 it('REGRESSION takeNext throw propagates unchanged from reject', async () => {
   const h = await setup();
@@ -788,29 +780,6 @@ it('REGRESSION default coordinator is the existing singleton', async () => {
   expect(RequestCoordinator.getInstance).toHaveBeenCalled();
   expect(h.surface.presentReview).toHaveBeenCalledTimes(1);
 });
-it('REGRESSION adapter creates controller only in lazy ref initializer', () => {
-  const source = readFileSync(
-    'src/screens/walletconnect/TransactionRequestScreen.tsx',
-    'utf8'
-  );
-  expect(source).toMatch(
-    /if \(controllerRef\.current === null\) \{[\s\S]*controllerRef\.current = new SignRequestController/
-  );
-  expect(source.match(/new SignRequestController\(/g)).toHaveLength(1);
-});
-it('REGRESSION adapter departure is beforeRemove and unmount only disposes', () => {
-  const source = readFileSync(
-    'src/screens/walletconnect/TransactionRequestScreen.tsx',
-    'utf8'
-  );
-  expect(source).toMatch(
-    /addListener\('beforeRemove', \(\) => \{\s*controllerRef\.current!\.leave\(\)/
-  );
-  expect(source).toMatch(
-    /return \(\) => \{\s*controllerRef\.current!\.dispose\(\);\s*\}/
-  );
-});
-
 it('REGRESSION hand-off remains unset during synchronous account choice', async () => {
   const h = await setup();
   const accounts = [account];

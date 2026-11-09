@@ -71,8 +71,6 @@ const mockDeepLinkService = {
   initialize: jest.fn(async () => {}),
   testDeepLink: jest.fn(async () => {}),
   cleanup: jest.fn(),
-  deliverRoute: jest.fn(async (_key: string, run: () => void) => run()),
-  deliverSigningRequest: jest.fn(async (run: () => void) => run()),
 };
 
 jest.mock('@react-native-async-storage/async-storage', () =>
@@ -177,8 +175,6 @@ const boot = () =>
 const noRouteWasUsed = () => {
   expect(mockNav.navigate).not.toHaveBeenCalled();
   expect(mockNav.dispatch).not.toHaveBeenCalled();
-  expect(mockDeepLinkService.deliverRoute).not.toHaveBeenCalled();
-  expect(mockDeepLinkService.deliverSigningRequest).not.toHaveBeenCalled();
 };
 
 beforeEach(async () => {
@@ -190,8 +186,6 @@ beforeEach(async () => {
   mockNav.isReady.mockReset().mockReturnValue(true);
   mockNav.canGoBack.mockReset().mockReturnValue(true);
   mockNav.getCurrentRoute.mockReset().mockReturnValue(undefined);
-  mockDeepLinkService.deliverRoute.mockClear();
-  mockDeepLinkService.deliverSigningRequest.mockClear();
   await AsyncStorage.clear();
   HandledStore.getInstance().__resetForTests();
   coordinator = new RequestCoordinator({
@@ -541,9 +535,6 @@ describe('arrival conditions that used to decide delivery', () => {
 
   it('a second proposal over a focused proposal head queues behind it', async () => {
     await boot();
-    mockNav.getCurrentRoute.mockReturnValue({
-      name: 'WalletConnectSessionProposal',
-    });
 
     await emit('session_proposal', proposal(7));
     await emit('session_proposal', proposal(8));

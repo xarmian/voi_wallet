@@ -3,7 +3,6 @@ import path from 'path';
 import ts from 'typescript';
 
 const queueModule = 'src/services/walletconnect/requestQueue.ts';
-const screen = 'src/screens/walletconnect/TransactionRequestScreen.tsx';
 // The production value importers: the host draws the queue, the lock screen
 // and the link service read it (the link service only waits for it to empty
 // before a notification tap routes), and feedQueue is the one point where an
@@ -206,8 +205,8 @@ it('DEFECT single owner: no production queue feed, fixed value importers, one co
     message: `${controllers.length} controller importer files`,
     files: controllers,
   }).toEqual({
-    message: '2 controller importer files',
-    files: [hostController, screen].sort(),
+    message: '1 controller importer files',
+    files: [hostController],
   });
 });
 

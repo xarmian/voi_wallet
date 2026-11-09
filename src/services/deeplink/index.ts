@@ -47,11 +47,7 @@ import { useWalletStore } from '@/store/walletStore';
 import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
-import {
-  createPendingRouteQueue,
-  PendingRouteQueue,
-  RouteRun,
-} from './pendingRoute';
+import { createPendingRouteQueue, PendingRouteQueue } from './pendingRoute';
 
 // Log-redaction helpers (TASK-33): deep-link URIs and their parsed contents can
 // embed full addresses, amounts, notes and other PII. These keep debug logs
@@ -154,7 +150,6 @@ export class DeepLinkService {
   private v1CallRequestTopic = '';
   private v1PairingInFlight = false;
   private v1PairingTimer: ReturnType<typeof setTimeout> | null = null;
-  private signingDeliverySeq = 0;
 
   static getInstance(): DeepLinkService {
     if (!DeepLinkService.instance) {
@@ -223,32 +218,6 @@ export class DeepLinkService {
     return this.routeQueue.deliver(`url:${url}`, async () => {
       await this.handleUrl(url);
     });
-  }
-
-  /**
-   * Run `run` through the same cold-start queue as deep links (TASK-382):
-   * it waits for the navigation container to be ready instead of being
-   * dropped, runs in arrival order, and a repeat `key` while queued, running
-   * or just finished runs once. Keys are never logged.
-   */
-  deliverRoute(key: string, run: RouteRun): Promise<void> {
-    return this.routeQueue.deliver(key, run);
-  }
-
-  /**
-   * Deliver a WalletConnect signing request (or the startup queue drain)
-   * through the same cold-start queue (TASK-382/TASK-257). Each call gets its
-   * own route key: duplicate suppression for signing requests is
-   * TransactionRequestQueue.claim(), not the route key, so a redelivery after
-   * a FAILED delivery (claim released) is not swallowed by the route queue's
-   * completed-key window.
-   */
-  deliverSigningRequest(run: RouteRun): Promise<void> {
-    this.signingDeliverySeq += 1;
-    return this.routeQueue.deliver(
-      `wc:signing:${this.signingDeliverySeq}`,
-      run
-    );
   }
 
   /**

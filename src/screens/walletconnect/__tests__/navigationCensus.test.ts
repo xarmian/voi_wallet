@@ -101,7 +101,6 @@ const allow = (
 const qr = 'src/screens/walletconnect/QRScannerScreen.tsx';
 const sessions = 'src/screens/walletconnect/SessionsScreen.tsx';
 const error = 'src/screens/walletconnect/WalletConnectErrorScreen.tsx';
-const request = 'src/screens/walletconnect/TransactionRequestScreen.tsx';
 // Population table: exceptions are keyed by semantic location, never line number.
 const ALLOWLIST = new Map([
   allow(
@@ -265,13 +264,6 @@ const ALLOWLIST = new Map([
     'navigation',
     'Root fallback only when !canGoBack(); nothing can be popped.'
   ),
-  allow(
-    request,
-    'leave',
-    'navigate',
-    'navRef.current',
-    'Root request fallback only when !canGoBack(); nothing can be popped.'
-  ),
   ...['goBack', 'replace'].map((fn) =>
     allow(
       helperFile,
@@ -309,7 +301,6 @@ const COUNTS: Record<string, number> = {
   [bootstrap]: 1,
   [deeplink]: 10,
   [sessions]: 3,
-  [request]: 5,
   [error]: 4,
   'src/screens/walletconnect/WalletConnectPairingScreen.tsx': 1,
   'src/services/navigation/callbackRegistry.ts': 0,

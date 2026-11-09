@@ -149,14 +149,8 @@ const ClaimAllConfirmationScreen = lazyScreen(
 );
 
 // WalletConnect screens (→ @walletconnect/*)
-const SessionProposalScreen = lazyScreen(
-  () => import('@/screens/walletconnect/SessionProposalScreen')
-);
 const SessionsScreen = lazyScreen(
   () => import('@/screens/walletconnect/SessionsScreen')
-);
-const TransactionRequestScreen = lazyScreen(
-  () => import('@/screens/walletconnect/TransactionRequestScreen')
 );
 const QRScannerScreen = lazyScreen(
   () => import('@/screens/walletconnect/QRScannerScreen')
@@ -229,13 +223,7 @@ export type RootStackParamList = {
   };
   MnemonicImport: { isOnboarding?: boolean } | undefined;
   AddWatchAccount: { isOnboarding?: boolean };
-  WalletConnectSessionProposal: {
-    proposal: any;
-    version?: number;
-    sessionRequest?: any;
-  };
   WalletConnectSessions: undefined;
-  WalletConnectTransactionRequest: { requestEvent: any; version?: number };
   WalletConnectPairing: { uri: string };
   // No `uri` param: a WalletConnect pairing URI carries the session key
   // (v1 `key=`, v2 `symKey=`) and route params land in navigation state.
@@ -1254,15 +1242,7 @@ function AppStack() {
       <Stack.Screen name="MnemonicImport" component={MnemonicImportScreen} />
       <Stack.Screen name="AddWatchAccount" component={AddWatchAccountScreen} />
       <Stack.Screen name="Main" component={MainTabNavigator} />
-      <Stack.Screen
-        name="WalletConnectSessionProposal"
-        component={SessionProposalScreen}
-      />
       <Stack.Screen name="WalletConnectSessions" component={SessionsScreen} />
-      <Stack.Screen
-        name="WalletConnectTransactionRequest"
-        component={TransactionRequestScreen}
-      />
       <Stack.Screen
         name="WalletConnectPairing"
         component={WalletConnectPairingScreen}

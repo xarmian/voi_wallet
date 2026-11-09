@@ -357,7 +357,7 @@ it('REGRESSION uncovered boundary has children and no overlay', async () => {
 // pad, whatever the route, and in S2 the way out is back to finishing PIN setup.
 it.each([
   'UniversalTransactionSigning',
-  'WalletConnectSessionProposal',
+  'WalletConnectPairing',
   'WalletConnectError',
   'Main',
   'SomeRouteAddedLater',

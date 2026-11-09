@@ -65,7 +65,6 @@ jest.mock('@/services/wallet', () => ({
 import { DeepLinkService, V1_BUSY_TOAST } from '../index';
 import { act } from '@testing-library/react-native';
 import Toast from 'react-native-toast-message';
-import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
 
 class FakeV1Client extends EventEmitter {
   constructor(private handshakeTopic: string) {
@@ -145,9 +144,7 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
   afterEach(async () => {
     coordinator.__resetForTests();
     queue.__resetForTests();
-    TransactionRequestQueue.setDroppedRequestHandler(null);
     service.cleanup();
-    await TransactionRequestQueue.clear();
     jest.restoreAllMocks();
   });
 
