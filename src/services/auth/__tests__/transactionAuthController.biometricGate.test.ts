@@ -696,7 +696,7 @@ describe('remote batch submission ownership (TASK-418)', () => {
       const outcome = walletConnectOutcome(version);
       await outcome.handle(controller.getState().result);
       if (version === 1) {
-        expect(respondV1).toHaveBeenCalledWith(418, [signed, null]);
+        expect(respondV1).toHaveBeenCalledWith(418, [signed, null], 'dapp');
         expect(respondV2).not.toHaveBeenCalled();
       } else {
         expect(respondV2).toHaveBeenCalledWith('dapp', 418, [signed, null]);

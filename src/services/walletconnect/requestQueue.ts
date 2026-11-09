@@ -41,6 +41,9 @@ export interface QueueCoordinator {
   ): () => void;
 }
 
+/** Waiting requests the queue holds behind the head; past it push() refuses. */
+export const MAX_WAITING = 10;
+
 const keyOf = (ref: RequestRef): string =>
   JSON.stringify([ref.version, ref.kind, ref.topic, String(ref.id)]);
 
@@ -94,12 +97,21 @@ export class RequestQueue {
     return this.instance;
   }
 
+  /**
+   * 'full' means the waiting list is at MAX_WAITING and nothing was queued or
+   * subscribed: the producer still owns the ref and must settle it ('busy').
+   * The head is not counted.
+   */
   push(
     item: Omit<QueueItem, 'arrivalSeq' | 'kind'>
-  ): 'head' | 'queued' | 'duplicate' | 'not-open' {
+  ): 'head' | 'queued' | 'duplicate' | 'not-open' | 'full' {
     if (!this.coordinator.isOpen(item.ref)) return 'not-open';
     const key = keyOf(item.ref);
     if (this.unsubscribers.has(key)) return 'duplicate';
+    const takesHead = !this.snapshot.head && !this.snapshot.result;
+    if (!takesHead && this.snapshot.waiting.length >= MAX_WAITING) {
+      return 'full';
+    }
 
     // Copy queue metadata so callers cannot mutate a published snapshot. The
     // SDK payload stays opaque and is neither inspected nor frozen here.

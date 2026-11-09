@@ -458,7 +458,8 @@ export class SignRequestController {
           const v1Client = WalletConnectV1Client.getInstance();
           await v1Client.approveRequest(
             (requestEvent as any).id,
-            result.signedTransactions
+            result.signedTransactions,
+            (requestEvent as any).topic
           );
         } else {
           // Handle v2 response

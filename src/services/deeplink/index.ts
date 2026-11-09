@@ -13,6 +13,12 @@ import {
 } from '@/services/walletconnect/utils';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
+import { feedQueue } from '@/services/walletconnect/feedQueue';
+import { RequestQueue } from '@/services/walletconnect/requestQueue';
+import {
+  proposalArrival,
+  requestArrival,
+} from '@/services/walletconnect/arrivalItems';
 import {
   requestRefFor,
   v1ProposalRefFor,
@@ -34,10 +40,6 @@ import {
   validateApplUri,
 } from '@/utils/arc0090Uri';
 import {
-  QueueFullError,
-  TransactionRequestQueue,
-} from '@/services/walletconnect/TransactionRequestQueue';
-import {
   notificationService,
   NotificationData,
 } from '@/services/notifications';
@@ -45,11 +47,7 @@ import { useWalletStore } from '@/store/walletStore';
 import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
-import {
-  createPendingRouteQueue,
-  PendingRouteQueue,
-  RouteRun,
-} from './pendingRoute';
+import { createPendingRouteQueue, PendingRouteQueue } from './pendingRoute';
 
 // Log-redaction helpers (TASK-33): deep-link URIs and their parsed contents can
 // embed full addresses, amounts, notes and other PII. These keep debug logs
@@ -152,7 +150,6 @@ export class DeepLinkService {
   private v1CallRequestTopic = '';
   private v1PairingInFlight = false;
   private v1PairingTimer: ReturnType<typeof setTimeout> | null = null;
-  private signingDeliverySeq = 0;
 
   static getInstance(): DeepLinkService {
     if (!DeepLinkService.instance) {
@@ -224,32 +221,6 @@ export class DeepLinkService {
   }
 
   /**
-   * Run `run` through the same cold-start queue as deep links (TASK-382):
-   * it waits for the navigation container to be ready instead of being
-   * dropped, runs in arrival order, and a repeat `key` while queued, running
-   * or just finished runs once. Keys are never logged.
-   */
-  deliverRoute(key: string, run: RouteRun): Promise<void> {
-    return this.routeQueue.deliver(key, run);
-  }
-
-  /**
-   * Deliver a WalletConnect signing request (or the startup queue drain)
-   * through the same cold-start queue (TASK-382/TASK-257). Each call gets its
-   * own route key: duplicate suppression for signing requests is
-   * TransactionRequestQueue.claim(), not the route key, so a redelivery after
-   * a FAILED delivery (claim released) is not swallowed by the route queue's
-   * completed-key window.
-   */
-  deliverSigningRequest(run: RouteRun): Promise<void> {
-    this.signingDeliverySeq += 1;
-    return this.routeQueue.deliver(
-      `wc:signing:${this.signingDeliverySeq}`,
-      run
-    );
-  }
-
-  /**
    * Make this service the ONE owner of the v1 client's `call_request`
    * listener (TASK-257). Both a fresh v1 pairing and a restored v1 session
    * call this; the listener is removed before it is added, so re-pairing
@@ -288,116 +259,26 @@ export class DeepLinkService {
       },
     };
 
-    // A request already queued or shown is not surfaced again (TASK-257).
-    // Same claim lifecycle as the boot's session_request handler: the claim
-    // stays while the request is shown or queued, and a failed delivery
-    // releases it so a redelivery can surface.
-    if (
-      !TransactionRequestQueue.claim(
-        transformedRequest.id,
-        transformedRequest.topic
-      )
-    ) {
-      void RequestCoordinator.getInstance().retryUnpublished(
-        requestRefFor(transformedRequest, 1)
-      );
-      console.log('[DeepLinkService] Duplicate V1 request ignored');
-      return;
-    }
-
+    // An admitted request enters the review queue and the host draws it; no
+    // route is pushed. Duplicates are the coordinator's: admit suppresses an
+    // open ref and retries an unanswered closed one.
     const coordinator = RequestCoordinator.getInstance();
     const ref = requestRefFor(transformedRequest, 1);
     void (async () => {
       const admission = await coordinator.admit(ref);
-      if (admission.action !== 'show') {
-        TransactionRequestQueue.releaseClaim(
-          transformedRequest.id,
-          transformedRequest.topic
-        );
-        return;
-      }
-      await this.deliverSigningRequest(async () => {
-        let delivered = false;
-        try {
-          if (!this.navigationRef?.isReady()) {
-            console.error(
-              '[DeepLinkService] V1 transaction request not shown: navigation not ready'
-            );
-            return;
-          }
-          // Check if we're already on the TransactionRequestScreen
-          if (
-            this.navigationRef.getCurrentRoute()?.name ===
-            'WalletConnectTransactionRequest'
-          ) {
-            // Enqueue the request instead of navigating immediately; that
-            // screen takes it next. The claim stays: queued.
-            console.log(
-              '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
-            );
-            try {
-              await TransactionRequestQueue.enqueue({
-                id: transformedRequest.id,
-                topic: transformedRequest.topic,
-                params: transformedRequest.params,
-                version: 1,
-              });
-            } catch (error) {
-              if (!(error instanceof QueueFullError)) throw error;
-              // TASK-394: answer it as dropped (marks it displayed, so a
-              // redelivery is not shown) instead of releasing the claim.
-              TransactionRequestQueue.reportDropped(
-                [
-                  {
-                    id: transformedRequest.id,
-                    topic: transformedRequest.topic,
-                    params: transformedRequest.params,
-                    timestamp: Date.now(),
-                    version: 1,
-                  },
-                ],
-                'full'
-              );
-            }
-            delivered = true;
-            return;
-          }
-
-          // Navigate to transaction request screen if not already there
-          delivered = await this.navigateToRoute({
-            screen: 'WalletConnectTransactionRequest',
-            params: {
-              requestEvent: transformedRequest,
-              version: 1,
-            },
-          });
-          if (delivered) {
-            TransactionRequestQueue.markDisplayed(
-              transformedRequest.id,
-              transformedRequest.topic
-            );
-          }
-        } finally {
-          if (!delivered) {
-            // Not shown and not queued: let a redelivery of it through.
-            TransactionRequestQueue.releaseClaim(
-              transformedRequest.id,
-              transformedRequest.topic
-            );
-            coordinator.release(ref);
-          }
-        }
-      });
-    })().catch((error) => {
-      // The route queue never rejects; if it ever did, the handler above
-      // never ran, so the request was not delivered.
-      TransactionRequestQueue.releaseClaim(
-        transformedRequest.id,
-        transformedRequest.topic
+      if (admission.action !== 'show') return;
+      await feedQueue(
+        requestArrival({
+          ref,
+          requestEvent: transformedRequest,
+          firstSeenMs: admission.firstSeenMs,
+          sessions: () =>
+            WalletConnectService.getInstance().getActiveSessions(),
+        })
       );
-      coordinator.release(ref);
+    })().catch((error) => {
       console.error(
-        '[DeepLinkService] Failed to deliver V1 request:',
+        '[DeepLinkService] Failed to queue V1 request:',
         redactError(error)
       );
     });
@@ -536,9 +417,35 @@ export class DeepLinkService {
    * Handle navigation for a notification tap
    * This is called either immediately (if app is unlocked) or after unlock
    */
-  private async handleNotificationNavigation(
-    data: NotificationData
-  ): Promise<void> {
+  private handleNotificationNavigation(data: NotificationData): Promise<void> {
+    return this.whenReviewQueueIdle(() => this.navigateForNotification(data));
+  }
+
+  /**
+   * Run `run` once the WalletConnect review queue holds nothing: no head and
+   * no result card (a waiting request always has one of the two in front of
+   * it). A tap must not route the app under a review the person is in the
+   * middle of, so it goes after the last one is done. The wait does not block
+   * the route queue, so other links still run.
+   */
+  private whenReviewQueueIdle(run: () => Promise<void>): Promise<void> {
+    const queue = RequestQueue.getInstance();
+    const busy = () => this.isReviewHostShowing();
+    if (!busy()) return run();
+    const unsubscribe = queue.subscribe(() => {
+      if (busy()) return;
+      unsubscribe();
+      run().catch((error) => {
+        console.error(
+          '[DeepLink] Notification navigation failed:',
+          redactError(error)
+        );
+      });
+    });
+    return Promise.resolve();
+  }
+
+  private async navigateForNotification(data: NotificationData): Promise<void> {
     console.log(
       'Processing notification navigation:',
       redactNotificationData(data)
@@ -733,21 +640,48 @@ export class DeepLinkService {
         throw new Error('Unable to detect WalletConnect version from URI');
       }
     } catch (error) {
-      // Show error screen for WalletConnect failures
-      await this.navigateToRoute({
-        screen: 'WalletConnectError',
-        params: {
-          // The pairing URI is NOT passed through. A v2 URI carries `symKey`
-          // and a v1 URI carries `key` — the session key itself — and route
-          // params live in navigation state, which is serialized and inspectable
-          // (same class as TASK-224, mnemonics through route params). Nothing
-          // read it: WalletConnectErrorScreen uses `error` only.
-          error: error instanceof Error ? error.message : 'Failed to connect',
-        },
-      });
+      // The pairing URI is NOT passed through. A v2 URI carries `symKey` and a
+      // v1 URI carries `key` — the session key itself — and route params live
+      // in navigation state, which is serialized and inspectable (same class as
+      // TASK-224, mnemonics through route params). Nothing read it:
+      // WalletConnectErrorScreen uses `error` only.
+      await this.showPairingError(
+        error instanceof Error ? error.message : 'Failed to connect'
+      );
 
       return false;
     }
+  }
+
+  /**
+   * The review host covers the navigator while a request or proposal is up and
+   * while its result card is, until the person taps OK.
+   */
+  private isReviewHostShowing(): boolean {
+    const snapshot = RequestQueue.getInstance().getSnapshot();
+    return Boolean(snapshot.head || snapshot.result);
+  }
+
+  /**
+   * Tell the person a pairing link failed. While the review host is showing a
+   * request, proposal or result it covers the navigator, so a pushed error screen would
+   * sit unseen underneath and surface only once the queue empties, as an error
+   * about an earlier link. A toast shows over the host instead, as the v1 busy
+   * path does.
+   */
+  private async showPairingError(message: string): Promise<void> {
+    if (this.isReviewHostShowing()) {
+      Toast.show({
+        type: 'error',
+        text1: 'Connection failed',
+        text2: message,
+      });
+      return;
+    }
+    await this.navigateToRoute({
+      screen: 'WalletConnectError',
+      params: { error: message },
+    });
   }
 
   /**
@@ -779,16 +713,20 @@ export class DeepLinkService {
         throw new Error('Invalid WalletConnect v1 URI format');
       }
 
+      // Initialize WalletConnect v1 client
+      const v1Client = WalletConnectV1Client.getInstance();
+
+      // Busy from a v1 item's admission until its answer, and any disconnect it
+      // ends in, has finished: the coordinator counts it until it is closed and
+      // answered, and the client counts the answer it makes after a decision.
       if (
         this.v1PairingInFlight ||
-        RequestCoordinator.getInstance().hasOpenV1Proposal()
+        RequestCoordinator.getInstance().hasOpenV1Item() ||
+        v1Client.isAnswering()
       ) {
         Toast.show({ type: 'info', ...V1_BUSY_TOAST });
         return false;
       }
-
-      // Initialize WalletConnect v1 client
-      const v1Client = WalletConnectV1Client.getInstance();
 
       // Set up event handlers
       v1Client.once(
@@ -801,18 +739,18 @@ export class DeepLinkService {
             const admission = await coordinator.admit(ref);
             if (admission.action !== 'show') return;
             try {
-              const delivered = await this.navigateToRoute(
-                {
-                  screen: 'WalletConnectSessionProposal',
-                  params: { version: 1, sessionRequest },
-                },
-                { push: true }
+              await feedQueue(
+                proposalArrival({
+                  ref,
+                  payload: sessionRequest,
+                  metadata: (sessionRequest as { peerMeta?: unknown })
+                    ?.peerMeta,
+                  firstSeenMs: admission.firstSeenMs,
+                })
               );
-              if (!delivered) coordinator.release(ref);
             } catch (error) {
-              coordinator.release(ref);
               console.error(
-                'Failed to deliver WalletConnect v1 proposal:',
+                'Failed to queue WalletConnect v1 proposal:',
                 redactError(error)
               );
             }
@@ -830,14 +768,11 @@ export class DeepLinkService {
           'DeepLinkService: v1 connection error',
           redactError(error)
         );
-        this.navigateToRoute({
-          screen: 'WalletConnectError',
-          params: {
-            // See above: the v1 pairing URI carries `key=<hex>`, the symmetric
-            // session key, and must not reach navigation state.
-            error: error instanceof Error ? error.message : 'Connection failed',
-          },
-        });
+        // See showPairingError: the v1 pairing URI carries `key=<hex>`, the
+        // symmetric session key, and must not reach navigation state.
+        void this.showPairingError(
+          error instanceof Error ? error.message : 'Connection failed'
+        );
       });
 
       // Connect to bridge

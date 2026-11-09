@@ -3,12 +3,20 @@ import path from 'path';
 import ts from 'typescript';
 
 const queueModule = 'src/services/walletconnect/requestQueue.ts';
-const screen = 'src/screens/walletconnect/TransactionRequestScreen.tsx';
-// Repository scan before extraction: no production value importers exist yet.
+// The production value importers: the host draws the queue, the lock screen
+// and the link service read it (the link service only waits for it to empty
+// before a notification tap routes), and feedQueue is the one point where an
+// admitted arrival enters it.
 const lockScreen = 'src/screens/auth/LockScreen.tsx';
+const linkService = 'src/services/deeplink/index.ts';
+const feedPoint = 'src/services/walletconnect/feedQueue.ts';
+const reviewKeys = 'src/services/walletconnect/queueReviewKeys.ts';
 const queueImporters = [
   'src/components/wcHost/WalletConnectHost.tsx',
   lockScreen,
+  linkService,
+  feedPoint,
+  reviewKeys,
 ];
 const hostImporter = 'src/navigation/AppNavigator.tsx';
 const hostController = 'src/components/wcHost/headSession.ts';
@@ -197,9 +205,26 @@ it('DEFECT single owner: no production queue feed, fixed value importers, one co
     message: `${controllers.length} controller importer files`,
     files: controllers,
   }).toEqual({
-    message: '2 controller importer files',
-    files: [hostController, screen].sort(),
+    message: '1 controller importer files',
+    files: [hostController],
   });
+});
+
+it('DEFECT only the two producer files feed the queue, and each producer feeds it through feedQueue', () => {
+  const callers = walk('src')
+    .filter((file) => file !== feedPoint)
+    .filter((file) => /\bfeedQueue\(/.test(fs.readFileSync(file, 'utf8')))
+    .sort();
+  expect(callers).toEqual([
+    'src/navigation/serviceBootstrap.ts',
+    'src/services/deeplink/index.ts',
+  ]);
+  // v2 proposal and request in the boot, v1 request and proposal in the link
+  // service: four producers, four calls.
+  const count = (file: string) =>
+    (fs.readFileSync(file, 'utf8').match(/\bfeedQueue\(/g) ?? []).length;
+  expect(count('src/navigation/serviceBootstrap.ts')).toBe(2);
+  expect(count('src/services/deeplink/index.ts')).toBe(2);
 });
 
 it('DEFECT only AppNavigator imports the host and mounts it once with zero JSX attributes', () => {
@@ -248,4 +273,12 @@ it('REGRESSION host matcher counts actual JSX attributes including spread and al
 
 it('DEFECT LockScreen is a read-only queue subscriber with no queue mutations', () => {
   expect(inspect(fs.readFileSync(lockScreen, 'utf8')).mutations).toEqual([]);
+});
+
+it('DEFECT the link service reads the queue and never mutates it', () => {
+  expect(inspect(fs.readFileSync(linkService, 'utf8')).mutations).toEqual([]);
+});
+
+it('DEFECT the review key reader reads the queue and never mutates it', () => {
+  expect(inspect(fs.readFileSync(reviewKeys, 'utf8')).mutations).toEqual([]);
 });

@@ -19,7 +19,7 @@
  *
  * We exercise the SAME code path production uses: build -> encode -> base64 ->
  * `algosdk.decodeUnsignedTransaction` -> detectTransactionDangers (see
- * TransactionRequestScreen.tsx). A negative control (a normal asset transfer
+ * UniversalTransactionSigningScreen.tsx). A negative control (a normal asset transfer
  * with no close-to) asserts we do not over-warn.
  */
 

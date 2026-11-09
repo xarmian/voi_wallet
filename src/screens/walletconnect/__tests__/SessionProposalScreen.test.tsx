@@ -119,6 +119,8 @@ jest.mock('@/services/auth/reviewGrant', () => ({
     JSON.stringify([a, String(b)]),
   walletConnectProposalKey: (a: string, b: string | number) =>
     JSON.stringify([a, `proposal-${b}`]),
+  walletConnectV1ProposalKey: (peerId?: string | number) =>
+    JSON.stringify(['v1', `proposal-${peerId ?? ''}`]),
 }));
 // The gate itself is covered by TASK-437's tests; render what it is given.
 jest.mock('@/components/walletconnect/LockedRequestGate', () => {
@@ -163,7 +165,27 @@ const navigationStub = () => {
   };
 };
 
-import SessionProposalScreen from '../SessionProposalScreen';
+import { ConnectReview } from '../SessionProposalScreen';
+import { routeReviewBinding } from '@/services/walletconnect/reviewBinding';
+
+// A route stand-in: the host is the production surface now, so this binds the
+// review to the stub navigation the way a router-hosted surface would.
+function SessionProposalScreen({
+  navigation,
+  route,
+}: {
+  navigation: Parameters<typeof routeReviewBinding>[0];
+  route: {
+    key: string;
+    params?: React.ComponentProps<typeof ConnectReview>['params'];
+  };
+}) {
+  const binding = React.useMemo(
+    () => routeReviewBinding(navigation, route.key),
+    [navigation, route.key]
+  );
+  return <ConnectReview params={route.params} binding={binding} />;
+}
 
 const rekeyed = {
   id: 'rk',

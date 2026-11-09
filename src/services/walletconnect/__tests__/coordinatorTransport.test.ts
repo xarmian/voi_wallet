@@ -31,9 +31,9 @@ it('DEFECT rejectRequestV2 forwards topic, id, code and message', async () => {
   await createCoordinatorTransport().rejectRequestV2('topic', 5, error);
   expect(v2.rejectRequest).toHaveBeenCalledWith('topic', 5, error);
 });
-it('DEFECT rejectRequestV1 forwards id and message only', async () => {
-  await createCoordinatorTransport().rejectRequestV1(5, error.message);
-  expect(v1.rejectRequest).toHaveBeenCalledWith(5, error.message);
+it('DEFECT rejectRequestV1 forwards id, message and the request topic', async () => {
+  await createCoordinatorTransport().rejectRequestV1(5, error.message, 'hs');
+  expect(v1.rejectRequest).toHaveBeenCalledWith(5, error.message, 'hs');
 });
 it('DEFECT rejectProposalV2 forwards id and custom reason', async () => {
   await createCoordinatorTransport().rejectProposalV2(5, 'pairing', error);

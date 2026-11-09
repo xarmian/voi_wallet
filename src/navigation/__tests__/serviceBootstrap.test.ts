@@ -27,6 +27,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 
 import { initializeServices } from '../serviceBootstrap';
 import { isAccountSubscribeTokenCurrent } from '@/services/notifications/subscribePass';
+import { settleLegacyQueue } from '@/services/walletconnect/legacyQueueMigration';
 
 // --- Mock leaves (all prefixed `mock` so jest can hoist them into factories) ---
 const mockWcService = {
@@ -51,12 +52,6 @@ const mockNotificationService = {
     async (_accounts: unknown[], _subscribeToken?: number) => {}
   ),
   cleanup: jest.fn(),
-};
-const mockTxnQueue = {
-  enqueue: jest.fn(async () => {}),
-  setProcessing: jest.fn(async () => {}),
-  isEmpty: jest.fn(async () => true),
-  setDroppedRequestHandler: jest.fn(),
 };
 // Mutable app mode driven per test ('user' vs 'signer').
 let mockAppMode = 'user';
@@ -117,14 +112,8 @@ jest.mock('@/services/ledger/transport', () => ({
   },
 }));
 
-jest.mock('@/services/walletconnect/TransactionRequestQueue', () => ({
-  get TransactionRequestQueue() {
-    return mockTxnQueue;
-  },
-  QueueFullError: class QueueFullError extends Error {},
-}));
-jest.mock('@/services/walletconnect/droppedRequestResponder', () => ({
-  answerDroppedRequests: jest.fn(),
+jest.mock('@/services/walletconnect/legacyQueueMigration', () => ({
+  settleLegacyQueue: jest.fn(async () => {}),
 }));
 
 jest.mock('@/platform/detection', () => ({
@@ -379,5 +368,58 @@ describe('serviceBootstrap.initializeServices — deferred subscribe abort token
     const [, subscribeToken] =
       mockNotificationService.subscribeAllAccounts.mock.calls[0];
     expect(isAccountSubscribeTokenCurrent(subscribeToken!)).toBe(false);
+  });
+});
+
+describe('serviceBootstrap.initializeServices — legacy queue migration order', () => {
+  beforeEach(() => {
+    mockAppMode = 'user';
+    mockGetCurrentWallet.mockResolvedValue(null);
+    mockNotificationService.registerPushToken.mockResolvedValue(null);
+    mockWcService.initialize.mockImplementation(async () => {});
+  });
+
+  it('does not answer the legacy queue until WalletConnect initialize resolves', async () => {
+    let finishInit!: () => void;
+    mockWcService.initialize.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishInit = resolve;
+        })
+    );
+
+    const booting = initializeServices({
+      navigationRef: { current: null },
+      initializeNetwork: jest.fn(async () => {}),
+      cleanupRef: makeCleanupRef(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // initialize() is in flight, so no transport can send yet.
+    expect(mockWcService.initialize).toHaveBeenCalledTimes(1);
+    expect(settleLegacyQueue).not.toHaveBeenCalled();
+
+    finishInit();
+    await booting;
+
+    expect(settleLegacyQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the legacy queue for the next launch when initialize fails', async () => {
+    mockWcService.initialize.mockRejectedValueOnce(new Error('init failed'));
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+
+    await initializeServices({
+      navigationRef: { current: null },
+      initializeNetwork: jest.fn(async () => {}),
+      cleanupRef: makeCleanupRef(),
+    });
+
+    expect(mockWcService.initialize).toHaveBeenCalledTimes(1);
+    expect(settleLegacyQueue).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });

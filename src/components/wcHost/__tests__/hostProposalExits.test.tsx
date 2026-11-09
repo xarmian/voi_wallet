@@ -558,3 +558,44 @@ it.each(['approve', 'reject', 'approval failure'] as const)(
     expect(queue.getSnapshot().result?.ref).toEqual(v1Ref);
   }
 );
+
+it('DEFECT back while the decide write is in flight is saved by settle awaiting the decision (row D)', async () => {
+  const view = await mount();
+  let finishWrite!: (recorded: boolean) => void;
+  // Only the store write is held: the real coordinator.decide runs, so the
+  // coordinator's own `deciding` wait is what is under test.
+  jest.spyOn(HandledStore.prototype, 'markHandled').mockImplementationOnce(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finishWrite = resolve;
+      })
+  );
+  const decide = jest.spyOn(coordinator, 'decide');
+  const settle = jest.spyOn(coordinator, 'settle');
+  const sendError = jest.spyOn(coordinator, 'sendError');
+  let button = view.getByRole('button', { name: 'Connect' });
+  while (!button.props.onClick) button = button.parent!;
+  await act(async () => {
+    button.props.onClick();
+  });
+  expect(decide).toHaveBeenCalledWith(ref, 'approved');
+  expect(mockApprove).not.toHaveBeenCalled();
+
+  await act(async () => {
+    fireEvent.press(view.getByText('Header back'));
+  });
+  expect(settle).toHaveBeenCalledWith(ref, 'abandoned');
+  // The back is parked behind the write: nothing is answered or closed yet.
+  expect(sendError).not.toHaveBeenCalled();
+  expect(coordinator.isOpen(ref)).toBe(true);
+  expect(mockApprove).not.toHaveBeenCalled();
+
+  await act(async () => {
+    finishWrite(true);
+  });
+  // The approval won: the dApp is connected, never rejected.
+  expect(await settle.mock.results[0].value).toBe('already-settled');
+  expect(sendError).not.toHaveBeenCalled();
+  expect(mockApprove).toHaveBeenCalledTimes(1);
+  expect(queue.getSnapshot().result).toMatchObject({ title: 'Success' });
+});

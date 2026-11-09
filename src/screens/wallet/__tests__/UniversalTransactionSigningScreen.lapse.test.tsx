@@ -631,3 +631,35 @@ it('DEFECT entered Ledger rejection then Close answers declined once', async () 
   await act(async () => h.modal().props.onCancel());
   expectEnd('declined');
 });
+
+// DEFECT (U4b population table, T1): the presenting surface ending a review
+// after the signer was entered is a system exit like background, so the dApp
+// hears 'lapsed', never the 'User rejected.' that abandoning would send for
+// something the person approved.
+it.each([true, false])(
+  'DEFECT the surface leaving after the signer was entered ends the request lapsed once (locked=%s)',
+  async (locked) => {
+    const h = await pendingLedger(locked);
+    await h.ready();
+    await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(1));
+    expect(h.controller.hasEnteredSigner()).toBe(true);
+    await h.leave();
+    expectEnd('lapsed');
+    await h.leave();
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    await h.finish();
+    expect(h.onSuccess).not.toHaveBeenCalled();
+  }
+);
+
+it('DEFECT the surface leaving before the signer was entered does not end the request as lapsed', async () => {
+  const h = await openOutcome({
+    locked: false,
+    ledger: true,
+    realSigner: true,
+    entries: 3,
+  });
+  expect(h.controller.hasEnteredSigner()).toBe(false);
+  await h.leave();
+  expect(onEnd).not.toHaveBeenCalled();
+});

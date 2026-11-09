@@ -139,3 +139,19 @@ it('a restored v1 session registers through the single owner and adds no listene
   expect(emitted).not.toHaveBeenCalled();
   expect(mockNavigateToRoute).not.toHaveBeenCalled();
 });
+
+it('restore asks the client to connect only when it is idle, and attaches nothing when the client is in use', async () => {
+  mockV1Client.connect.mockResolvedValueOnce(false as never);
+  const service = new WalletConnectService();
+
+  await (
+    service as unknown as { loadV1Sessions: () => Promise<void> }
+  ).loadV1Sessions();
+
+  expect(mockV1Client.connect).toHaveBeenCalledTimes(1);
+  expect(mockV1Client.connect).toHaveBeenCalledWith(
+    expect.objectContaining({ topic: TOPIC }),
+    { onlyIfIdle: true }
+  );
+  expect(mockAttachV1CallRequests).not.toHaveBeenCalled();
+});

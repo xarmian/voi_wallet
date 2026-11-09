@@ -2383,7 +2383,8 @@ export class MultiAccountWalletService {
   }
 
   /**
-   * STRICT, boot-only probe: does a persisted wallet hold ≥1 locally-KEY-BEARING
+   * STRICT probe, run at boot and, while the restore-before-PIN breadcrumb is
+   * set, on each WalletConnect arrival (the entry guard): does a persisted wallet hold ≥1 locally-KEY-BEARING
    * (STANDARD) account? (TASK-213 Codex round-4). A STANDARD account stores its
    * private key encrypted under the user secret, and setupPin ALWAYS precedes the
    * key import (SecuritySetupScreen), so a STANDARD account can NEVER exist

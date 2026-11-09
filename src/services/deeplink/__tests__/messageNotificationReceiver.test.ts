@@ -20,9 +20,6 @@ jest.mock('@/services/walletconnect', () => ({
 jest.mock('@/services/walletconnect/v1', () => ({
   WalletConnectV1Client: { getInstance: jest.fn() },
 }));
-jest.mock('@/services/walletconnect/TransactionRequestQueue', () => ({
-  TransactionRequestQueue: { enqueue: jest.fn() },
-}));
 jest.mock('@/services/notifications', () => ({
   notificationService: { setNotificationTapHandler: jest.fn() },
 }));

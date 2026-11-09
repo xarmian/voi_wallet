@@ -30,7 +30,7 @@ const makeTransport = (): jest.Mocked<CoordinatorTransport> => ({
     async (_topic: string, _id: number | string, _error: AnswerError) => {}
   ),
   rejectRequestV1: jest.fn(
-    async (_id: number | string, _message: string) => {}
+    async (_id: number | string, _message: string, _topic: string) => {}
   ),
   rejectProposalV2: jest.fn(
     async (_id: number | string, _topic: string, _error: AnswerError) => {}
@@ -213,7 +213,8 @@ it.each(exits)(
         else if (kind === 'request')
           expect(transport.rejectRequestV1).toHaveBeenLastCalledWith(
             ref.id,
-            message
+            message,
+            ref.topic
           );
         else if (version === 2)
           expect(transport.rejectProposalV2).toHaveBeenLastCalledWith(
@@ -782,7 +783,7 @@ it('U6 lapsed wire answer makes no assertion about signing', () => {
   });
 });
 
-describe('U8 v1 proposal occupancy', () => {
+describe('U8 v1 occupancy', () => {
   const proposal: RequestRef = {
     version: 1,
     kind: 'proposal',
@@ -793,15 +794,15 @@ describe('U8 v1 proposal occupancy', () => {
   it.each(['settle', 'decide'] as const)(
     'U8 counts open and released v1 proposals until %s closes them',
     async (ending) => {
-      expect(coordinator.hasOpenV1Proposal()).toBe(false);
+      expect(coordinator.hasOpenV1Item()).toBe(false);
       await coordinator.admit(proposal);
-      expect(coordinator.hasOpenV1Proposal()).toBe(true);
+      expect(coordinator.hasOpenV1Item()).toBe(true);
       coordinator.release(proposal);
-      expect(coordinator.hasOpenV1Proposal()).toBe(true);
+      expect(coordinator.hasOpenV1Item()).toBe(true);
       await coordinator.admit(proposal);
       if (ending === 'settle') await coordinator.settle(proposal, 'declined');
       else await coordinator.decide(proposal, 'approved');
-      expect(coordinator.hasOpenV1Proposal()).toBe(false);
+      expect(coordinator.hasOpenV1Item()).toBe(false);
     }
   );
 
@@ -815,22 +816,82 @@ describe('U8 v1 proposal occupancy', () => {
         })
     );
     const admission = coordinator.admit(proposal);
-    expect(coordinator.hasOpenV1Proposal()).toBe(true);
+    expect(coordinator.hasOpenV1Item()).toBe(true);
     finish();
     await admission;
-    expect(coordinator.hasOpenV1Proposal()).toBe(true);
+    expect(coordinator.hasOpenV1Item()).toBe(true);
   });
+
+  it.each(['settle', 'decide'] as const)(
+    'U8 counts an open or released v1 request until %s closes it',
+    async (ending) => {
+      const request: RequestRef = {
+        version: 1,
+        kind: 'request',
+        topic: 'v1-request',
+        id: 8102,
+      };
+      expect(coordinator.hasOpenV1Item()).toBe(false);
+      await coordinator.admit(request);
+      expect(coordinator.hasOpenV1Item()).toBe(true);
+      coordinator.release(request);
+      expect(coordinator.hasOpenV1Item()).toBe(true);
+      await coordinator.admit(request);
+      if (ending === 'settle') await coordinator.settle(request, 'declined');
+      else await coordinator.decide(request, 'approved');
+      expect(coordinator.hasOpenV1Item()).toBe(false);
+    }
+  );
 
   it.each([
     { ...proposal, version: 2 as const },
-    { ...proposal, kind: 'request' as const },
-  ])('U8 does not count other refs: $version $kind', async (other) => {
+    { ...proposal, kind: 'request' as const, version: 2 as const },
+  ])('U8 does not count v2 refs: $version $kind', async (other) => {
     const admission = coordinator.admit(other);
-    expect(coordinator.hasOpenV1Proposal()).toBe(false);
+    expect(coordinator.hasOpenV1Item()).toBe(false);
     await admission;
-    expect(coordinator.hasOpenV1Proposal()).toBe(false);
+    expect(coordinator.hasOpenV1Item()).toBe(false);
     coordinator.release(other);
-    expect(coordinator.hasOpenV1Proposal()).toBe(false);
+    expect(coordinator.hasOpenV1Item()).toBe(false);
+  });
+
+  it('U8 keeps counting a v1 proposal from its close until its answer has finished', async () => {
+    let finishAnswer!: () => void;
+    transport.rejectProposalV1.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishAnswer = resolve;
+        })
+    );
+    await coordinator.admit(proposal);
+    const settling = coordinator.settle(proposal, 'declined');
+    // Closed (no longer open) and the answer not yet sent: still counted.
+    expect(coordinator.isOpen(proposal)).toBe(false);
+    expect(coordinator.hasOpenV1Item()).toBe(true);
+    for (let i = 0; i < 50 && !finishAnswer; i++) await Promise.resolve();
+    expect(finishAnswer).toBeDefined();
+    expect(coordinator.hasOpenV1Item()).toBe(true);
+    finishAnswer();
+    await settling;
+    expect(coordinator.hasOpenV1Item()).toBe(false);
+  });
+
+  it('U8 keeps counting a v1 proposal through sendError after a decision', async () => {
+    let finishAnswer!: () => void;
+    transport.rejectProposalV1.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishAnswer = resolve;
+        })
+    );
+    await coordinator.admit(proposal);
+    expect(await coordinator.decide(proposal, 'approved')).toBe(true);
+    expect(coordinator.hasOpenV1Item()).toBe(false);
+    const sending = coordinator.sendError(proposal, 'load-failed');
+    expect(coordinator.hasOpenV1Item()).toBe(true);
+    finishAnswer();
+    await sending;
+    expect(coordinator.hasOpenV1Item()).toBe(false);
   });
 });
 

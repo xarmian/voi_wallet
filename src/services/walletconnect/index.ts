@@ -229,11 +229,6 @@ export class WalletConnectService extends EventEmitter {
    * not match the stored topic, is malformed, or is simply absent. A v1 bridge
    * transport key is cheap to re-establish and there is nothing to recover, so
    * the session is discarded and the user re-pairs by scanning the QR again.
-   *
-   * Also purges the QUEUED transaction requests of every topic it deletes.
-   * Startup dequeues and navigates queued requests unconditionally, so a
-   * request left behind here would land on a screen with no live session,
-   * error, and be lost — it has already been removed from the queue by then.
    */
   private async dropV1Session(
     activeStorageKey: string,
@@ -252,13 +247,7 @@ export class WalletConnectService extends EventEmitter {
       // dropSlot is UNCONDITIONAL here: this removes EVERY v1 row, so no
       // session survives whose key could be destroyed, and a conditional delete
       // would strand the slot whenever it was bound to a stale row.
-      const dropped = await deleteV1Sessions(keysToRemove, { dropSlot: true });
-      if (dropped > 0) {
-        console.warn(
-          'Dropped queued v1 requests for an unrestorable session:',
-          dropped
-        );
-      }
+      await deleteV1Sessions(keysToRemove, { dropSlot: true });
     } catch (error) {
       console.error(
         'Failed to drop unrestorable v1 session:',
@@ -496,18 +485,29 @@ export class WalletConnectService extends EventEmitter {
         .filter((key) => key !== latestEntry.key);
 
       if (staleKeys.length > 0) {
-        // Central cleanup so the pruned rows' queued requests go too. dropSlot
+        // Central cleanup so the pruned rows go together with their keys. dropSlot
         // is FALSE: the selected session survives and its key must not be
-        // touched — deleteV1Sessions only reaps queues and metadata here.
+        // touched — deleteV1Sessions only reaps metadata here.
         await deleteV1Sessions(staleKeys, { dropSlot: false });
       }
 
-      await v1Client.connect({
-        topic,
-        version: '1',
-        bridge: session.bridge,
-        key: sessionKey,
-      });
+      // Restore never replaces a connection: a pairing link may already hold
+      // the client, awaiting approval, and replacing it would turn the person's
+      // answer into one for this session. Then nothing is restored; the row
+      // stays and the person can re-pair.
+      const connected = await v1Client.connect(
+        {
+          topic,
+          version: '1',
+          bridge: session.bridge,
+          key: sessionKey,
+        },
+        { onlyIfIdle: true }
+      );
+      if (connected === false) {
+        console.warn('Skipped v1 session restore: the client is in use');
+        return;
+      }
 
       // Signing requests for the restored session go through the ONE v1
       // `call_request` listener DeepLinkService owns (TASK-257). This used to

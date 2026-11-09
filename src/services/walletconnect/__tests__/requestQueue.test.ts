@@ -543,3 +543,48 @@ describe('result copy defaults (product ruling: by kind and reason)', () => {
     expect(queue.getSnapshot().result).toMatchObject({ title, message });
   });
 });
+
+describe('flood limit', () => {
+  it('refuses a push past 10 waiting items with "full" and does not subscribe to it', () => {
+    // One head plus ten waiting is the most the queue holds.
+    const accepted = Array.from({ length: 11 }, (_, index) =>
+      push(refFor(index + 1))
+    );
+    expect(accepted).toEqual(['head', ...Array(10).fill('queued')]);
+    const subscribedBefore = coordinator.listeners.size;
+
+    const overflow = refFor(99);
+    expect(push(overflow)).toBe('full');
+    expect(queue.getSnapshot().waiting).toHaveLength(10);
+    expect(queue.getSnapshot().waiting.some((item) => item.ref.id === 99)).toBe(
+      false
+    );
+    // The refused item left no listener behind: the producer settles it.
+    expect(coordinator.listeners.size).toBe(subscribedBefore);
+    expect(coordinator.listeners.get(keyOf(overflow))).toBeUndefined();
+  });
+
+  it('accepts a push again once a waiting item has left', () => {
+    for (let id = 1; id <= 11; id += 1) push(refFor(id));
+    expect(push(refFor(50))).toBe('full');
+    coordinator.close(refFor(5));
+    expect(queue.getSnapshot().waiting).toHaveLength(9);
+    expect(push(refFor(51))).toBe('queued');
+    assertInvariants(queue.getSnapshot());
+  });
+
+  it('does not count the head toward the limit', () => {
+    expect(push(refFor(1))).toBe('head');
+    for (let id = 2; id <= 11; id += 1) {
+      expect(push(refFor(id))).toBe('queued');
+    }
+    expect(queue.getSnapshot().waiting).toHaveLength(10);
+  });
+
+  it('reports a duplicate or not-open ref before it reports full', () => {
+    for (let id = 1; id <= 11; id += 1) push(refFor(id));
+    expect(queue.push(itemFor(refFor(3)))).toBe('duplicate');
+    // refFor(77) was never admitted to the coordinator.
+    expect(queue.push(itemFor(refFor(77)))).toBe('not-open');
+  });
+});

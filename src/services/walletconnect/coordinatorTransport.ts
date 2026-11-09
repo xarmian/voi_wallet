@@ -9,8 +9,12 @@ export function createCoordinatorTransport(): CoordinatorTransport {
         code: error.code,
         message: error.message,
       }),
-    rejectRequestV1: (id, message) =>
-      WalletConnectV1Client.getInstance().rejectRequest(id as number, message),
+    rejectRequestV1: (id, message, topic) =>
+      WalletConnectV1Client.getInstance().rejectRequest(
+        id as number,
+        message,
+        topic
+      ),
     rejectProposalV2: (id, _pairingTopic, error) =>
       WalletConnectService.getInstance().rejectProposal(id as number, {
         code: error.code,

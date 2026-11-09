@@ -2065,7 +2065,7 @@ export class TransactionAuthController {
             // only for WalletConnect queue keys; Swap and Claim never carry one);
             // algo_signAndPostTxn has no handler; the batch signer's onNetworkSubmit
             // (unifiedSigner.ts, signWalletConnectBatch) fires after signing with no
-            // broadcast behind it; the TransactionRequestScreen success handler
+            // broadcast behind it; the sign controller's success handler
             // only answers the dApp.
             this.updateState({
               state: 'error',

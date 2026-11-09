@@ -32,14 +32,6 @@ export const ROOT_ROUTE_COVERAGE: Record<
   SignRequestScanner: { group: 'signer-mode' },
   RemoteSignerTransactionReview: { group: 'signer-mode' },
   SignatureDisplay: { group: 'signer-mode' },
-  WalletConnectSessionProposal: {
-    group: 'walletconnect-pending-deletion',
-    note: 'Deleted in C2b U4; the host renders inside the cover',
-  },
-  WalletConnectTransactionRequest: {
-    group: 'walletconnect-pending-deletion',
-    note: 'Deleted in C2b U4; the host renders inside the cover',
-  },
   WalletConnectPairing: {
     group: 'walletconnect-pending-deletion',
     note: 'Deleted in C2b U4; the host renders inside the cover',

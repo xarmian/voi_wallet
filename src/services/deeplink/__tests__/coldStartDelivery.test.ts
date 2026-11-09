@@ -55,9 +55,6 @@ jest.mock('@/services/walletconnect', () => ({
 jest.mock('@/services/walletconnect/v1', () => ({
   WalletConnectV1Client: { getInstance: jest.fn() },
 }));
-jest.mock('@/services/walletconnect/TransactionRequestQueue', () => ({
-  TransactionRequestQueue: { enqueue: jest.fn() },
-}));
 
 type TapHandler = (data: any, notificationId?: string) => unknown;
 let mockTapHandler: TapHandler | null = null;

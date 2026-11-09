@@ -13,9 +13,11 @@ import { RequestQueue } from '@/services/walletconnect/requestQueue';
 import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
 import { hostMayDraw } from '@/navigation/lockCoverCondition';
 import { useTheme } from '@/contexts/ThemeContext';
-import { ConnectReview } from '@/screens/walletconnect/SessionProposalScreen';
+import {
+  ConnectReview,
+  type ConnectParams,
+} from '@/screens/walletconnect/SessionProposalScreen';
 import { TransactionReview } from '@/screens/wallet/UniversalTransactionSigningScreen';
-import type { RootStackParamList } from '@/navigation/AppNavigator';
 import {
   findHeadSession,
   getHeadSession,
@@ -35,7 +37,7 @@ function HeadBody({ session }: { session: HeadSession }) {
     session.start();
   }, [session]);
   if (session.item.kind === 'proposal') {
-    const proposalParams: RootStackParamList['WalletConnectSessionProposal'] =
+    const proposalParams: ConnectParams =
       session.item.ref.version === 1
         ? {
             proposal: undefined,
