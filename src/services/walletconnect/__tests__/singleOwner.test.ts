@@ -11,11 +11,13 @@ const screen = 'src/screens/walletconnect/TransactionRequestScreen.tsx';
 const lockScreen = 'src/screens/auth/LockScreen.tsx';
 const linkService = 'src/services/deeplink/index.ts';
 const feedPoint = 'src/services/walletconnect/feedQueue.ts';
+const reviewKeys = 'src/services/walletconnect/queueReviewKeys.ts';
 const queueImporters = [
   'src/components/wcHost/WalletConnectHost.tsx',
   lockScreen,
   linkService,
   feedPoint,
+  reviewKeys,
 ];
 const hostImporter = 'src/navigation/AppNavigator.tsx';
 const hostController = 'src/components/wcHost/headSession.ts';
@@ -276,4 +278,8 @@ it('DEFECT LockScreen is a read-only queue subscriber with no queue mutations', 
 
 it('DEFECT the link service reads the queue and never mutates it', () => {
   expect(inspect(fs.readFileSync(linkService, 'utf8')).mutations).toEqual([]);
+});
+
+it('DEFECT the review key reader reads the queue and never mutates it', () => {
+  expect(inspect(fs.readFileSync(reviewKeys, 'utf8')).mutations).toEqual([]);
 });

@@ -59,7 +59,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import {
   reviewGrant,
   walletConnectProposalKey,
-  walletConnectRequestKey,
+  walletConnectV1ProposalKey,
 } from '@/services/auth/reviewGrant';
 import LockedRequestGate from '@/components/walletconnect/LockedRequestGate';
 import {
@@ -141,10 +141,7 @@ export function ConnectReview({
   const { authState } = useAuth();
   const requestKey = proposal
     ? walletConnectProposalKey(proposal.pairingTopic, proposal.id)
-    : walletConnectRequestKey(
-        'v1',
-        `proposal-${v1SessionRequest?.peerId ?? ''}`
-      );
+    : walletConnectV1ProposalKey(v1SessionRequest?.peerId);
   const requiresReviewUnlock = authState.isLocked || !authState.isAuthenticated;
   const grantValid = useSyncExternalStore(reviewGrant.subscribe, () =>
     reviewGrant.isValid(requestKey)

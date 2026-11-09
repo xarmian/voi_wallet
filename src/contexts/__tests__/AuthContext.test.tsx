@@ -112,8 +112,8 @@ jest.mock('@/services/secure/SessionKeyVault', () => ({
 
 // The unlock mints a signing capability for the requests already waiting; this
 // suite has none.
-jest.mock('@/services/walletconnect/TransactionRequestQueue', () => ({
-  TransactionRequestQueue: { getAll: jest.fn(async () => []) },
+jest.mock('@/services/walletconnect/queueReviewKeys', () => ({
+  openReviewKeys: jest.fn(() => []),
 }));
 
 jest.mock('@/services/secure/biometricUnlock', () => ({

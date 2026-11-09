@@ -119,6 +119,8 @@ jest.mock('@/services/auth/reviewGrant', () => ({
     JSON.stringify([a, String(b)]),
   walletConnectProposalKey: (a: string, b: string | number) =>
     JSON.stringify([a, `proposal-${b}`]),
+  walletConnectV1ProposalKey: (peerId?: string | number) =>
+    JSON.stringify(['v1', `proposal-${peerId ?? ''}`]),
 }));
 // The gate itself is covered by TASK-437's tests; render what it is given.
 jest.mock('@/components/walletconnect/LockedRequestGate', () => {
