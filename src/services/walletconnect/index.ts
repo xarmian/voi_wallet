@@ -229,11 +229,6 @@ export class WalletConnectService extends EventEmitter {
    * not match the stored topic, is malformed, or is simply absent. A v1 bridge
    * transport key is cheap to re-establish and there is nothing to recover, so
    * the session is discarded and the user re-pairs by scanning the QR again.
-   *
-   * Also purges the QUEUED transaction requests of every topic it deletes.
-   * Startup dequeues and navigates queued requests unconditionally, so a
-   * request left behind here would land on a screen with no live session,
-   * error, and be lost — it has already been removed from the queue by then.
    */
   private async dropV1Session(
     activeStorageKey: string,

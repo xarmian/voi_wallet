@@ -643,21 +643,39 @@ export class DeepLinkService {
         throw new Error('Unable to detect WalletConnect version from URI');
       }
     } catch (error) {
-      // Show error screen for WalletConnect failures
-      await this.navigateToRoute({
-        screen: 'WalletConnectError',
-        params: {
-          // The pairing URI is NOT passed through. A v2 URI carries `symKey`
-          // and a v1 URI carries `key` — the session key itself — and route
-          // params live in navigation state, which is serialized and inspectable
-          // (same class as TASK-224, mnemonics through route params). Nothing
-          // read it: WalletConnectErrorScreen uses `error` only.
-          error: error instanceof Error ? error.message : 'Failed to connect',
-        },
-      });
+      // The pairing URI is NOT passed through. A v2 URI carries `symKey` and a
+      // v1 URI carries `key` — the session key itself — and route params live
+      // in navigation state, which is serialized and inspectable (same class as
+      // TASK-224, mnemonics through route params). Nothing read it:
+      // WalletConnectErrorScreen uses `error` only.
+      await this.showPairingError(
+        error instanceof Error ? error.message : 'Failed to connect'
+      );
 
       return false;
     }
+  }
+
+  /**
+   * Tell the person a pairing link failed. While the review host is showing a
+   * request or proposal it covers the navigator, so a pushed error screen would
+   * sit unseen underneath and surface only once the queue empties, as an error
+   * about an earlier link. A toast shows over the host instead, as the v1 busy
+   * path does.
+   */
+  private async showPairingError(message: string): Promise<void> {
+    if (RequestQueue.getInstance().getSnapshot().head) {
+      Toast.show({
+        type: 'error',
+        text1: 'Connection failed',
+        text2: message,
+      });
+      return;
+    }
+    await this.navigateToRoute({
+      screen: 'WalletConnectError',
+      params: { error: message },
+    });
   }
 
   /**
@@ -691,7 +709,7 @@ export class DeepLinkService {
 
       if (
         this.v1PairingInFlight ||
-        RequestCoordinator.getInstance().hasOpenV1Proposal()
+        RequestCoordinator.getInstance().hasOpenV1Item()
       ) {
         Toast.show({ type: 'info', ...V1_BUSY_TOAST });
         return false;
@@ -740,14 +758,11 @@ export class DeepLinkService {
           'DeepLinkService: v1 connection error',
           redactError(error)
         );
-        this.navigateToRoute({
-          screen: 'WalletConnectError',
-          params: {
-            // See above: the v1 pairing URI carries `key=<hex>`, the symmetric
-            // session key, and must not reach navigation state.
-            error: error instanceof Error ? error.message : 'Connection failed',
-          },
-        });
+        // See showPairingError: the v1 pairing URI carries `key=<hex>`, the
+        // symmetric session key, and must not reach navigation state.
+        void this.showPairingError(
+          error instanceof Error ? error.message : 'Connection failed'
+        );
       });
 
       // Connect to bridge

@@ -740,7 +740,11 @@ it('REGRESSION v1 signing params chain comes from resolveV1Chain and uses v1 app
   );
   expect(params.walletConnect.ref.version).toBe(1);
   await mockCallbacks.onSuccess(signed);
-  expect(mockApproveV1).toHaveBeenCalledWith(42, signed.signedTransactions);
+  expect(mockApproveV1).toHaveBeenCalledWith(
+    42,
+    signed.signedTransactions,
+    'fixture'
+  );
   expect(mockRespond).not.toHaveBeenCalled();
 });
 it.each([undefined, 0, 2, 7])(

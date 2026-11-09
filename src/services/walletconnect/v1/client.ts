@@ -337,6 +337,24 @@ export class WalletConnectV1Client extends EventEmitter {
   }
 
   /**
+   * This client is a singleton: a new connection replaces its session, and an
+   * answer is encrypted with the current key and sent to the current peer, so an
+   * id alone cannot say which session a request came from. An answer that
+   * names the topic its request arrived on is refused when that is no longer
+   * the current session, rather than reaching a peer that never made the
+   * request (and, for an approval, carrying signed transactions to it). The
+   * topic is the one DeepLinkService stamps on a request: the session's
+   * handshake topic, or the pairing topic before a session exists.
+   */
+  private assertRequestTopic(requestTopic?: string): void {
+    if (requestTopic === undefined) return;
+    const current = this.sessionData?.handshakeTopic || this.config?.topic;
+    if (requestTopic !== current) {
+      throw new Error('Request belongs to a replaced session');
+    }
+  }
+
+  /**
    * Approve transaction signing request.
    *
    * DR-12: `signedTxns` is the ARC-0001 response array and admits `null` in the
@@ -346,11 +364,13 @@ export class WalletConnectV1Client extends EventEmitter {
    */
   async approveRequest(
     requestId: number,
-    signedTxns: (string | null)[]
+    signedTxns: (string | null)[],
+    requestTopic?: string
   ): Promise<void> {
     if (!this.config || !this.socket || !this.sessionData) {
       throw new Error('Client not connected');
     }
+    this.assertRequestTopic(requestTopic);
 
     try {
       const response = createSignTxnResponse(requestId, signedTxns);
@@ -374,10 +394,15 @@ export class WalletConnectV1Client extends EventEmitter {
   /**
    * Reject transaction signing request
    */
-  async rejectRequest(requestId: number, reason?: string): Promise<void> {
+  async rejectRequest(
+    requestId: number,
+    reason?: string,
+    requestTopic?: string
+  ): Promise<void> {
     if (!this.config || !this.socket) {
       throw new Error('Client not connected');
     }
+    this.assertRequestTopic(requestTopic);
 
     try {
       const response = createErrorResponse(

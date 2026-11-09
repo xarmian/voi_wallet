@@ -79,7 +79,11 @@ export interface CoordinatorTransport {
     id: number | string,
     error: AnswerError
   ): Promise<void>;
-  rejectRequestV1(id: number | string, message: string): Promise<void>;
+  rejectRequestV1(
+    id: number | string,
+    message: string,
+    topic: string
+  ): Promise<void>;
   rejectProposalV2(
     proposalId: number | string,
     pairingTopic: string,
@@ -283,13 +287,19 @@ export class RequestCoordinator {
     return this.open.has(keyOf(ref));
   }
 
-  hasOpenV1Proposal(): boolean {
+  /**
+   * Whether any v1 proposal or request is admitted and not yet closed, open,
+   * released or still admitting. The v1 client is a singleton: a new v1 link
+   * replaces its session, and an open request would then be answered with the
+   * new peer's key and sent to the new peer.
+   */
+  hasOpenV1Item(): boolean {
     return [
       ...[...this.open.values(), ...this.released.values()].map(
         (entry) => entry.ref
       ),
       ...this.admitting.values(),
-    ].some((ref) => ref.version === 1 && ref.kind === 'proposal');
+    ].some((ref) => ref.version === 1);
   }
 
   describe(ref: RequestRef): {
@@ -435,7 +445,11 @@ export class RequestCoordinator {
         if (ref.version === 2) {
           await this.transport.rejectRequestV2(ref.topic, ref.id, error);
         } else {
-          await this.transport.rejectRequestV1(ref.id, error.message);
+          await this.transport.rejectRequestV1(
+            ref.id,
+            error.message,
+            ref.topic
+          );
         }
       } else if (ref.version === 2) {
         await this.transport.rejectProposalV2(ref.id, ref.topic, error);

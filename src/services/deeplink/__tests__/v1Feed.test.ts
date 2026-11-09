@@ -412,6 +412,73 @@ describe('v1 producers feed the review queue', () => {
       noRouteWasUsed();
     });
 
+    it('a link while a v1 request is the head is refused with the busy toast', async () => {
+      await service.testDeepLink(link('A'));
+      client.emit('call_request', callRequest(1));
+      await flush();
+
+      expect(await service.testDeepLink(link('B'))).toBe(false);
+
+      expect(client.connect).toHaveBeenCalledTimes(1);
+      expect(Toast.show).toHaveBeenCalledWith({
+        type: 'info',
+        ...V1_BUSY_TOAST,
+      });
+      expect(queue.getSnapshot().head?.ref.id).toBe(1);
+      noRouteWasUsed();
+    });
+
+    it('a link while a v1 request is waiting is refused with the busy toast', async () => {
+      await service.testDeepLink(link('A'));
+      client.emit('call_request', callRequest(1));
+      client.emit('call_request', callRequest(2));
+      await flush();
+
+      expect(await service.testDeepLink(link('B'))).toBe(false);
+
+      expect(client.connect).toHaveBeenCalledTimes(1);
+      expect(queue.getSnapshot().waiting.map((w) => w.ref.id)).toEqual([2]);
+    });
+
+    it('a malformed link while the host shows is reported by toast, not by a hidden error route', async () => {
+      await service.testDeepLink(link('A'));
+      client.emit('call_request', callRequest(1));
+      await flush();
+
+      expect(await service.testDeepLink('wc:bad@1?bridge=x')).toBe(false);
+
+      expect(Toast.show).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'error', text1: 'Connection failed' })
+      );
+      noRouteWasUsed();
+    });
+
+    it('a v1 connection error while the host shows is reported by toast', async () => {
+      await service.testDeepLink(link('A'));
+      client.emit('call_request', callRequest(1));
+      await flush();
+
+      client.emit('error', new Error('bridge unreachable'));
+      await flush();
+
+      expect(Toast.show).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'error',
+          text2: 'bridge unreachable',
+        })
+      );
+      noRouteWasUsed();
+    });
+
+    it('a malformed link with no host showing still opens the error screen', async () => {
+      expect(await service.testDeepLink('wc:bad@1?bridge=x')).toBe(false);
+
+      expect(
+        nav.navigate.mock.calls.length + nav.dispatch.mock.calls.length
+      ).toBe(1);
+      expect(Toast.show).not.toHaveBeenCalled();
+    });
+
     it('once the open proposal is closed a new link connects', async () => {
       await service.testDeepLink(link('A'));
       const proposal = sessionRequest(8101);
@@ -425,10 +492,9 @@ describe('v1 producers feed the review queue', () => {
     });
 
     it('a proposal queues behind a request head', async () => {
-      service.attachV1CallRequests(client as any, 'pair');
+      await service.testDeepLink(link('A'));
       client.emit('call_request', callRequest(1));
       await flush();
-      await service.testDeepLink(link('A'));
 
       client.emit('session_request', sessionRequest(8101));
       await flush();
@@ -438,12 +504,11 @@ describe('v1 producers feed the review queue', () => {
     });
 
     it('past the waiting limit the proposal is answered busy once', async () => {
-      service.attachV1CallRequests(client as any, 'pair');
+      await service.testDeepLink(link('A'));
       for (let id = 1; id <= 1 + MAX_WAITING; id++) {
         client.emit('call_request', callRequest(id));
         await flush();
       }
-      await service.testDeepLink(link('A'));
 
       client.emit('session_request', sessionRequest(8101));
       await flush();

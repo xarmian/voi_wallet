@@ -232,7 +232,8 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
     expect(nav.navigate).not.toHaveBeenCalled();
     expect(transport.rejectRequestV1).toHaveBeenCalledWith(
       51801,
-      'Request already handled.'
+      'Request already handled.',
+      'handshake-handled'
     );
   });
 
@@ -311,7 +312,8 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
       expect(transport.rejectRequestV1).toHaveBeenCalledTimes(1);
       expect(transport.rejectRequestV1).toHaveBeenCalledWith(
         53101,
-        'Wallet setup incomplete.'
+        'Wallet setup incomplete.',
+        'handshake-s2'
       );
       expect(queue.getSnapshot().head).toBeNull();
     });
@@ -325,7 +327,7 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
       expect(nav.dispatch).not.toHaveBeenCalled();
       expect(nav.navigate).not.toHaveBeenCalled();
       expect(transport.rejectProposalV1).toHaveBeenCalledTimes(1);
-      expect(coordinator.hasOpenV1Proposal()).toBe(false);
+      expect(coordinator.hasOpenV1Item()).toBe(false);
       expect(coordinator.isOpen(v1ProposalRefFor(sessionRequest))).toBe(false);
       expect(await service.testDeepLink(link('B'))).toBe(true);
       expect(Toast.show).not.toHaveBeenCalledWith({

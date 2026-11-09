@@ -27,6 +27,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 
 import { initializeServices } from '../serviceBootstrap';
 import { isAccountSubscribeTokenCurrent } from '@/services/notifications/subscribePass';
+import { settleLegacyQueue } from '@/services/walletconnect/legacyQueueMigration';
 
 // --- Mock leaves (all prefixed `mock` so jest can hoist them into factories) ---
 const mockWcService = {
@@ -367,5 +368,58 @@ describe('serviceBootstrap.initializeServices — deferred subscribe abort token
     const [, subscribeToken] =
       mockNotificationService.subscribeAllAccounts.mock.calls[0];
     expect(isAccountSubscribeTokenCurrent(subscribeToken!)).toBe(false);
+  });
+});
+
+describe('serviceBootstrap.initializeServices — legacy queue migration order', () => {
+  beforeEach(() => {
+    mockAppMode = 'user';
+    mockGetCurrentWallet.mockResolvedValue(null);
+    mockNotificationService.registerPushToken.mockResolvedValue(null);
+    mockWcService.initialize.mockImplementation(async () => {});
+  });
+
+  it('does not answer the legacy queue until WalletConnect initialize resolves', async () => {
+    let finishInit!: () => void;
+    mockWcService.initialize.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishInit = resolve;
+        })
+    );
+
+    const booting = initializeServices({
+      navigationRef: { current: null },
+      initializeNetwork: jest.fn(async () => {}),
+      cleanupRef: makeCleanupRef(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // initialize() is in flight, so no transport can send yet.
+    expect(mockWcService.initialize).toHaveBeenCalledTimes(1);
+    expect(settleLegacyQueue).not.toHaveBeenCalled();
+
+    finishInit();
+    await booting;
+
+    expect(settleLegacyQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the legacy queue for the next launch when initialize fails', async () => {
+    mockWcService.initialize.mockRejectedValueOnce(new Error('init failed'));
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+
+    await initializeServices({
+      navigationRef: { current: null },
+      initializeNetwork: jest.fn(async () => {}),
+      cleanupRef: makeCleanupRef(),
+    });
+
+    expect(mockWcService.initialize).toHaveBeenCalledTimes(1);
+    expect(settleLegacyQueue).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });

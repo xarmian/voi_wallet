@@ -147,14 +147,18 @@ export const initializeServices = async ({
         // While PIN setup is unfinished the dApp is answered at once and no
         // route, queue entry or review is created.
         RequestCoordinator.getInstance().setEntryGuard(setupIncompleteGuard);
-        // A signing queue persisted by an earlier build is answered as expired
-        // and cleared, never admitted or shown. After the transport is
-        // installed so the answers can be sent; not awaited, so startup does
-        // not wait on it.
-        void settleLegacyQueue(RequestCoordinator.getInstance());
         try {
           wcService = WalletConnectService.getInstance();
           await wcService.initialize();
+
+          // A signing queue persisted by an earlier build is answered as
+          // expired and cleared, never admitted or shown. Only after
+          // initialize() resolves: until then neither the v2 provider nor the
+          // v1 client can publish, the coordinator would keep the failed
+          // answer in memory only, and the migration clears its keys. If
+          // initialize() throws this is never reached, so the keys survive
+          // for the next launch. Not awaited, so startup does not wait on it.
+          void settleLegacyQueue(RequestCoordinator.getInstance());
 
           // Listen for WalletConnect session proposals. An admitted proposal
           // enters the review queue and the host draws it; no route is pushed.

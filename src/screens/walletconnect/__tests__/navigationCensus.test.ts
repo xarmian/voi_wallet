@@ -17,6 +17,7 @@ const DELIVERY_FUNCTIONS: Record<string, string[]> = {
   [deeplink]: [
     'onV1CallRequest',
     'handleWalletConnectV1Uri',
+    'showPairingError',
     'navigateToRoute',
     'handleKeyregUri',
     'handleApplUri',
@@ -182,10 +183,10 @@ const ALLOWLIST = new Map([
   ),
   allow(
     deeplink,
-    'handleWalletConnectV1Uri',
+    'showPairingError',
     'navigateToRoute',
     'this',
-    'Pairing errors open the error route without persisting the URI; a v1 proposal enters the queue and no route is pushed.'
+    'Pairing errors open the error route without persisting the URI, unless the review host is showing, where a toast is used because the pushed route would sit unseen under it; a v1 proposal enters the queue and no route is pushed.'
   ),
   ...[
     'handleKeyregUri',
