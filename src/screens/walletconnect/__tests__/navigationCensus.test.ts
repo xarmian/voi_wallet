@@ -13,7 +13,7 @@ const bootstrap = 'src/navigation/serviceBootstrap.ts';
 const deeplink = 'src/services/deeplink/index.ts';
 // WalletConnect request/proposal delivery and the scan-driven replace only.
 const DELIVERY_FUNCTIONS: Record<string, string[]> = {
-  [bootstrap]: ['onProposal', 'onRequest', 'showOrQueue'],
+  [bootstrap]: ['onProposal', 'onRequest'],
   [deeplink]: [
     'onV1CallRequest',
     'handleWalletConnectV1Uri',
@@ -178,43 +178,15 @@ const ALLOWLIST = new Map([
     bootstrap,
     'onProposal',
     'goBack',
-    'navigationRef.current',
-    'Synchronous guarded pop only when the current route is QRScanner and canGoBack().'
-  ),
-  allow(
-    bootstrap,
-    'onProposal',
-    'dispatch',
-    'navigationRef.current',
-    'Push a fresh proposal without overwriting a focused Connect.'
-  ),
-  allow(
-    bootstrap,
-    'onProposal',
-    'push',
-    'StackActions',
-    'Creates the proposal push action.'
-  ),
-  allow(
-    bootstrap,
-    'showOrQueue',
-    'navigate',
     'nav',
-    'Delivery queues when a request route is focused; otherwise opens its review route.'
-  ),
-  allow(
-    deeplink,
-    'onV1CallRequest',
-    'navigateToRoute',
-    'this',
-    'v1 request delivery queues when the request route is focused.'
+    'Synchronous guarded pop only when the current route is QRScanner and canGoBack(); the proposal itself enters the queue and no route is pushed.'
   ),
   allow(
     deeplink,
     'handleWalletConnectV1Uri',
     'navigateToRoute',
     'this',
-    'v1 proposal uses push; pairing errors open the error route without persisting the URI.'
+    'Pairing errors open the error route without persisting the URI; a v1 proposal enters the queue and no route is pushed.'
   ),
   ...[
     'handleKeyregUri',
@@ -334,8 +306,8 @@ const COUNTS: Record<string, number> = {
   [signingFile]: 7,
   [qr]: 3,
   'src/screens/walletconnect/SessionProposalScreen.tsx': 10,
-  [bootstrap]: 4,
-  [deeplink]: 12,
+  [bootstrap]: 1,
+  [deeplink]: 10,
   [sessions]: 3,
   [request]: 5,
   [error]: 4,

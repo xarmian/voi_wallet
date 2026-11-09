@@ -205,6 +205,23 @@ it('DEFECT single owner: no production queue feed, fixed value importers, one co
   });
 });
 
+it('DEFECT only the two producer files feed the queue, and each producer feeds it through feedQueue', () => {
+  const callers = walk('src')
+    .filter((file) => file !== feedPoint)
+    .filter((file) => /\bfeedQueue\(/.test(fs.readFileSync(file, 'utf8')))
+    .sort();
+  expect(callers).toEqual([
+    'src/navigation/serviceBootstrap.ts',
+    'src/services/deeplink/index.ts',
+  ]);
+  // v2 proposal and request in the boot, v1 request and proposal in the link
+  // service: four producers, four calls.
+  const count = (file: string) =>
+    (fs.readFileSync(file, 'utf8').match(/\bfeedQueue\(/g) ?? []).length;
+  expect(count('src/navigation/serviceBootstrap.ts')).toBe(2);
+  expect(count('src/services/deeplink/index.ts')).toBe(2);
+});
+
 it('DEFECT only AppNavigator imports the host and mounts it once with zero JSX attributes', () => {
   const files = walk('src');
   const rows = files.map((file) => ({

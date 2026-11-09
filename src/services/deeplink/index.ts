@@ -13,6 +13,11 @@ import {
 } from '@/services/walletconnect/utils';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
+import { feedQueue } from '@/services/walletconnect/feedQueue';
+import {
+  proposalArrival,
+  requestArrival,
+} from '@/services/walletconnect/arrivalItems';
 import {
   requestRefFor,
   v1ProposalRefFor,
@@ -33,10 +38,6 @@ import {
   validateKeyregUri,
   validateApplUri,
 } from '@/utils/arc0090Uri';
-import {
-  QueueFullError,
-  TransactionRequestQueue,
-} from '@/services/walletconnect/TransactionRequestQueue';
 import {
   notificationService,
   NotificationData,
@@ -288,116 +289,26 @@ export class DeepLinkService {
       },
     };
 
-    // A request already queued or shown is not surfaced again (TASK-257).
-    // Same claim lifecycle as the boot's session_request handler: the claim
-    // stays while the request is shown or queued, and a failed delivery
-    // releases it so a redelivery can surface.
-    if (
-      !TransactionRequestQueue.claim(
-        transformedRequest.id,
-        transformedRequest.topic
-      )
-    ) {
-      void RequestCoordinator.getInstance().retryUnpublished(
-        requestRefFor(transformedRequest, 1)
-      );
-      console.log('[DeepLinkService] Duplicate V1 request ignored');
-      return;
-    }
-
+    // An admitted request enters the review queue and the host draws it; no
+    // route is pushed. Duplicates are the coordinator's: admit suppresses an
+    // open ref and retries an unanswered closed one.
     const coordinator = RequestCoordinator.getInstance();
     const ref = requestRefFor(transformedRequest, 1);
     void (async () => {
       const admission = await coordinator.admit(ref);
-      if (admission.action !== 'show') {
-        TransactionRequestQueue.releaseClaim(
-          transformedRequest.id,
-          transformedRequest.topic
-        );
-        return;
-      }
-      await this.deliverSigningRequest(async () => {
-        let delivered = false;
-        try {
-          if (!this.navigationRef?.isReady()) {
-            console.error(
-              '[DeepLinkService] V1 transaction request not shown: navigation not ready'
-            );
-            return;
-          }
-          // Check if we're already on the TransactionRequestScreen
-          if (
-            this.navigationRef.getCurrentRoute()?.name ===
-            'WalletConnectTransactionRequest'
-          ) {
-            // Enqueue the request instead of navigating immediately; that
-            // screen takes it next. The claim stays: queued.
-            console.log(
-              '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
-            );
-            try {
-              await TransactionRequestQueue.enqueue({
-                id: transformedRequest.id,
-                topic: transformedRequest.topic,
-                params: transformedRequest.params,
-                version: 1,
-              });
-            } catch (error) {
-              if (!(error instanceof QueueFullError)) throw error;
-              // TASK-394: answer it as dropped (marks it displayed, so a
-              // redelivery is not shown) instead of releasing the claim.
-              TransactionRequestQueue.reportDropped(
-                [
-                  {
-                    id: transformedRequest.id,
-                    topic: transformedRequest.topic,
-                    params: transformedRequest.params,
-                    timestamp: Date.now(),
-                    version: 1,
-                  },
-                ],
-                'full'
-              );
-            }
-            delivered = true;
-            return;
-          }
-
-          // Navigate to transaction request screen if not already there
-          delivered = await this.navigateToRoute({
-            screen: 'WalletConnectTransactionRequest',
-            params: {
-              requestEvent: transformedRequest,
-              version: 1,
-            },
-          });
-          if (delivered) {
-            TransactionRequestQueue.markDisplayed(
-              transformedRequest.id,
-              transformedRequest.topic
-            );
-          }
-        } finally {
-          if (!delivered) {
-            // Not shown and not queued: let a redelivery of it through.
-            TransactionRequestQueue.releaseClaim(
-              transformedRequest.id,
-              transformedRequest.topic
-            );
-            coordinator.release(ref);
-          }
-        }
-      });
-    })().catch((error) => {
-      // The route queue never rejects; if it ever did, the handler above
-      // never ran, so the request was not delivered.
-      TransactionRequestQueue.releaseClaim(
-        transformedRequest.id,
-        transformedRequest.topic
+      if (admission.action !== 'show') return;
+      await feedQueue(
+        requestArrival({
+          ref,
+          requestEvent: transformedRequest,
+          firstSeenMs: admission.firstSeenMs,
+          sessions: () =>
+            WalletConnectService.getInstance().getActiveSessions(),
+        })
       );
-      coordinator.release(ref);
+    })().catch((error) => {
       console.error(
-        '[DeepLinkService] Failed to deliver V1 request:',
+        '[DeepLinkService] Failed to queue V1 request:',
         redactError(error)
       );
     });
@@ -801,18 +712,18 @@ export class DeepLinkService {
             const admission = await coordinator.admit(ref);
             if (admission.action !== 'show') return;
             try {
-              const delivered = await this.navigateToRoute(
-                {
-                  screen: 'WalletConnectSessionProposal',
-                  params: { version: 1, sessionRequest },
-                },
-                { push: true }
+              await feedQueue(
+                proposalArrival({
+                  ref,
+                  payload: sessionRequest,
+                  metadata: (sessionRequest as { peerMeta?: unknown })
+                    ?.peerMeta,
+                  firstSeenMs: admission.firstSeenMs,
+                })
               );
-              if (!delivered) coordinator.release(ref);
             } catch (error) {
-              coordinator.release(ref);
               console.error(
-                'Failed to deliver WalletConnect v1 proposal:',
+                'Failed to queue WalletConnect v1 proposal:',
                 redactError(error)
               );
             }
