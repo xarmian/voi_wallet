@@ -14,6 +14,7 @@ import {
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
 import { feedQueue } from '@/services/walletconnect/feedQueue';
+import { RequestQueue } from '@/services/walletconnect/requestQueue';
 import {
   proposalArrival,
   requestArrival,
@@ -447,9 +448,38 @@ export class DeepLinkService {
    * Handle navigation for a notification tap
    * This is called either immediately (if app is unlocked) or after unlock
    */
-  private async handleNotificationNavigation(
-    data: NotificationData
-  ): Promise<void> {
+  private handleNotificationNavigation(data: NotificationData): Promise<void> {
+    return this.whenReviewQueueIdle(() => this.navigateForNotification(data));
+  }
+
+  /**
+   * Run `run` once the WalletConnect review queue holds nothing: no head and
+   * no result card (a waiting request always has one of the two in front of
+   * it). A tap must not route the app under a review the person is in the
+   * middle of, so it goes after the last one is done. The wait does not block
+   * the route queue, so other links still run.
+   */
+  private whenReviewQueueIdle(run: () => Promise<void>): Promise<void> {
+    const queue = RequestQueue.getInstance();
+    const busy = () => {
+      const snapshot = queue.getSnapshot();
+      return Boolean(snapshot.head || snapshot.result);
+    };
+    if (!busy()) return run();
+    const unsubscribe = queue.subscribe(() => {
+      if (busy()) return;
+      unsubscribe();
+      run().catch((error) => {
+        console.error(
+          '[DeepLink] Notification navigation failed:',
+          redactError(error)
+        );
+      });
+    });
+    return Promise.resolve();
+  }
+
+  private async navigateForNotification(data: NotificationData): Promise<void> {
     console.log(
       'Processing notification navigation:',
       redactNotificationData(data)

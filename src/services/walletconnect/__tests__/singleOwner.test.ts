@@ -5,12 +5,16 @@ import ts from 'typescript';
 const queueModule = 'src/services/walletconnect/requestQueue.ts';
 const screen = 'src/screens/walletconnect/TransactionRequestScreen.tsx';
 // The production value importers: the host draws the queue, the lock screen
-// reads it, and feedQueue is the one point where an admitted arrival enters it.
+// and the link service read it (the link service only waits for it to empty
+// before a notification tap routes), and feedQueue is the one point where an
+// admitted arrival enters it.
 const lockScreen = 'src/screens/auth/LockScreen.tsx';
+const linkService = 'src/services/deeplink/index.ts';
 const feedPoint = 'src/services/walletconnect/feedQueue.ts';
 const queueImporters = [
   'src/components/wcHost/WalletConnectHost.tsx',
   lockScreen,
+  linkService,
   feedPoint,
 ];
 const hostImporter = 'src/navigation/AppNavigator.tsx';
@@ -268,4 +272,8 @@ it('REGRESSION host matcher counts actual JSX attributes including spread and al
 
 it('DEFECT LockScreen is a read-only queue subscriber with no queue mutations', () => {
   expect(inspect(fs.readFileSync(lockScreen, 'utf8')).mutations).toEqual([]);
+});
+
+it('DEFECT the link service reads the queue and never mutates it', () => {
+  expect(inspect(fs.readFileSync(linkService, 'utf8')).mutations).toEqual([]);
 });
