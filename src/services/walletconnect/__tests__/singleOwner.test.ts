@@ -4,11 +4,14 @@ import ts from 'typescript';
 
 const queueModule = 'src/services/walletconnect/requestQueue.ts';
 const screen = 'src/screens/walletconnect/TransactionRequestScreen.tsx';
-// Repository scan before extraction: no production value importers exist yet.
+// The production value importers: the host draws the queue, the lock screen
+// reads it, and feedQueue is the one point where an admitted arrival enters it.
 const lockScreen = 'src/screens/auth/LockScreen.tsx';
+const feedPoint = 'src/services/walletconnect/feedQueue.ts';
 const queueImporters = [
   'src/components/wcHost/WalletConnectHost.tsx',
   lockScreen,
+  feedPoint,
 ];
 const hostImporter = 'src/navigation/AppNavigator.tsx';
 const hostController = 'src/components/wcHost/headSession.ts';
