@@ -52,12 +52,6 @@ const mockNotificationService = {
   ),
   cleanup: jest.fn(),
 };
-const mockTxnQueue = {
-  enqueue: jest.fn(async () => {}),
-  setProcessing: jest.fn(async () => {}),
-  isEmpty: jest.fn(async () => true),
-  setDroppedRequestHandler: jest.fn(),
-};
 // Mutable app mode driven per test ('user' vs 'signer').
 let mockAppMode = 'user';
 
@@ -117,14 +111,8 @@ jest.mock('@/services/ledger/transport', () => ({
   },
 }));
 
-jest.mock('@/services/walletconnect/TransactionRequestQueue', () => ({
-  get TransactionRequestQueue() {
-    return mockTxnQueue;
-  },
-  QueueFullError: class QueueFullError extends Error {},
-}));
-jest.mock('@/services/walletconnect/droppedRequestResponder', () => ({
-  answerDroppedRequests: jest.fn(),
+jest.mock('@/services/walletconnect/legacyQueueMigration', () => ({
+  settleLegacyQueue: jest.fn(async () => {}),
 }));
 
 jest.mock('@/platform/detection', () => ({

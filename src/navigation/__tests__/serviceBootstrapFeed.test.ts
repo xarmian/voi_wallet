@@ -99,8 +99,8 @@ jest.mock('@/services/deeplink', () => ({
     return { getInstance: () => mockDeepLinkService };
   },
 }));
-jest.mock('@/services/walletconnect/droppedRequestResponder', () => ({
-  answerDroppedRequests: jest.fn(),
+jest.mock('@/services/walletconnect/legacyQueueMigration', () => ({
+  settleLegacyQueue: jest.fn(async () => {}),
 }));
 jest.mock('@/services/deeplink/extensionHandler', () => ({
   extensionDeepLinkHandler: { initialize: jest.fn(), cleanup: jest.fn() },

@@ -10,8 +10,6 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { initializeServices } from '../serviceBootstrap';
-import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
-import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestResponder';
 
 import { HandledStore } from '@/services/walletconnect/handledStore';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -113,11 +111,6 @@ jest.mock('@/services/deeplink', () => ({
   get DeepLinkService() {
     return { getInstance: () => mockDeepLinkService };
   },
-}));
-// The handler the boot installs on the queue (TASK-394); mocked at the queue
-// boundary, so no WalletConnect client is involved.
-jest.mock('@/services/walletconnect/droppedRequestResponder', () => ({
-  answerDroppedRequests: jest.fn(),
 }));
 jest.mock('@/services/deeplink/extensionHandler', () => ({
   extensionDeepLinkHandler: { initialize: jest.fn(), cleanup: jest.fn() },
@@ -224,19 +217,34 @@ beforeEach(async () => {
 afterEach(() => {
   coordinator.__resetForTests();
   queue.__resetForTests();
-  TransactionRequestQueue.setDroppedRequestHandler(null);
-  (answerDroppedRequests as jest.Mock).mockReset();
   jest.restoreAllMocks();
 });
 
-describe('a request the queue cannot take is answered, not dropped (TASK-394)', () => {
-  it('the boot installs the dropped-request handler', async () => {
-    const install = jest.spyOn(
-      TransactionRequestQueue,
-      'setDroppedRequestHandler'
+describe('a signing queue persisted by an earlier build', () => {
+  const QUEUE_KEY = '@walletconnect_transaction_queue';
+  const PROCESSING_KEY = '@walletconnect_queue_processing';
+
+  it('is answered as expired, cleared, and never shown', async () => {
+    mockReady = true;
+    const legacy = request(7001, 'legacy-topic');
+    await AsyncStorage.setItem(
+      QUEUE_KEY,
+      JSON.stringify([{ ...legacy, timestamp: Date.now() }])
     );
+    await AsyncStorage.setItem(PROCESSING_KEY, 'true');
     await boot();
-    expect(install).toHaveBeenCalledWith(answerDroppedRequests);
+    await flush();
+    await flush();
+    expect(mockTransport.rejectRequestV2).toHaveBeenCalledWith(
+      'legacy-topic',
+      7001,
+      { code: -32000, message: 'Request expired.' }
+    );
+    expect(await AsyncStorage.getItem(QUEUE_KEY)).toBeNull();
+    expect(await AsyncStorage.getItem(PROCESSING_KEY)).toBeNull();
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    expect(queue.getSnapshot().head).toBeNull();
+    expect(queue.getSnapshot().waiting).toEqual([]);
   });
 });
 
