@@ -37,6 +37,12 @@ jest.mock('@react-navigation/native', () => ({
   useFocusEffect: () => {},
 }));
 
+// The screen reads the tab bar height from bottom-tabs; the real module needs
+// the full navigation library, which is mocked above.
+jest.mock('@react-navigation/bottom-tabs', () => ({
+  BottomTabBarHeightContext: require('react').createContext(undefined),
+}));
+
 jest.mock('react-native-safe-area-context', () => {
   const { View } = require('react-native');
   return {
