@@ -66,6 +66,13 @@
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "ascAppId": "6752960399"
+      },
+      "android": {
+        "track": "internal"
+      }
+    }
   }
 }

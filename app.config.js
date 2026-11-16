@@ -174,7 +174,7 @@ export default {
       "supportsTablet": true,
       "jsEngine": "hermes",
       "bundleIdentifier": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
-      "buildNumber": "24",
+      "buildNumber": "25",
       "icon": "./assets/voi_wallet_logo.png",
       "splash": {
         "image": "./assets/voi_wallet_logo.png",
@@ -209,11 +209,26 @@ export default {
       "predictiveBackGestureEnabled": false,
       "package": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
       "googleServicesFile": IS_DEV ? "./google-services-dev.json" : "./google-services.json",
-      "versionCode": 24,
+      "versionCode": 25,
       "permissions": [
         "CAMERA",
         "USE_BIOMETRIC",
         "USE_FINGERPRINT"
+      ],
+      // Removed from the merged manifest. Play requires a declaration for the
+      // photo/video permissions; the app picks files via the system document
+      // picker / Storage Access Framework and only uses FLAG_SECURE screen
+      // protection, so it needs no media or storage access. RECORD_AUDIO comes
+      // from the auto-applied expo-camera plugin (QR scanning only) and
+      // SYSTEM_ALERT_WINDOW from Expo's default manifest template.
+      "blockedPermissions": [
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW"
       ],
       "intentFilters": [
         {
@@ -298,6 +313,15 @@ export default {
         }
       ],
       "expo-secure-store",
+      // Explicit so the auto-applied default doesn't request the microphone.
+      [
+        "expo-camera",
+        {
+          "recordAudioAndroid": false,
+          "microphonePermission": false,
+          "cameraPermission": "This app uses the camera to scan QR codes for wallet connections and transactions."
+        }
+      ],
       // Native scrypt KDF (HT-138 fix). react-native-quick-crypto ships an Expo
       // config plugin; it autolinks via Nitro. If `expo prebuild` errors on this
       // line, remove it — the Nitro module still autolinks without the plugin.
