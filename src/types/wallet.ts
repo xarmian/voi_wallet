@@ -43,8 +43,8 @@ export interface BackupMetadata {
    *   could only type it by holding it). A pasted or autofilled phrase, a QR
    *   scan, a private key, a restore-from-backup, and creation without the
    *   quiz (including the "Skip for now" escape) all leave it `false`. Import
-   *   flows that set it derive it with `backupVerifiedAtImport()`; import flows
-   *   that never verify simply omit it. After import, only passing the
+   *   flows that set it derive it with `backupVerifiedAtImport()`; flows that
+   *   never verify write `false` or omit it. After import, only passing the
    *   verification quiz (VerifyBackup) sets it true.
    * - Pre-existing accounts (persisted before this field existed) migrate to
    *   `false`; it is NOT derived from `hasBackup`, which means something else.
