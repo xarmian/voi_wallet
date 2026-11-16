@@ -173,9 +173,10 @@ export function isBackupVerified(
  * - 'quiz': the app generated the phrase and offered the verification quiz.
  * - 'entered-phrase': the user typed the 25-word phrase in on this device
  *   (one keystroke per change, including a typed space then the next word in
- *   one field; a suggestion-chip tap counts as typing). Known limit: a word
- *   pasted into ONE field at a time is indistinguishable from a keyboard
- *   suggestion and counts as typed.
+ *   one field; a suggestion-chip tap counts as typing). Known limit: any paste
+ *   that arrives as a single token with no whitespace (one word per field, or
+ *   a comma-joined phrase that typed spaces then split) is indistinguishable
+ *   from a keyboard suggestion and counts as typed.
  * - 'pasted': some change inserted more than one character at once and left a
  *   field holding several words (a clipboard paste or autofill); the phrase may
  *   only ever have lived in the clipboard.
@@ -368,8 +369,9 @@ export interface ImportAccountRequest {
    * phrase or (TASK-556) when the user typed THIS phrase in on this device. A
    * pasted or autofilled phrase, a QR scan, a private key, a restore, and
    * creation without the quiz all stay false. Flows that set it derive it with
-   * `backupVerifiedAtImport()`; flows that never verify simply omit it. Absent
-   * or false persists the account as un-backed-up (the safe default).
+   * `backupVerifiedAtImport()`; flows that never verify write false or omit
+   * it. Absent or false persists the account as un-backed-up (the safe
+   * default).
    */
   backupVerified?: boolean;
 }

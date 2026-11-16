@@ -86,8 +86,8 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
     // rehydrated param) persists the account as un-backed-up.
     backupVerified: backupVerifiedParam,
     // TASK-556, for 'mnemonic': only an explicit `true` (typed in on this
-    // device, no multi-word paste) counts; absent or any other value fails
-    // closed as a pasted phrase.
+    // device, no paste or autofill detected) counts; absent or any other
+    // value fails closed as a pasted phrase.
     phraseTyped: phraseTypedParam,
   } = route.params;
   const [accountLabel, setAccountLabel] = useState(initialAccountLabel ?? '');

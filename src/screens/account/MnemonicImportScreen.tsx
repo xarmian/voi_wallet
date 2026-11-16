@@ -49,9 +49,12 @@ interface Props {
 
 /**
  * TASK-556: true only when `next` is `previous` with exactly one character
- * inserted somewhere (one keystroke). A multi-character insertion, a replaced
- * selection, or a deletion returns false, so a change that also leaves the
- * field holding several words counts as a paste (fails closed).
+ * inserted somewhere (one keystroke). A multi-character insertion or a deletion
+ * returns false, and so does a replaced selection unless its result is exactly
+ * what one keystroke could have produced; a change that also leaves the field
+ * holding several words then counts as a paste (fails closed). A field's state
+ * holds at most one word, so one keystroke can add at most one letter or one
+ * split: it can never carry a pasted word.
  */
 function isSingleCharInsertion(previous: string, next: string): boolean {
   const prev = previous.toLowerCase();
@@ -90,9 +93,10 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
   // (leaving the screen, or a successful add-account import). A single
   // keystroke is typing even when it makes the field hold two words (a typed
   // space, then the next word's first letter), and a suggestion-chip tap
-  // inserts one word and counts as typing. Known limit: a word pasted into ONE
-  // field at a time is indistinguishable from a keyboard suggestion and counts
-  // as typed.
+  // inserts one word and counts as typing. Known limit: any paste that arrives
+  // as a single token with no whitespace (one word per field, or a phrase
+  // joined by commas that typed spaces then split) is indistinguishable from
+  // a keyboard suggestion and counts as typed.
   const phrasePastedRef = useRef(false);
 
   useFocusEffect(
@@ -312,7 +316,7 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
           source: 'mnemonic',
           accountLabel: normalizedLabel || undefined,
           // TASK-556: SecuritySetup counts the phrase as backed up only on a
-          // literal true (typed in, no multi-word paste in this entry).
+          // literal true (typed in; no paste or autofill detected).
           phraseTyped: !phrasePastedRef.current,
         });
       } else {

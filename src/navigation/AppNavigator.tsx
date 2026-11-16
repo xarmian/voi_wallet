@@ -223,7 +223,7 @@ export type RootStackParamList = {
     backupVerified?: boolean;
     /**
      * TASK-556 — for `source: 'mnemonic'`, whether MnemonicImportScreen saw the
-     * phrase typed in on this device (no multi-word paste or autofill into any
+     * phrase typed in on this device (no paste or autofill detected in any
      * field). Only a literal `true` imports the account as backed up; absent or
      * false fails closed (a pasted phrase). A BOOLEAN, not key material.
      */

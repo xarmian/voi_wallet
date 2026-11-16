@@ -298,7 +298,8 @@ export class MultiAccountWalletService {
         // phrase typed in on this device. A pasted or autofilled phrase, a QR
         // scan, a private key, a restore, and creation without the quiz all
         // stay false. Flows that set it derive it with
-        // `backupVerifiedAtImport()`; flows that never verify simply omit it.
+        // `backupVerifiedAtImport()`; flows that never verify write false or
+        // omit it.
         //
         // Additionally gated on a mnemonic actually having been supplied: a raw
         // private-key import never shows the user a phrase, so there is nothing

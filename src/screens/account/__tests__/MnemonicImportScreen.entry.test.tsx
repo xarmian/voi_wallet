@@ -11,8 +11,9 @@
  * unverified even if words are edited afterwards, until the screen's import
  * state is cleared (leaving the screen, or a successful import).
  *
- * Known limit: a word pasted into ONE field at a time is indistinguishable from
- * a keyboard suggestion and counts as typed.
+ * Known limit: any paste that arrives as a single token with no whitespace (one
+ * word per field, or a comma-joined phrase that typed spaces then split) is
+ * indistinguishable from a keyboard suggestion and counts as typed.
  *
  * The real BIP39 wordlist check runs here (unlike MnemonicImportScreen.test.tsx),
  * so the Import button only works once all 25 fields hold wordlist words. The
@@ -270,8 +271,11 @@ describe('MnemonicImportScreen — add-account entry method (TASK-556)', () => {
 
     // Field 1 holds word 1 plus a stray letter; the stray letter is replaced
     // by " " plus word 2's first letter. The text grows by only one character,
-    // but it is not one inserted keystroke, so it counts as a paste.
-    await fireEvent.changeText(field(screen, 0), `${WORDS[0]}q`);
+    // but it is not one inserted keystroke, so it counts as a paste. The stray
+    // letter must differ from word 2's first letter: if they matched, the
+    // change really would be one inserted space (the phrase is random per run).
+    const stray = WORDS[1][0] === 'q' ? 'z' : 'q';
+    await fireEvent.changeText(field(screen, 0), `${WORDS[0]}${stray}`);
     await fireEvent.changeText(field(screen, 0), `${WORDS[0]} ${WORDS[1][0]}`);
     expect(field(screen, 1).props.value).toBe(WORDS[1][0]);
     await typeWords(screen, 1, 25);
