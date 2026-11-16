@@ -81,10 +81,14 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
     accounts,
     source = 'create',
     accountLabel: initialAccountLabel,
-    // TASK-45 / DR-11 carrier #1. Only an explicit `true` counts; any other
-    // value (absent, undefined, or a stale/rehydrated param) persists the
-    // account as un-backed-up.
+    // TASK-45 / DR-11 carrier #1, for 'create': only an explicit `true` (quiz
+    // passed) counts; any other value (absent, undefined, or a stale or
+    // rehydrated param) persists the account as un-backed-up.
     backupVerified: backupVerifiedParam,
+    // TASK-556, for 'mnemonic': only an explicit `true` (typed in on this
+    // device, no multi-word paste) counts; absent or any other value fails
+    // closed as a pasted phrase.
+    phraseTyped: phraseTypedParam,
   } = route.params;
   const [accountLabel, setAccountLabel] = useState(initialAccountLabel ?? '');
   // Synchronous in-flight guard. `submitting` is state, so a second tap can land
@@ -289,16 +293,16 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
               type: AccountType.STANDARD,
               mnemonic,
               label: normalizedLabel || 'Main Account',
-              // TASK-45 / DR-11, amended by TASK-556: 'create' counts only
-              // when the verification quiz was passed; 'mnemonic' is the user
-              // typing in a phrase they hold, which counts as backed up. No
-              // other source reaches this branch; one that did would fail
-              // closed as a scanned ('qr') secret.
+              // TASK-45 / DR-11, amended by TASK-556. isPhraseSource admits
+              // only 'create' and 'mnemonic'. 'create' counts only when the
+              // verification quiz was passed; 'mnemonic' counts only when
+              // MnemonicImport reports the phrase typed in, and otherwise is a
+              // pasted phrase.
               backupVerified:
                 source === 'create'
                   ? backupVerifiedAtImport('quiz', backupVerifiedParam)
                   : backupVerifiedAtImport(
-                      source === 'mnemonic' ? 'entered-phrase' : 'qr'
+                      phraseTypedParam === true ? 'entered-phrase' : 'pasted'
                     ),
             });
           imported = true;

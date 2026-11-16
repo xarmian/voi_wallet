@@ -67,6 +67,13 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
 
   const inputRefs = useRef<(TextInputInstance | null)[]>(Array(25).fill(null));
   const scrollViewRef = useRef<any>(null);
+  // TASK-556: set once any field receives more than one word in a single
+  // change: a clipboard paste, or keyboard / password-manager autofill, which
+  // arrives the same way. A pasted phrase may only ever have lived in the
+  // clipboard, so the entry imports as NOT backed up. Later edits never clear
+  // it; only clearing all 25 words (a fresh entry) does. A suggestion-chip tap
+  // inserts one word and counts as typing.
+  const phrasePastedRef = useRef(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -139,6 +146,7 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
 
   const clearImportState = useCallback(() => {
     setWords(Array(25).fill(''));
+    phrasePastedRef.current = false;
     setSuggestions([]);
     setShowSuggestions(false);
     setCurrentWordIndex(-1);
@@ -151,7 +159,8 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
       const pastedWords = trimmedText.split(/\s+/).filter((w) => w.length > 0);
 
       if (pastedWords.length > 1) {
-        // Multi-word paste: insert starting from current position
+        // Multi-word paste or autofill: insert starting from current position
+        phrasePastedRef.current = true;
         const newWords = [...words];
 
         // Insert pasted words starting at current index
@@ -277,14 +286,19 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
           mnemonicSecretId,
           source: 'mnemonic',
           accountLabel: normalizedLabel || undefined,
+          // TASK-556: SecuritySetup counts the phrase as backed up only on a
+          // literal true (typed in, no multi-word paste in this entry).
+          phraseTyped: !phrasePastedRef.current,
         });
       } else {
-        // For adding additional accounts, import directly. TASK-556: the user
-        // typed this phrase in, so the account counts as backed up.
+        // For adding additional accounts, import directly. TASK-556: a phrase
+        // the user typed in counts as backed up; a pasted one does not.
         await importAccount({
           type: AccountType.STANDARD,
           mnemonic,
-          backupVerified: backupVerifiedAtImport('entered-phrase'),
+          backupVerified: backupVerifiedAtImport(
+            phrasePastedRef.current ? 'pasted' : 'entered-phrase'
+          ),
           label:
             normalizedLabel ||
             `Imported Account ${new Date().toLocaleDateString()}`,

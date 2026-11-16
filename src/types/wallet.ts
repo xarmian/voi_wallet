@@ -39,12 +39,12 @@ export interface BackupMetadata {
    * TASK-45 / DR-10 / DR-11, amended by TASK-556 — whether the user has
    * demonstrably shown they hold this account's recovery phrase.
    *
-   * - `true` on quiz success OR when the user typed the phrase in (an
-   *   entered-phrase import: they could only do that by holding it). Plain
-   *   creation without the quiz, QR import, private-key import,
-   *   restore-from-backup, and the "Skip for now" escape all leave it `false`.
-   *   `backupVerifiedAtImport()` is the single place that decides this at
-   *   import time.
+   * - `true` on quiz success or for a phrase typed in on this device (they
+   *   could only type it by holding it). A pasted or autofilled phrase, a QR
+   *   scan, a private key, a restore-from-backup, and creation without the
+   *   quiz (including the "Skip for now" escape) all leave it `false`. Flows
+   *   that set it derive it with `backupVerifiedAtImport()`; flows that never
+   *   verify simply omit it.
    * - Pre-existing accounts (persisted before this field existed) migrate to
    *   `false`; it is NOT derived from `hasBackup`, which means something else.
    * - Deliberately EXCLUDED from the encrypted backup format: verification is a
@@ -170,20 +170,25 @@ export function isBackupVerified(
 /**
  * How an account's phrase reached this device at import time (TASK-556).
  * - 'quiz': the app generated the phrase and offered the verification quiz.
- * - 'entered-phrase': the user typed the 25-word phrase in.
+ * - 'entered-phrase': the user typed the 25-word phrase in on this device
+ *   (one word per change; a suggestion-chip tap counts as typing).
+ * - 'pasted': some field received several words in one change (a clipboard
+ *   paste or autofill); the phrase may only ever have lived in the clipboard.
  * - 'qr': a scanned secret (phrase or key); the user never typed it.
  * - 'private-key': a raw key; the user never saw a phrase.
  * - 'restore': restored from an encrypted backup.
  */
 export type ImportVerificationSource =
-  'quiz' | 'entered-phrase' | 'qr' | 'private-key' | 'restore';
+  'quiz' | 'entered-phrase' | 'pasted' | 'qr' | 'private-key' | 'restore';
 
 /**
- * TASK-556: the single import-time decision for `backupVerified`. A generated
- * phrase counts only once the quiz is passed (literal `true`); a phrase the
- * user typed in counts because they hold it; everything else stays false. The
- * switch is exhaustive: a new source fails to compile instead of defaulting.
- * The service still refuses verification when no mnemonic was supplied.
+ * TASK-556: the single import-time decision for `backupVerified`, used by
+ * every flow that sets it. A generated phrase counts only once the quiz is
+ * passed (literal `true`); a phrase typed in on this device counts because the
+ * user holds it; everything else, a pasted phrase included, stays false. The
+ * switch is exhaustive: a new source fails to compile, and an unknown value at
+ * runtime returns false. The service still refuses verification when no
+ * mnemonic was supplied.
  */
 export function backupVerifiedAtImport(
   source: ImportVerificationSource,
@@ -194,13 +199,15 @@ export function backupVerifiedAtImport(
       return quizPassed === true;
     case 'entered-phrase':
       return true;
+    case 'pasted':
     case 'qr':
     case 'private-key':
     case 'restore':
       return false;
     default: {
       const unhandled: never = source;
-      return unhandled;
+      void unhandled;
+      return false;
     }
   }
 }
@@ -350,11 +357,12 @@ export interface ImportAccountRequest {
   color?: string;
   /**
    * TASK-45 / DR-11 — carrier for the add-account flow, which imports directly
-   * instead of routing through SecuritySetup. Set true ONLY when the caller
-   * observed the user complete the verification quiz for THIS phrase, or (since
-   * TASK-556) when the user typed THIS phrase in; derive it with
-   * `backupVerifiedAtImport()`. Absent or false persists the account as
-   * un-backed-up (the safe default).
+   * instead of routing through SecuritySetup. True on quiz success for THIS
+   * phrase or (TASK-556) when the user typed THIS phrase in on this device. A
+   * pasted or autofilled phrase, a QR scan, a private key, a restore, and
+   * creation without the quiz all stay false. Flows that set it derive it with
+   * `backupVerifiedAtImport()`; flows that never verify simply omit it. Absent
+   * or false persists the account as un-backed-up (the safe default).
    */
   backupVerified?: boolean;
 }

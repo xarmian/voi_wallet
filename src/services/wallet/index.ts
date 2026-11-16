@@ -294,10 +294,11 @@ export class MultiAccountWalletService {
         // that a mnemonic was supplied. It is NOT a verification signal.
         hasBackup: !!request.mnemonic,
         // TASK-45/DR-11: the ONE place a caller may assert verification, and only
-        // via an explicit literal `true` from a flow that watched the user pass
-        // the quiz or (TASK-556) type the phrase in; callers derive it with
-        // `backupVerifiedAtImport()`. Every other import (QR, plain creation
-        // without the quiz) omits it and persists as un-backed-up.
+        // via an explicit literal `true`: on quiz success or (TASK-556) for a
+        // phrase typed in on this device. A pasted or autofilled phrase, a QR
+        // scan, a private key, a restore, and creation without the quiz all
+        // stay false. Flows that set it derive it with
+        // `backupVerifiedAtImport()`; flows that never verify simply omit it.
         //
         // Additionally gated on a mnemonic actually having been supplied: a raw
         // private-key import never shows the user a phrase, so there is nothing

@@ -633,10 +633,23 @@ describe('SecuritySetupScreen — QR secret ownership (TASK-422)', () => {
 });
 
 // TASK-556: an account imported from a typed phrase counts as backed up; a
-// generated one only after the quiz; QR-scanned secrets never.
+// pasted one does not (MnemonicImport reports which via `phraseTyped`, and only
+// a literal true counts); a generated one only after the quiz.
 describe('SecuritySetupScreen — import-time backupVerified (TASK-556)', () => {
   it.each([
-    ['mnemonic (typed phrase)', true, { source: 'mnemonic' }],
+    ['mnemonic, typed', true, { source: 'mnemonic', phraseTyped: true }],
+    ['mnemonic, pasted', false, { source: 'mnemonic', phraseTyped: false }],
+    ['mnemonic, phraseTyped absent', false, { source: 'mnemonic' }],
+    [
+      'mnemonic, phraseTyped non-boolean',
+      false,
+      { source: 'mnemonic', phraseTyped: 'true' },
+    ],
+    [
+      'mnemonic, pasted, stale backupVerified param',
+      false,
+      { source: 'mnemonic', phraseTyped: false, backupVerified: true },
+    ],
     ['create, quiz passed', true, { source: 'create', backupVerified: true }],
     [
       'create, quiz skipped',
@@ -661,11 +674,14 @@ describe('SecuritySetupScreen — import-time backupVerified (TASK-556)', () => 
     await screen.unmount();
   });
 
-  it('a QR-scanned phrase never imports as verified', async () => {
+  // The QR loop builds its own request: it must not forward the route's
+  // verification params, so a scanned phrase is never imported as verified.
+  it('the QR import loop forwards neither backupVerified nor phraseTyped', async () => {
     const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
     const { navigation, screen } = await renderScreen({
       source: 'qr',
       backupVerified: true,
+      phraseTyped: true,
       accounts: [
         {
           id: 'qr-standard',
@@ -683,7 +699,7 @@ describe('SecuritySetupScreen — import-time backupVerified (TASK-556)', () => 
     expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
     const request = mockImportStandardAccount.mock.calls[0][0];
     expect(request.mnemonic).toBe(FAKE_MNEMONIC);
-    expect(request.backupVerified).not.toBe(true);
+    expect(request).not.toHaveProperty('backupVerified');
     expect(navigation.navigate).toHaveBeenCalledWith('Main');
     await screen.unmount();
   });
