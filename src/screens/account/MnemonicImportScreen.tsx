@@ -197,8 +197,11 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
 
   /**
    * How much of the scroll view's bottom the keyboard covers, for a keyboard
-   * height as reported by the keyboard events. The scroll view reaches the
-   * screen's bottom edge, or the tab bar's top when the screen is in a tab.
+   * height as reported by the keyboard events: the distance from the scroll
+   * view's bottom (also the bottom of the View holding the suggestions bar)
+   * up to the keyboard's top edge. The suggestions bar sits at this offset,
+   * and the reveal keeps this band plus the bar clear. The scroll view
+   * reaches the screen's bottom edge, or the tab bar's top in a tab.
    * Android reports the height without the navigation-bar inset (React Native
    * subtracts the system bars), while the edge-to-edge window still extends
    * under that bar, so it is added back there; iOS reports the full height.
@@ -1000,7 +1003,9 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
                   position: 'absolute',
                   left: 0,
                   right: 0,
-                  bottom: Math.max(keyboardHeight - insets.bottom, 0),
+                  // On the keyboard's top edge: the same band the reveal
+                  // and the spacer keep clear (TASK-554).
+                  bottom: keyboardBand(keyboardHeight),
                   zIndex: 1000,
                   elevation: 10,
                 },
@@ -1121,7 +1126,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 3,
     elevation: 5,
-    marginBottom: Platform.OS === 'android' ? -26 : -50,
   },
   suggestionsList: {
     paddingHorizontal: 12,

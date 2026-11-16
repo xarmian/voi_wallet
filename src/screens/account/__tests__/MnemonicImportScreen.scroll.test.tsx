@@ -15,7 +15,13 @@
  */
 
 import React from 'react';
-import { Alert, DeviceEventEmitter, Platform } from 'react-native';
+import {
+  Alert,
+  DeviceEventEmitter,
+  Platform,
+  StyleSheet,
+  type ViewStyle,
+} from 'react-native';
 import { render, fireEvent, act } from '@testing-library/react-native';
 import { computeRevealOffset } from '@/utils/scrollReveal';
 
@@ -94,6 +100,7 @@ jest.mock('react-native-keyboard-aware-scroll-view', () => {
   return { KeyboardAwareScrollView };
 });
 
+import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import MnemonicImportScreen from '../MnemonicImportScreen';
 
 type Screen = Awaited<ReturnType<typeof render>>;
@@ -114,8 +121,9 @@ const layoutEvent = (y: number, height: number) => ({
   nativeEvent: { layout: { x: 0, y, width: 390, height } },
 });
 
-async function renderLaidOut(): Promise<Screen> {
-  const screen = await render(
+/** Renders and lays out the screen; `tabBarHeight` hosts it in a tab. */
+async function renderLaidOut(tabBarHeight?: number): Promise<Screen> {
+  const element = (
     <MnemonicImportScreen
       navigation={
         {
@@ -127,8 +135,17 @@ async function renderLaidOut(): Promise<Screen> {
           getState: jest.fn(() => ({ type: 'stack', routes: [] })),
         } as never
       }
-      route={{ params: { isOnboarding: true } } as never}
+      route={{ params: { isOnboarding: tabBarHeight === undefined } } as never}
     />
+  );
+  const screen = await render(
+    tabBarHeight === undefined ? (
+      element
+    ) : (
+      <BottomTabBarHeightContext.Provider value={tabBarHeight}>
+        {element}
+      </BottomTabBarHeightContext.Provider>
+    )
   );
   await fireEvent(
     screen.getByTestId('mnemonic-word-scroll'),
@@ -425,6 +442,118 @@ describe.each(['ios', 'android'] as const)(
         obscuredBottom: keyboardBand(300),
         margin: REVEAL_MARGIN,
       });
+      expect(mockScrollToPosition).toHaveBeenCalledTimes(1);
+      expect(mockScrollToPosition).toHaveBeenCalledWith(0, offset, true);
+    });
+  }
+);
+
+/*
+ * The suggestions bar and the reveal share one band: the bar sits exactly on
+ * the keyboard's top edge, and the reveal keeps that band plus the bar clear.
+ * Every expectation below is a literal worked out by hand from the fixture
+ * (600-high viewport, row r at 20 + 68r, 56-high fields, 56-high bar before
+ * its first layout, 12 margin, a 300-high keyboard, a 24 bottom inset), not
+ * from computeRevealOffset or the screen's band formula.
+ */
+const GEOMETRY_CASES = [
+  {
+    // iOS reports the full keyboard height; with no tab bar the scroll view
+    // reaches the screen's bottom: band = 300. Covered = 300 + 56 = 356, so
+    // 600 - 356 = 244 is visible. Field index 4 (156..212) is visible; index
+    // 6 (224..280) is not: offset = 280 + 12 - 244 = 48.
+    os: 'ios',
+    tabBarHeight: undefined,
+    band: 300,
+    visibleField: 4,
+    hiddenField: 6,
+    offset: 48,
+  },
+  {
+    // iOS in a tab: the 83 tab bar is under the keyboard: band = 300 - 83 =
+    // 217. Covered = 217 + 56 = 273, visible 327. Index 6 (224..280) is
+    // visible; index 8 (292..348) is not: offset = 348 + 12 - 327 = 33.
+    os: 'ios',
+    tabBarHeight: 83,
+    band: 217,
+    visibleField: 6,
+    hiddenField: 8,
+    offset: 33,
+  },
+  {
+    // Android leaves the 24 navigation-bar inset out of the keyboard height:
+    // band = 300 + 24 = 324. Covered = 324 + 56 = 380, visible 220. Index 4
+    // (156..212) is visible; index 6 (224..280) is not: offset = 280 + 12 -
+    // 220 = 72.
+    os: 'android',
+    tabBarHeight: undefined,
+    band: 324,
+    visibleField: 4,
+    hiddenField: 6,
+    offset: 72,
+  },
+  {
+    // Android in a tab: band = 300 + 24 - 83 = 241. Covered = 241 + 56 = 297,
+    // visible 303. Index 6 (224..280) is visible; index 8 (292..348) is not:
+    // offset = 348 + 12 - 303 = 57.
+    os: 'android',
+    tabBarHeight: 83,
+    band: 241,
+    visibleField: 6,
+    hiddenField: 8,
+    offset: 57,
+  },
+] as const;
+
+describe.each(GEOMETRY_CASES)(
+  'MnemonicImportScreen suggestions bar and reveal share one band on $os, tab bar $tabBarHeight (TASK-554)',
+  ({ os, tabBarHeight, band, visibleField, hiddenField, offset }) => {
+    const originalOS = Platform.OS;
+
+    async function showKeyboard(height: number) {
+      await act(async () => {
+        DeviceEventEmitter.emit(
+          os === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+          { endCoordinates: { height, screenY: 844 - height, screenX: 0 } }
+        );
+      });
+    }
+
+    beforeEach(() => {
+      Platform.OS = os;
+      jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      Platform.OS = originalOS;
+      jest.restoreAllMocks();
+      jest.clearAllMocks();
+    });
+
+    it(`the suggestions bar sits on the keyboard's top edge: ${band} above the scroll view's bottom`, async () => {
+      const screen = await renderLaidOut(tabBarHeight);
+      await showKeyboard(300);
+      await focusField(screen, visibleField);
+      await fireEvent.changeText(field(screen, visibleField), 'ab');
+
+      const style = StyleSheet.flatten(
+        screen.getByTestId('mnemonic-word-suggestions').props.style
+      ) as ViewStyle;
+      expect(style.position).toBe('absolute');
+      expect(style.bottom).toBe(band);
+      // A bottom margin on an absolute box shifts it too: none is allowed.
+      expect(style.marginBottom ?? 0).toBe(0);
+    });
+
+    it(`the reveal keeps the band plus the bar clear: no scroll for a visible field, ${offset} for a hidden one`, async () => {
+      const screen = await renderLaidOut(tabBarHeight);
+      await showKeyboard(300);
+
+      await focusField(screen, visibleField);
+      await blurField(screen, visibleField);
+      expect(mockScrollToPosition).not.toHaveBeenCalled();
+
+      await focusField(screen, hiddenField);
       expect(mockScrollToPosition).toHaveBeenCalledTimes(1);
       expect(mockScrollToPosition).toHaveBeenCalledWith(0, offset, true);
     });
