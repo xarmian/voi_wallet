@@ -10,6 +10,7 @@
  */
 
 import React from 'react';
+import { Alert } from 'react-native';
 import { render, fireEvent } from '@testing-library/react-native';
 
 const MOCK_FAKE_WORDS = Array(25).fill('fake');
@@ -33,7 +34,7 @@ jest.mock('@/store/walletStore', () => ({
 }));
 
 jest.mock('@react-navigation/native', () => ({
-  CommonActions: { reset: jest.fn() },
+  CommonActions: { reset: jest.fn(), navigate: jest.fn() },
   useFocusEffect: () => {},
 }));
 
@@ -124,5 +125,43 @@ describe('MnemonicImportScreen — onboarding hand-off (TASK-224)', () => {
     const second = navigation.navigate.mock.calls[1][1].mnemonicSecretId;
     expect(first).not.toBe(second);
     expect(getAccountSecret(second)?.mnemonic).toBe(MOCK_FAKE_MNEMONIC);
+  });
+});
+
+// TASK-556: the add-account path imports directly (no SecuritySetup). A phrase
+// the user typed in counts as backed up.
+describe('MnemonicImportScreen — add-account import (TASK-556)', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('imports the typed phrase with backupVerified true', async () => {
+    jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    mockImportAccount.mockResolvedValue(undefined);
+    const navigation = {
+      ...makeNavigation(),
+      canGoBack: () => true,
+      getParent: () => undefined,
+    };
+    const screen = await render(
+      <MnemonicImportScreen
+        navigation={navigation as never}
+        route={{ params: undefined } as never}
+      />
+    );
+
+    await fireEvent.press(screen.getByText('Import'));
+
+    expect(mockImportAccount).toHaveBeenCalledTimes(1);
+    expect(mockImportAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'standard',
+        mnemonic: MOCK_FAKE_MNEMONIC,
+        backupVerified: true,
+      })
+    );
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Success',
+      'Account imported successfully!'
+    );
   });
 });

@@ -295,8 +295,9 @@ export class MultiAccountWalletService {
         hasBackup: !!request.mnemonic,
         // TASK-45/DR-11: the ONE place a caller may assert verification, and only
         // via an explicit literal `true` from a flow that watched the user pass
-        // the quiz. Every other import (QR, plain mnemonic import) omits it and
-        // persists as un-backed-up.
+        // the quiz or (TASK-556) type the phrase in; callers derive it with
+        // `backupVerifiedAtImport()`. Every other import (QR, plain creation
+        // without the quiz) omits it and persists as un-backed-up.
         //
         // Additionally gated on a mnemonic actually having been supplied: a raw
         // private-key import never shows the user a phrase, so there is nothing

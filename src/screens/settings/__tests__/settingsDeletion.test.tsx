@@ -146,6 +146,49 @@ it.each([undefined, false, 'true', true])(
   }
 );
 
+// TASK-556: an entered-phrase import is now backupVerified true. Deleting such
+// a key-holding account must still warn, offer the phrase, and require the
+// typed confirm; only the "haven't confirmed" sentence is dropped.
+it.each([
+  [true, ''],
+  [false, " You haven't confirmed a backup of this phrase yet."],
+])(
+  'a backupVerified %s key-holding account keeps the full delete guard',
+  async (backupVerified, suffix) => {
+    mockActive = account({
+      type: AccountType.STANDARD,
+      label: 'Alice',
+      backupVerified,
+    });
+    mockAccounts = [mockActive];
+    const { view, alert } = await open();
+    expect(alert).toHaveBeenCalledTimes(1);
+    const [title, body, buttons] = alert.mock.calls[0];
+    expect(title).toBe('Back up your recovery phrase first');
+    expect(body).toBe(
+      "Deleting Alice removes its private key from this device. Without its 25-word recovery phrase, you'll permanently lose access to this account." +
+        suffix
+    );
+    expect(buttons?.map((b) => b.text)).toEqual([
+      'Cancel',
+      'Show recovery phrase',
+      'I have my phrase',
+    ]);
+    expect(view.queryByTestId('delete-account-modal')).toBeNull();
+    await pressAlert(alert, 'I have my phrase');
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(view.getByTestId('delete-account-modal')).toBeTruthy();
+    expect(view.getByLabelText('Delete account')).toBeDisabled();
+    await typeDelete(view);
+    await fireEvent.press(view.getByLabelText('Delete account'));
+    expect(mockDelete).toHaveBeenCalledWith('original', {
+      address: 'ORIGINAL_ADDRESS',
+      type: AccountType.STANDARD,
+      keyless: false,
+    });
+  }
+);
+
 it('offers the existing phrase handler with the pinned address', async () => {
   const { view, alert } = await open();
   mockActive = account({ id: 'other', address: 'OTHER' });

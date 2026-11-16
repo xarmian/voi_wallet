@@ -632,6 +632,63 @@ describe('SecuritySetupScreen — QR secret ownership (TASK-422)', () => {
   );
 });
 
+// TASK-556: an account imported from a typed phrase counts as backed up; a
+// generated one only after the quiz; QR-scanned secrets never.
+describe('SecuritySetupScreen — import-time backupVerified (TASK-556)', () => {
+  it.each([
+    ['mnemonic (typed phrase)', true, { source: 'mnemonic' }],
+    ['create, quiz passed', true, { source: 'create', backupVerified: true }],
+    [
+      'create, quiz skipped',
+      false,
+      { source: 'create', backupVerified: false },
+    ],
+    ['create, no quiz result', false, { source: 'create' }],
+  ] as const)('%s imports with backupVerified %s', async (_n, want, params) => {
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      mnemonicSecretId: id,
+      ...params,
+    });
+
+    await submitPin(screen);
+
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+    expect(mockImportStandardAccount.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ mnemonic: FAKE_MNEMONIC, backupVerified: want })
+    );
+    expect(navigation.navigate).toHaveBeenCalledWith('Main');
+    await screen.unmount();
+  });
+
+  it('a QR-scanned phrase never imports as verified', async () => {
+    const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      source: 'qr',
+      backupVerified: true,
+      accounts: [
+        {
+          id: 'qr-standard',
+          type: 'standard',
+          address: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ',
+          name: 'QR account',
+          secretId,
+          isValid: true,
+        },
+      ],
+    });
+
+    await submitPin(screen);
+
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+    const request = mockImportStandardAccount.mock.calls[0][0];
+    expect(request.mnemonic).toBe(FAKE_MNEMONIC);
+    expect(request.backupVerified).not.toBe(true);
+    expect(navigation.navigate).toHaveBeenCalledWith('Main');
+    await screen.unmount();
+  });
+});
+
 describe('SecuritySetupScreen — orphan PIN healing (TASK-413)', () => {
   it.each(['create', 'mnemonic', 'qr', 'watch', 'restore', 'ledger'])(
     'clears an orphan before first-secret setup for %s',

@@ -23,7 +23,7 @@ import {
 } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '@/navigation/AppNavigator';
-import { AccountType } from '@/types/wallet';
+import { AccountType, backupVerifiedAtImport } from '@/types/wallet';
 import { useWalletStore } from '@/store/walletStore';
 import { BIP39Utils, WordSuggestion } from '@/utils/bip39';
 import { storeMnemonicSecret } from '@/utils/accountQRParser';
@@ -279,10 +279,12 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
           accountLabel: normalizedLabel || undefined,
         });
       } else {
-        // For adding additional accounts, import directly
+        // For adding additional accounts, import directly. TASK-556: the user
+        // typed this phrase in, so the account counts as backed up.
         await importAccount({
           type: AccountType.STANDARD,
           mnemonic,
+          backupVerified: backupVerifiedAtImport('entered-phrase'),
           label:
             normalizedLabel ||
             `Imported Account ${new Date().toLocaleDateString()}`,

@@ -18,6 +18,7 @@ import {
   AccountType,
   ImportAccountRequest,
   AddWatchAccountRequest,
+  backupVerifiedAtImport,
 } from '@/types/wallet';
 import { getAccountSecret, clearAccountSecret } from '@/utils/accountQRParser';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -288,11 +289,17 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
               type: AccountType.STANDARD,
               mnemonic,
               label: normalizedLabel || 'Main Account',
-              // Only the 'create' flow runs the verification quiz; a plain
-              // mnemonic import is someone typing in a phrase they already hold
-              // elsewhere, which is not a confirmation performed on this device.
+              // TASK-45 / DR-11, amended by TASK-556: 'create' counts only
+              // when the verification quiz was passed; 'mnemonic' is the user
+              // typing in a phrase they hold, which counts as backed up. No
+              // other source reaches this branch; one that did would fail
+              // closed as a scanned ('qr') secret.
               backupVerified:
-                source === 'create' && backupVerifiedParam === true,
+                source === 'create'
+                  ? backupVerifiedAtImport('quiz', backupVerifiedParam)
+                  : backupVerifiedAtImport(
+                      source === 'mnemonic' ? 'entered-phrase' : 'qr'
+                    ),
             });
           imported = true;
           console.log('Successfully created account:', importedAccount.address);
