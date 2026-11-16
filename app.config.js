@@ -197,13 +197,7 @@ export default {
         "NSCameraUsageDescription": "This app uses the camera to scan QR codes for wallet connections and transactions.",
         "NSFaceIDUsageDescription": "This app uses Face ID for secure wallet authentication.",
         "NSBluetoothAlwaysUsageDescription": "This app uses Bluetooth to connect to Ledger devices.",
-        "UIBackgroundModes": ["remote-notification"],
-        // The status bar style is set from JS to follow the app's own theme
-        // (App.tsx). Expo's prebuild template sets this key to true from
-        // expo 58.0.24, which hands the style to the native-stack screen and
-        // makes it follow the system appearance instead. Keep it false until
-        // each navigator sets statusBarStyle from the theme.
-        "UIViewControllerBasedStatusBarAppearance": false
+        "UIBackgroundModes": ["remote-notification"]
       }
     },
     "android": {
