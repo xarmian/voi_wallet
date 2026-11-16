@@ -1,3 +1,4 @@
+import { useWalletStore } from '@/store/walletStore';
 import React, { useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Alert, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -368,6 +369,7 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       }
 
       setSetupStep('Finalizing...');
+      await useWalletStore.getState().refresh();
       committedSecretRef.current = null;
       // Done: drop the in-flight guard before leaving so beforeRemove can't
       // block this navigation.
