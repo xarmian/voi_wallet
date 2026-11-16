@@ -2,15 +2,21 @@
  * TASK-556 — how the 25 words reached MnemonicImportScreen decides whether the
  * imported account counts as backed up.
  *
- * Typed word by word (a suggestion-chip tap counts as typing): the user holds
- * the phrase, so the account imports verified. Any insertion of more than one
- * word into a field (a clipboard paste, or keyboard / password-manager autofill,
- * which arrives through the same onChangeText path) marks the entry pasted for
- * good: it imports unverified even if words are edited afterwards. Clearing the
- * words starts a fresh entry.
+ * Typed keystroke by keystroke (a suggestion-chip tap counts as typing, and so
+ * does a typed space followed by the next word inside one field): the user
+ * holds the phrase, so the account imports verified. A change that inserts more
+ * than one character at once and leaves the field holding several words (a
+ * clipboard paste, or keyboard / password-manager autofill, which arrives
+ * through the same onChangeText path) marks the entry pasted: it imports
+ * unverified even if words are edited afterwards, until the screen's import
+ * state is cleared (leaving the screen, or a successful import).
  *
- * Real BIP39 validation runs here (unlike MnemonicImportScreen.test.tsx), so
- * the Import button only works once all 25 fields hold valid words.
+ * Known limit: a word pasted into ONE field at a time is indistinguishable from
+ * a keyboard suggestion and counts as typed.
+ *
+ * The real BIP39 wordlist check runs here (unlike MnemonicImportScreen.test.tsx),
+ * so the Import button only works once all 25 fields hold wordlist words. The
+ * screen checks the wordlist only, not the phrase checksum.
  *
  * SECURITY NOTE: the phrase is a throwaway account generated at runtime; it is
  * never persisted and the wallet store is mocked.
@@ -114,6 +120,22 @@ async function typeWords(screen: Screen, from: number, to: number) {
   }
 }
 
+/**
+ * Word 1 typed one keystroke per onChangeText, then a space and the first
+ * letter of word 2 in the same field ("a", "ac", "act", "act ", "act i"). A
+ * strict-prefix word such as "act" does not auto-advance, so this is how such a
+ * word is typed. The field splits the two words across fields 1 and 2.
+ */
+async function typeWordOneThenSpaceInSameField(screen: Screen) {
+  let text = '';
+  for (const ch of `${WORDS[0]} ${WORDS[1][0]}`) {
+    text += ch;
+    await fireEvent.changeText(field(screen, 0), text);
+  }
+  expect(field(screen, 0).props.value).toBe(WORDS[0]);
+  expect(field(screen, 1).props.value).toBe(WORDS[1][0]);
+}
+
 /** Several words delivered to one field in one onChangeText: paste/autofill. */
 async function insertWords(screen: Screen, at: number, words: string[]) {
   await fireEvent.changeText(field(screen, at), words.join(' '));
@@ -210,6 +232,54 @@ describe('MnemonicImportScreen — add-account entry method (TASK-556)', () => {
     expect(importedBackupVerified()).toBe(false);
   });
 
+  it('a typed space then the next word in the same field counts as typing: backupVerified true', async () => {
+    const { screen } = await renderScreen(false);
+
+    await typeWordOneThenSpaceInSameField(screen);
+    await typeWords(screen, 1, 25);
+    await pressImport(screen);
+
+    expect(importedBackupVerified()).toBe(true);
+  });
+
+  it('two words inserted at once into an empty field (paste) import with backupVerified false', async () => {
+    const { screen } = await renderScreen(false);
+
+    await insertWords(screen, 0, WORDS.slice(0, 2));
+    await typeWords(screen, 2, 25);
+    await pressImport(screen);
+
+    expect(importedBackupVerified()).toBe(false);
+  });
+
+  it('several words appended at once to a typed word import with backupVerified false', async () => {
+    const { screen } = await renderScreen(false);
+
+    await typeWords(screen, 0, 1);
+    await fireEvent.changeText(
+      field(screen, 0),
+      `${WORDS[0]} ${WORDS.slice(1).join(' ')}`
+    );
+    await pressImport(screen);
+
+    expect(importedBackupVerified()).toBe(false);
+  });
+
+  it('a replaced selection that yields several words fails closed: backupVerified false', async () => {
+    const { screen } = await renderScreen(false);
+
+    // Field 1 holds word 1 plus a stray letter; the stray letter is replaced
+    // by " " plus word 2's first letter. The text grows by only one character,
+    // but it is not one inserted keystroke, so it counts as a paste.
+    await fireEvent.changeText(field(screen, 0), `${WORDS[0]}q`);
+    await fireEvent.changeText(field(screen, 0), `${WORDS[0]} ${WORDS[1][0]}`);
+    expect(field(screen, 1).props.value).toBe(WORDS[1][0]);
+    await typeWords(screen, 1, 25);
+    await pressImport(screen);
+
+    expect(importedBackupVerified()).toBe(false);
+  });
+
   it('clearing the words after an import starts a fresh, typed entry', async () => {
     const { screen } = await renderScreen(false);
 
@@ -242,6 +312,20 @@ describe('MnemonicImportScreen — onboarding phraseTyped hand-off (TASK-556)', 
       expect.objectContaining({ source: 'mnemonic', phraseTyped: true })
     );
     expect(mockImportAccount).not.toHaveBeenCalled();
+  });
+
+  it('a typed space then the next word in the same field hands SecuritySetup phraseTyped true', async () => {
+    const { navigation, screen } = await renderScreen(true);
+
+    await typeWordOneThenSpaceInSameField(screen);
+    await typeWords(screen, 1, 25);
+    await pressImport(screen);
+
+    expect(navigation.navigate).toHaveBeenCalledTimes(1);
+    expect(navigation.navigate).toHaveBeenCalledWith(
+      'SecuritySetup',
+      expect.objectContaining({ source: 'mnemonic', phraseTyped: true })
+    );
   });
 
   it('a pasted phrase hands SecuritySetup phraseTyped false', async () => {

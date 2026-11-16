@@ -47,6 +47,21 @@ interface Props {
   route: MnemonicImportScreenRouteProp;
 }
 
+/**
+ * TASK-556: true only when `next` is `previous` with exactly one character
+ * inserted somewhere (one keystroke). A multi-character insertion, a replaced
+ * selection, or a deletion returns false, so a change that also leaves the
+ * field holding several words counts as a paste (fails closed).
+ */
+function isSingleCharInsertion(previous: string, next: string): boolean {
+  const prev = previous.toLowerCase();
+  const nxt = next.toLowerCase();
+  if (nxt.length !== prev.length + 1) return false;
+  let i = 0;
+  while (i < prev.length && prev[i] === nxt[i]) i++;
+  return nxt.slice(i + 1) === prev.slice(i);
+}
+
 export default function MnemonicImportScreen({ navigation, route }: Props) {
   const [words, setWords] = useState<string[]>(Array(25).fill(''));
   const [suggestions, setSuggestions] = useState<WordSuggestion[]>([]);
@@ -67,12 +82,17 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
 
   const inputRefs = useRef<(TextInputInstance | null)[]>(Array(25).fill(null));
   const scrollViewRef = useRef<any>(null);
-  // TASK-556: set once any field receives more than one word in a single
-  // change: a clipboard paste, or keyboard / password-manager autofill, which
-  // arrives the same way. A pasted phrase may only ever have lived in the
-  // clipboard, so the entry imports as NOT backed up. Later edits never clear
-  // it; only clearing all 25 words (a fresh entry) does. A suggestion-chip tap
-  // inserts one word and counts as typing.
+  // TASK-556: set once a change inserts more than one character at once and
+  // leaves the field holding several words: a clipboard paste, or keyboard /
+  // password-manager autofill, which arrives the same way. A pasted phrase may
+  // only ever have lived in the clipboard, so the entry imports as NOT backed
+  // up. Later edits never clear it; it stays set until clearImportState runs
+  // (leaving the screen, or a successful add-account import). A single
+  // keystroke is typing even when it makes the field hold two words (a typed
+  // space, then the next word's first letter), and a suggestion-chip tap
+  // inserts one word and counts as typing. Known limit: a word pasted into ONE
+  // field at a time is indistinguishable from a keyboard suggestion and counts
+  // as typed.
   const phrasePastedRef = useRef(false);
 
   useFocusEffect(
@@ -159,8 +179,13 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
       const pastedWords = trimmedText.split(/\s+/).filter((w) => w.length > 0);
 
       if (pastedWords.length > 1) {
-        // Multi-word paste or autofill: insert starting from current position
-        phrasePastedRef.current = true;
+        // Several words in one field: split them across the fields starting
+        // at the current position. TASK-556: only a single typed keystroke
+        // (e.g. "act " -> "act i") is typing; anything else is a paste or
+        // autofill.
+        if (!isSingleCharInsertion(words[index] ?? '', text)) {
+          phrasePastedRef.current = true;
+        }
         const newWords = [...words];
 
         // Insert pasted words starting at current index
@@ -176,7 +201,7 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
         setShowSuggestions(false);
 
         // Focus on the next empty field after pasted content
-        const lastPastedIndex = Math.min(index + pastedWords.length, 24);
+        const lastPastedIndex = Math.min(index + pastedWords.length - 1, 24);
         const nextEmptyIndex = newWords.findIndex(
           (word, idx) => idx > lastPastedIndex && !word.trim()
         );

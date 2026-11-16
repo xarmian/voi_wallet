@@ -657,6 +657,11 @@ describe('SecuritySetupScreen — import-time backupVerified (TASK-556)', () => 
       { source: 'create', backupVerified: false },
     ],
     ['create, no quiz result', false, { source: 'create' }],
+    [
+      'create, phraseTyped true but no quiz result',
+      false,
+      { source: 'create', phraseTyped: true },
+    ],
   ] as const)('%s imports with backupVerified %s', async (_n, want, params) => {
     const id = storeMnemonicSecret(FAKE_MNEMONIC);
     const { navigation, screen } = await renderScreen({

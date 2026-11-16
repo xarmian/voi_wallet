@@ -172,9 +172,13 @@ export function isBackupVerified(
  * How an account's phrase reached this device at import time (TASK-556).
  * - 'quiz': the app generated the phrase and offered the verification quiz.
  * - 'entered-phrase': the user typed the 25-word phrase in on this device
- *   (one word per change; a suggestion-chip tap counts as typing).
- * - 'pasted': some field received several words in one change (a clipboard
- *   paste or autofill); the phrase may only ever have lived in the clipboard.
+ *   (one keystroke per change, including a typed space then the next word in
+ *   one field; a suggestion-chip tap counts as typing). Known limit: a word
+ *   pasted into ONE field at a time is indistinguishable from a keyboard
+ *   suggestion and counts as typed.
+ * - 'pasted': some change inserted more than one character at once and left a
+ *   field holding several words (a clipboard paste or autofill); the phrase may
+ *   only ever have lived in the clipboard.
  * - 'qr': a scanned secret (phrase or key); the user never typed it.
  * - 'private-key': a raw key; the user never saw a phrase.
  * - 'restore': restored from an encrypted backup.
@@ -183,13 +187,15 @@ export type ImportVerificationSource =
   'quiz' | 'entered-phrase' | 'pasted' | 'qr' | 'private-key' | 'restore';
 
 /**
- * TASK-556: the single import-time decision for `backupVerified`, used by
- * every flow that sets it. A generated phrase counts only once the quiz is
- * passed (literal `true`); a phrase typed in on this device counts because the
- * user holds it; everything else, a pasted phrase included, stays false. The
- * switch is exhaustive: a new source fails to compile, and an unknown value at
- * runtime returns false. The service still refuses verification when no
- * mnemonic was supplied.
+ * TASK-556: the single import-time decision for `backupVerified`. The import
+ * flows that can set the flag true (quiz creation and phrase entry) derive it
+ * with this helper; flows that never verify (restore, QR, private key, plain
+ * creation) write false or omit it. A generated phrase counts only once the
+ * quiz is passed (literal `true`); a phrase typed in on this device counts
+ * because the user holds it; everything else, a pasted phrase included, stays
+ * false. The switch is exhaustive: a new source fails to compile, and an
+ * unknown value at runtime returns false. The service still refuses
+ * verification when no mnemonic was supplied.
  */
 export function backupVerifiedAtImport(
   source: ImportVerificationSource,
