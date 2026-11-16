@@ -23,7 +23,7 @@ import {
 } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '@/navigation/AppNavigator';
-import { AccountType } from '@/types/wallet';
+import { AccountType, backupVerifiedAtImport } from '@/types/wallet';
 import { useWalletStore } from '@/store/walletStore';
 import { BIP39Utils, WordSuggestion } from '@/utils/bip39';
 import { storeMnemonicSecret } from '@/utils/accountQRParser';
@@ -47,6 +47,24 @@ interface Props {
   route: MnemonicImportScreenRouteProp;
 }
 
+/**
+ * TASK-556: true only when `next` is `previous` with exactly one character
+ * inserted somewhere (one keystroke). A multi-character insertion or a deletion
+ * returns false, and so does a replaced selection unless its result is exactly
+ * what one keystroke could have produced; a change that also leaves the field
+ * holding several words then counts as a paste (fails closed). A field's state
+ * holds at most one word, so one keystroke can add at most one letter or one
+ * split: it can never carry a pasted word.
+ */
+function isSingleCharInsertion(previous: string, next: string): boolean {
+  const prev = previous.toLowerCase();
+  const nxt = next.toLowerCase();
+  if (nxt.length !== prev.length + 1) return false;
+  let i = 0;
+  while (i < prev.length && prev[i] === nxt[i]) i++;
+  return nxt.slice(i + 1) === prev.slice(i);
+}
+
 export default function MnemonicImportScreen({ navigation, route }: Props) {
   const [words, setWords] = useState<string[]>(Array(25).fill(''));
   const [suggestions, setSuggestions] = useState<WordSuggestion[]>([]);
@@ -67,6 +85,19 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
 
   const inputRefs = useRef<(TextInputInstance | null)[]>(Array(25).fill(null));
   const scrollViewRef = useRef<any>(null);
+  // TASK-556: set once a change inserts more than one character at once and
+  // leaves the field holding several words: a clipboard paste, or keyboard /
+  // password-manager autofill, which arrives the same way. A pasted phrase may
+  // only ever have lived in the clipboard, so the entry imports as NOT backed
+  // up. Later edits never clear it; it stays set until clearImportState runs
+  // (leaving the screen, or a successful add-account import). A single
+  // keystroke is typing even when it makes the field hold two words (a typed
+  // space, then the next word's first letter), and a suggestion-chip tap
+  // inserts one word and counts as typing. Known limit: any paste that arrives
+  // as a single token with no whitespace (one word per field, or a phrase
+  // joined by commas that typed spaces then split) is indistinguishable from
+  // a keyboard suggestion and counts as typed.
+  const phrasePastedRef = useRef(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -139,6 +170,7 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
 
   const clearImportState = useCallback(() => {
     setWords(Array(25).fill(''));
+    phrasePastedRef.current = false;
     setSuggestions([]);
     setShowSuggestions(false);
     setCurrentWordIndex(-1);
@@ -151,7 +183,13 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
       const pastedWords = trimmedText.split(/\s+/).filter((w) => w.length > 0);
 
       if (pastedWords.length > 1) {
-        // Multi-word paste: insert starting from current position
+        // Several words in one field: split them across the fields starting
+        // at the current position. TASK-556: only a single typed keystroke
+        // (e.g. "act " -> "act i") is typing; anything else is a paste or
+        // autofill.
+        if (!isSingleCharInsertion(words[index] ?? '', text)) {
+          phrasePastedRef.current = true;
+        }
         const newWords = [...words];
 
         // Insert pasted words starting at current index
@@ -167,7 +205,7 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
         setShowSuggestions(false);
 
         // Focus on the next empty field after pasted content
-        const lastPastedIndex = Math.min(index + pastedWords.length, 24);
+        const lastPastedIndex = Math.min(index + pastedWords.length - 1, 24);
         const nextEmptyIndex = newWords.findIndex(
           (word, idx) => idx > lastPastedIndex && !word.trim()
         );
@@ -277,12 +315,19 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
           mnemonicSecretId,
           source: 'mnemonic',
           accountLabel: normalizedLabel || undefined,
+          // TASK-556: SecuritySetup counts the phrase as backed up only on a
+          // literal true (typed in; no paste or autofill detected).
+          phraseTyped: !phrasePastedRef.current,
         });
       } else {
-        // For adding additional accounts, import directly
+        // For adding additional accounts, import directly. TASK-556: a phrase
+        // the user typed in counts as backed up; a pasted one does not.
         await importAccount({
           type: AccountType.STANDARD,
           mnemonic,
+          backupVerified: backupVerifiedAtImport(
+            phrasePastedRef.current ? 'pasted' : 'entered-phrase'
+          ),
           label:
             normalizedLabel ||
             `Imported Account ${new Date().toLocaleDateString()}`,

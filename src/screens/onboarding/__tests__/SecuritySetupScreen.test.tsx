@@ -632,6 +632,84 @@ describe('SecuritySetupScreen — QR secret ownership (TASK-422)', () => {
   );
 });
 
+// TASK-556: an account imported from a typed phrase counts as backed up; a
+// pasted one does not (MnemonicImport reports which via `phraseTyped`, and only
+// a literal true counts); a generated one only after the quiz.
+describe('SecuritySetupScreen — import-time backupVerified (TASK-556)', () => {
+  it.each([
+    ['mnemonic, typed', true, { source: 'mnemonic', phraseTyped: true }],
+    ['mnemonic, pasted', false, { source: 'mnemonic', phraseTyped: false }],
+    ['mnemonic, phraseTyped absent', false, { source: 'mnemonic' }],
+    [
+      'mnemonic, phraseTyped non-boolean',
+      false,
+      { source: 'mnemonic', phraseTyped: 'true' },
+    ],
+    [
+      'mnemonic, pasted, stale backupVerified param',
+      false,
+      { source: 'mnemonic', phraseTyped: false, backupVerified: true },
+    ],
+    ['create, quiz passed', true, { source: 'create', backupVerified: true }],
+    [
+      'create, quiz skipped',
+      false,
+      { source: 'create', backupVerified: false },
+    ],
+    ['create, no quiz result', false, { source: 'create' }],
+    [
+      'create, phraseTyped true but no quiz result',
+      false,
+      { source: 'create', phraseTyped: true },
+    ],
+  ] as const)('%s imports with backupVerified %s', async (_n, want, params) => {
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      mnemonicSecretId: id,
+      ...params,
+    });
+
+    await submitPin(screen);
+
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+    expect(mockImportStandardAccount.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ mnemonic: FAKE_MNEMONIC, backupVerified: want })
+    );
+    expect(navigation.navigate).toHaveBeenCalledWith('Main');
+    await screen.unmount();
+  });
+
+  // The QR loop builds its own request: it must not forward the route's
+  // verification params, so a scanned phrase is never imported as verified.
+  it('the QR import loop forwards neither backupVerified nor phraseTyped', async () => {
+    const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      source: 'qr',
+      backupVerified: true,
+      phraseTyped: true,
+      accounts: [
+        {
+          id: 'qr-standard',
+          type: 'standard',
+          address: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ',
+          name: 'QR account',
+          secretId,
+          isValid: true,
+        },
+      ],
+    });
+
+    await submitPin(screen);
+
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+    const request = mockImportStandardAccount.mock.calls[0][0];
+    expect(request.mnemonic).toBe(FAKE_MNEMONIC);
+    expect(request).not.toHaveProperty('backupVerified');
+    expect(navigation.navigate).toHaveBeenCalledWith('Main');
+    await screen.unmount();
+  });
+});
+
 describe('SecuritySetupScreen — orphan PIN healing (TASK-413)', () => {
   it.each(['create', 'mnemonic', 'qr', 'watch', 'restore', 'ledger'])(
     'clears an orphan before first-secret setup for %s',

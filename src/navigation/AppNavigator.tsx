@@ -213,13 +213,21 @@ export type RootStackParamList = {
     source?: 'create' | 'qr' | 'watch' | 'mnemonic' | 'ledger' | 'restore';
     accountLabel?: string;
     /**
-     * TASK-45 / DR-11 carrier #1 — whether the user completed the
-     * recovery-phrase verification quiz on CreateWalletScreen. Consumed by
-     * SecuritySetupScreen at import time. A BOOLEAN, not key material: it does
-     * not widen the DR-9 mnemonic-in-nav-state exposure. Absent/false persists
-     * the account as un-backed-up (the safe default).
+     * TASK-45 / DR-11 carrier #1 — for `source: 'create'`, whether the user
+     * completed the recovery-phrase verification quiz on CreateWalletScreen.
+     * Consumed by SecuritySetupScreen at import time. A BOOLEAN, not key
+     * material: it does not widen the DR-9 mnemonic-in-nav-state exposure.
+     * Absent/false persists a created account as un-backed-up (the safe
+     * default). Ignored for every other source.
      */
     backupVerified?: boolean;
+    /**
+     * TASK-556 — for `source: 'mnemonic'`, whether MnemonicImportScreen saw the
+     * phrase typed in on this device (no paste or autofill detected in any
+     * field). Only a literal `true` imports the account as backed up; absent or
+     * false fails closed (a pasted phrase). A BOOLEAN, not key material.
+     */
+    phraseTyped?: boolean;
   };
   MnemonicImport: { isOnboarding?: boolean } | undefined;
   AddWatchAccount: { isOnboarding?: boolean };

@@ -98,6 +98,8 @@ describe('MnemonicImportScreen — onboarding hand-off (TASK-224)', () => {
       mnemonicSecretId: expect.any(String),
       source: 'mnemonic',
       accountLabel: undefined,
+      // TASK-556: no multi-word paste happened in this entry.
+      phraseTyped: true,
     });
     expect(params).not.toHaveProperty('mnemonic');
     expect(JSON.stringify(params)).not.toContain('fake');

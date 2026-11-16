@@ -9,6 +9,7 @@
 
 import {
   AccountType,
+  backupVerifiedAtImport,
   isBackupVerified,
   needsBackupVerification,
   type StandardAccountMetadata,
@@ -122,4 +123,35 @@ describe('shared reminder policy', () => {
       }
     }
   );
+});
+
+// TASK-556: the single import-time decision. Typing a phrase in proves the user
+// holds it; pasting one does not, and generating one does not until the quiz is
+// passed.
+describe('backupVerifiedAtImport', () => {
+  it('quiz counts only when the quiz was passed', () => {
+    expect(backupVerifiedAtImport('quiz', true)).toBe(true);
+    expect(backupVerifiedAtImport('quiz', false)).toBe(false);
+    expect(backupVerifiedAtImport('quiz')).toBe(false);
+    expect(backupVerifiedAtImport('quiz', 'true' as unknown as boolean)).toBe(
+      false
+    );
+  });
+
+  it('an entered phrase counts as backed up', () => {
+    expect(backupVerifiedAtImport('entered-phrase')).toBe(true);
+  });
+
+  it.each(['pasted', 'qr', 'private-key', 'restore'] as const)(
+    '%s never counts, even with quizPassed',
+    (source) => {
+      expect(backupVerifiedAtImport(source)).toBe(false);
+      expect(backupVerifiedAtImport(source, true)).toBe(false);
+    }
+  );
+
+  it('an unknown source at runtime fails closed to boolean false', () => {
+    expect(backupVerifiedAtImport('typed-ish' as never)).toBe(false);
+    expect(backupVerifiedAtImport('typed-ish' as never, true)).toBe(false);
+  });
 });
