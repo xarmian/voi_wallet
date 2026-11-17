@@ -105,18 +105,14 @@ describe('hasPinStrict — absence vs failure (TASK-213)', () => {
     expect(mockKvRemoveItem).not.toHaveBeenCalled();
   });
 
-  it('contrast: the error-swallowing hasPin() still resolves FALSE on the same read failure', async () => {
-    // Guards the contract split: hasPin()'s other callers must keep getting a
-    // falsy resolve on failure; only hasPinStrict() surfaces the throw.
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  it('hasPin() now surfaces the same read failure instead of resolving false (TASK-455)', async () => {
+    // The split is gone: a failed read must never read as "no PIN" for any
+    // caller (getPrivateKey, transaction auth, import routing, biometrics).
     mockSecureGetItem.mockImplementation(async () => {
       throw new Error('keychain unavailable');
     });
-    // Legacy AsyncStorage read also fails, so getStoredPinData cannot fall back.
-    mockKvGetItem.mockImplementation(async () => {
-      throw new Error('AsyncStorage unavailable');
-    });
-    await expect(AccountSecureStorage.hasPin()).resolves.toBe(false);
-    warnSpy.mockRestore();
+    await expect(AccountSecureStorage.hasPin()).rejects.toThrow(
+      'keychain unavailable'
+    );
   });
 });

@@ -55,24 +55,27 @@ const ROUTE = {
 };
 
 function quoteResponse(overrides: Record<string, unknown> = {}) {
+  const body = {
+    quote: QUOTE_DETAILS,
+    unsignedTransactions: ['dHhu'],
+    route: ROUTE,
+    poolId: null,
+    platformFee: {
+      gain: '0',
+      feeAmount: '0',
+      feeBps: 0,
+      feeAddress: null,
+      applied: false,
+    },
+    ...overrides,
+  };
   return {
     ok: true,
     status: 200,
     statusText: '',
-    json: async () => ({
-      quote: QUOTE_DETAILS,
-      unsignedTransactions: ['dHhu'],
-      route: ROUTE,
-      poolId: null,
-      platformFee: {
-        gain: '0',
-        feeAmount: '0',
-        feeBps: 0,
-        feeAddress: null,
-        applied: false,
-      },
-      ...overrides,
-    }),
+    json: async () => body,
+    // TASK-440 #9: fetchBuffered reads the body as text inside its deadline.
+    text: async () => JSON.stringify(body),
   };
 }
 

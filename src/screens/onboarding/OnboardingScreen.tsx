@@ -16,6 +16,7 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
+import RemovedAccountNoticeHost from '@/components/account/RemovedAccountNoticeHost';
 import { springConfigs, getStaggerDelay } from '@/utils/animations';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -168,7 +169,8 @@ export default function OnboardingScreen({ navigation }: Props) {
       title: 'Import via QR Code',
       subtitle: 'Scan QR codes to import multiple accounts',
       icon: 'qr-code-outline' as const,
-      onPress: () => navigation.navigate('QRAccountImport'),
+      onPress: () =>
+        navigation.navigate('QRAccountImport', { isOnboarding: true }),
     },
     {
       id: 'watch',
@@ -196,6 +198,15 @@ export default function OnboardingScreen({ navigation }: Props) {
               started.
             </Text>
           </Animated.View>
+
+          {/* TASK-477: when the only account was removed on boot the wallet is
+              empty and we land here, where Home's card never mounts. Re-import
+              goes straight to import; only dismiss/re-import clear the record. */}
+          <RemovedAccountNoticeHost
+            onReimport={() =>
+              navigation.navigate('MnemonicImport', { isOnboarding: true })
+            }
+          />
 
           <View style={styles.optionsContainer}>
             {accountOptions.map((option, index) => (

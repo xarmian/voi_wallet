@@ -15,6 +15,7 @@ import {
   useThemeSpacing,
 } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useBottomSheetModalVisibility } from '@/hooks/useBottomSheetModalVisibility';
 import {
   BottomSheetModal,
   BottomSheetBackdrop,
@@ -45,6 +46,9 @@ export default function AccountRecipientModal({
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
   const bottomSheetRef = useRef<BottomSheetModal>(null);
+  // Open/close the bottom sheet based on visibility (guarded, TASK-432)
+  const { onChange: syncSheetVisibility, onDismiss: handleSheetDismiss } =
+    useBottomSheetModalVisibility(bottomSheetRef, isVisible);
   const accounts = useAccounts();
   const activeAccount = useActiveAccount();
   const friends = useSortedFriends();
@@ -107,13 +111,14 @@ export default function AccountRecipientModal({
   // Handle sheet changes
   const handleSheetChanges = useCallback(
     (index: number) => {
+      syncSheetVisibility(index);
       if (index === -1) {
         onClose();
         setSearchQuery(''); // Clear search when closing
         setActiveTab('accounts'); // Reset to accounts tab when closing
       }
     },
-    [onClose]
+    [onClose, syncSheetVisibility]
   );
 
   // Render backdrop
@@ -229,19 +234,9 @@ export default function AccountRecipientModal({
     [styles, themeColors, handleFriendSelect]
   );
 
-  // Open/close the bottom sheet based on visibility
-  React.useEffect(() => {
-    if (isVisible) {
-      bottomSheetRef.current?.present();
-    } else {
-      bottomSheetRef.current?.dismiss();
-    }
-  }, [isVisible]);
-
   const isAccountsTab = activeTab === 'accounts';
   const listData = (isAccountsTab ? filteredAccounts : filteredFriends) as (
-    | AccountMetadata
-    | Friend
+    AccountMetadata | Friend
   )[];
 
   const renderListItem = useCallback<ListRenderItem<AccountMetadata | Friend>>(
@@ -257,6 +252,7 @@ export default function AccountRecipientModal({
       ref={bottomSheetRef}
       snapPoints={snapPoints}
       onChange={handleSheetChanges}
+      onDismiss={handleSheetDismiss}
       backdropComponent={renderBackdrop}
       enablePanDownToClose={false}
       enableHandlePanningGesture={false}

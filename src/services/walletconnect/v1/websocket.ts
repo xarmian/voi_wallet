@@ -26,6 +26,9 @@ export class WalletConnectV1WebSocket {
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private connectionTimeout: NodeJS.Timeout | null = null;
   private isManuallyDisconnected = false;
+  // Rejects the connect in flight, so closing the socket settles it: the
+  // timeout that would otherwise do so is cleared by disconnect().
+  private rejectPendingConnect: ((error: Error) => void) | null = null;
 
   // Event handlers
   private messageHandlers: Map<string, WebSocketMessageHandler> = new Map();
@@ -56,6 +59,7 @@ export class WalletConnectV1WebSocket {
     this.isManuallyDisconnected = false;
 
     return new Promise((resolve, reject) => {
+      this.rejectPendingConnect = reject;
       try {
         this.socket = new WebSocket(this.bridgeUrl);
         this.hasEstablishedConnection = false;
@@ -144,6 +148,9 @@ export class WalletConnectV1WebSocket {
    */
   disconnect(): void {
     this.isManuallyDisconnected = true;
+    // A no-op once the connect has settled.
+    this.rejectPendingConnect?.(new Error('WebSocket closed'));
+    this.rejectPendingConnect = null;
 
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);

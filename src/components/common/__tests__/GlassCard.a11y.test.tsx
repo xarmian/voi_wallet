@@ -22,8 +22,8 @@ jest.mock('@/contexts/ThemeContext', () => ({
 const child = <Text>Balance</Text>;
 
 describe('GlassCard accessibility', () => {
-  it('gives a pressable card a button role and groups its children', () => {
-    const { getByTestId } = render(
+  it('gives a pressable card a button role and groups its children', async () => {
+    const { getByTestId } = await render(
       <GlassCard
         onPress={() => {}}
         testID="card"
@@ -39,8 +39,8 @@ describe('GlassCard accessibility', () => {
     expect(card.props.accessibilityLabel).toBe('Voi asset');
   });
 
-  it('treats a long-press-only card as pressable too', () => {
-    const { getByTestId } = render(
+  it('treats a long-press-only card as pressable too', async () => {
+    const { getByTestId } = await render(
       <GlassCard
         onLongPress={() => {}}
         testID="card"
@@ -53,8 +53,8 @@ describe('GlassCard accessibility', () => {
     expect(getByTestId('card').props.accessibilityRole).toBe('button');
   });
 
-  it('forwards an overridden role, hint and state', () => {
-    const { getByTestId } = render(
+  it('forwards an overridden role, hint and state', async () => {
+    const { getByTestId } = await render(
       <GlassCard
         onPress={() => {}}
         testID="card"
@@ -75,9 +75,9 @@ describe('GlassCard accessibility', () => {
     expect(card.props.accessibilityState).toEqual({ checked: true });
   });
 
-  it('forwards custom accessibility actions, the escape hatch for nested controls', () => {
+  it('forwards custom accessibility actions, the escape hatch for nested controls', async () => {
     const onAction = jest.fn();
-    const { getByTestId } = render(
+    const { getByTestId } = await render(
       <GlassCard
         onPress={() => {}}
         testID="card"
@@ -100,8 +100,8 @@ describe('GlassCard accessibility', () => {
     expect(onAction).toHaveBeenCalled();
   });
 
-  it('lets a caller opt out of grouping on a pressable card', () => {
-    const { getByTestId } = render(
+  it('lets a caller opt out of grouping on a pressable card', async () => {
+    const { getByTestId } = await render(
       <GlassCard onPress={() => {}} testID="card" accessible={false}>
         {child}
       </GlassCard>
@@ -110,8 +110,8 @@ describe('GlassCard accessibility', () => {
     expect(getByTestId('card').props.accessible).toBe(false);
   });
 
-  it('leaves a static card transparent to the a11y tree by default', () => {
-    const { getByTestId } = render(
+  it('leaves a static card transparent to the a11y tree by default', async () => {
+    const { getByTestId } = await render(
       <GlassCard testID="card" animated={false}>
         {child}
       </GlassCard>
@@ -122,8 +122,8 @@ describe('GlassCard accessibility', () => {
     expect(card.props.accessible).toBeUndefined();
   });
 
-  it('still lets a static card opt into a label when it is a meaningful group', () => {
-    const { getByTestId } = render(
+  it('still lets a static card opt into a label when it is a meaningful group', async () => {
+    const { getByTestId } = await render(
       <GlassCard
         testID="card"
         animated={false}

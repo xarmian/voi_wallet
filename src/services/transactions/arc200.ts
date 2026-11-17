@@ -1,9 +1,14 @@
+import { withTimeout } from '@/utils/withTimeout';
 import algosdk from 'algosdk';
 import {
   networkService as defaultNetworkService,
   NetworkService,
 } from '@/services/network';
-import MimirApiService from '@/services/mimir';
+import { SecureKeyManager } from '@/services/secure/keyManager';
+import { MultiAccountWalletService } from '@/services/wallet';
+import { checkRemoteSigningRequired } from '@/services/remoteSigner/signingRouter';
+import { NetworkId } from '@/types/network';
+import { redactError } from '@/utils/logRedaction';
 
 // ARC-200 transfer ABI definition
 const ARC200_TRANSFER_ABI = {
@@ -59,6 +64,7 @@ export interface Arc200TransferParams {
   amount: number | bigint;
   contractId: number;
   note?: string;
+  forceMbrPayment?: boolean;
   networkId?: string;
 }
 
@@ -81,6 +87,8 @@ export interface Arc200TransferFromParams {
   sender: string;
   /** Optional note */
   note?: string;
+  /** Force funding when rebuilding after a submit race. */
+  forceMbrPayment?: boolean;
   /** Network ID */
   networkId?: string;
 }
@@ -94,52 +102,94 @@ export interface Arc200ClaimParams {
 }
 
 export class Arc200TransactionService {
-  /**
-   * Check if recipient has a balance > 0 for the ARC-200 token
-   * If they do, no MBR payment is needed
-   */
-  static async checkRecipientBalance(
-    recipientAddress: string,
-    contractId: number,
-    networkService?: any
-  ): Promise<boolean> {
+  private static async requiresMbr(
+    sender: string,
+    simulated: boolean,
+    force: boolean | undefined,
+    networkId: string | undefined
+  ) {
+    if (force || !simulated) return true;
     try {
-      // If address is invalid or placeholder, assume MBR is needed
-      if (!recipientAddress || !algosdk.isValidAddress(recipientAddress)) {
-        console.log(
-          '[ARC200] checkRecipientBalance: invalid address',
-          recipientAddress
-        );
-        return false;
-      }
-
-      // Always use MimirApiService for ARC-200 balance check (more reliable)
-      const assets =
-        await MimirApiService.getAllAccountAssets(recipientAddress);
-
-      // Find the specific ARC-200 token
-      const arc200Asset = assets.find(
-        (asset) =>
-          asset.assetType === 'arc200' && asset.contractId === contractId
+      const accounts = await MultiAccountWalletService.getAllAccounts();
+      const info = await SecureKeyManager.getSigningInfo(
+        sender,
+        networkId as NetworkId
       );
-
-      const hasBalance = arc200Asset && parseFloat(arc200Asset.balance) > 0;
-      console.log(
-        '[ARC200] checkRecipientBalance:',
-        recipientAddress,
-        'contractId:',
-        contractId,
-        'hasBalance:',
-        hasBalance
+      const account = accounts.find((a) => a.address === sender);
+      const signer = accounts.find((a) => a.address === info.signingAddress);
+      if (!account || !signer) return true;
+      return (
+        checkRemoteSigningRequired(account).needsRemoteSigning ||
+        checkRemoteSigningRequired(signer).needsRemoteSigning
       );
-
-      // If asset exists and has balance > 0, recipient is already opted in
-      return !!hasBalance;
-    } catch (error) {
-      // Silently assume MBR payment is needed if we can't check
-      console.log('[ARC200] checkRecipientBalance error:', error);
-      return false;
+    } catch {
+      return true;
     }
+  }
+
+  private static async simulateTransfer(
+    request: algosdk.modelsv2.SimulateRequest,
+    transaction: algosdk.Transaction,
+    suggestedParams: algosdk.SuggestedParams,
+    contractId: number,
+    networkService: NetworkService
+  ) {
+    const simulate = async (txns: algosdk.Transaction[]) => {
+      request.txnGroups[0].txns = txns.map(
+        (txn) => new algosdk.SignedTransaction({ txn, sig: new Uint8Array(64) })
+      );
+      return withTimeout(
+        networkService.getAlgodClient().simulateTransactions(request).do(),
+        10000,
+        new Error('Simulation timed out')
+      );
+    };
+    let group;
+    let simulated = false;
+    try {
+      const response = await simulate([transaction]);
+      group = response.txnGroups?.[0];
+      // Success can also mean the contract's escrow surplus covered a new box.
+      // That is acceptable because the contract accepts the transfer as-is.
+      simulated =
+        !!group &&
+        !group.failureMessage &&
+        group.txnResults?.length === 1 &&
+        group.txnResults.every(
+          (result) => !!result.txnResult && !result.txnResult.poolError
+        );
+    } catch {
+      // Any simulation error keeps the MBR payment (fail-safe overpay).
+    }
+    if (!simulated) {
+      const payment = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+        sender: transaction.sender,
+        receiver: algosdk.getApplicationAddress(contractId),
+        amount: ARC200_MBR_AMOUNT,
+        suggestedParams,
+      });
+      const funded = [payment, transaction];
+      algosdk.assignGroupID(funded);
+      try {
+        // Discover resources with funding, without changing the MBR decision.
+        group = (await simulate(funded)).txnGroups?.[0];
+      } catch {
+        // Keep any resources discovered by the first attempt.
+      }
+    }
+    return { response: { txnGroups: group ? [group] : [] }, simulated };
+  }
+
+  static groupCost(group: Arc200TransactionGroup): number {
+    return group.transactions.reduce(
+      (cost, txn) =>
+        cost +
+        Number(txn.fee) +
+        (txn.type === algosdk.TransactionType.pay
+          ? Number(txn.payment!.amount)
+          : 0),
+      0
+    );
   }
 
   /**
@@ -176,13 +226,18 @@ export class Arc200TransactionService {
 
       const transactions: algosdk.Transaction[] = [];
 
-      // Check if recipient needs MBR payment
-      const hasBalance = await this.checkRecipientBalance(
-        params.to,
-        params.contractId,
-        networkService
+      const { transaction: arc200TransferTxn, simulated } =
+        await this.buildArc200TransferCall(
+          params,
+          suggestedParams,
+          networkService
+        );
+      const needsMbrPayment = await this.requiresMbr(
+        params.from,
+        simulated,
+        params.forceMbrPayment,
+        params.networkId
       );
-      const needsMbrPayment = !hasBalance;
 
       // 1. Add MBR payment transaction if needed
       if (needsMbrPayment) {
@@ -205,11 +260,6 @@ export class Arc200TransactionService {
       }
 
       // 2. Build ARC-200 transfer application call
-      const arc200TransferTxn = await this.buildArc200TransferCall(
-        params,
-        suggestedParams,
-        networkService
-      );
       transactions.push(arc200TransferTxn);
 
       // 3. Create atomic transaction group if multiple transactions
@@ -229,7 +279,10 @@ export class Arc200TransactionService {
         needsMbrPayment,
       };
     } catch (error) {
-      console.error('Failed to build ARC-200 transfer group:', error);
+      console.error(
+        'Failed to build ARC-200 transfer group:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-200 transaction build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -243,7 +296,7 @@ export class Arc200TransactionService {
     params: Arc200TransferParams,
     suggestedParams: algosdk.SuggestedParams,
     networkService: any
-  ): Promise<algosdk.Transaction> {
+  ): Promise<{ transaction: algosdk.Transaction; simulated: boolean }> {
     try {
       // Validate the recipient address
       if (!algosdk.isValidAddress(params.to)) {
@@ -289,7 +342,6 @@ export class Arc200TransactionService {
       });
 
       // Simulate the transaction to get box references
-      const algodClient = networkService.getAlgodClient();
 
       // Create a mock signed transaction with a 64-byte signature
       const mockSignedTxn = new algosdk.SignedTransaction({
@@ -309,18 +361,25 @@ export class Arc200TransactionService {
         fixSigners: true, // Automatically resolve signers for rekeyed accounts
       });
 
+      let simulated = false;
       let boxes: { appIndex: number; name: Uint8Array }[] = [];
 
       try {
-        const simulateResponse = await algodClient
-          .simulateTransactions(simulateRequest)
-          .do();
+        const result = await this.simulateTransfer(
+          simulateRequest,
+          simulationTxn,
+          simulationParams,
+          params.contractId,
+          networkService
+        );
+        const simulateResponse = result.response;
+        simulated = result.simulated;
 
         // Extract box references from simulation
         const unnamedResources =
           simulateResponse.txnGroups?.[0]?.unnamedResourcesAccessed;
         const txnBoxes =
-          simulateResponse.txnGroups?.[0]?.txnResults?.[0]
+          simulateResponse.txnGroups?.[0]?.txnResults?.at(-1)
             ?.unnamedResourcesAccessed?.boxes;
 
         if (unnamedResources?.boxes || txnBoxes) {
@@ -339,7 +398,10 @@ export class Arc200TransactionService {
             }));
         }
       } catch (error) {
-        console.error('Failed to simulate ARC-200 transaction:', error);
+        console.error(
+          'Failed to simulate ARC-200 transaction:',
+          redactError(error)
+        );
         throw error;
       }
 
@@ -355,9 +417,12 @@ export class Arc200TransactionService {
         suggestedParams,
       });
 
-      return appCallTxn;
+      return { transaction: appCallTxn, simulated };
     } catch (error) {
-      console.error('Failed to build ARC-200 application call:', error);
+      console.error(
+        'Failed to build ARC-200 application call:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-200 app call build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -377,23 +442,10 @@ export class Arc200TransactionService {
     needsMbrPayment: boolean;
   }> {
     try {
-      // Use the networkId from params, or default to defaultNetworkService for backwards compatibility
-      const networkService = params.networkId
-        ? NetworkService.getInstance(params.networkId as any)
-        : defaultNetworkService;
-
-      const baseFee = await networkService.estimateTransactionFee();
-      const hasBalance = await this.checkRecipientBalance(
-        params.to,
-        params.contractId,
-        networkService
-      );
-      const needsMbrPayment = !hasBalance;
-
-      // For atomic groups, each transaction has a fee
-      const totalFee = needsMbrPayment ? baseFee * 2 : baseFee;
+      const group = await this.buildArc200TransferGroup(params);
+      const needsMbrPayment = group.needsMbrPayment;
       const mbrAmount = needsMbrPayment ? ARC200_MBR_AMOUNT : 0;
-      const total = totalFee + mbrAmount;
+      const total = this.groupCost(group);
 
       return {
         fee: total, // Return total (including MBR) as the fee
@@ -402,7 +454,10 @@ export class Arc200TransactionService {
         needsMbrPayment,
       };
     } catch (error) {
-      console.error('Failed to estimate ARC-200 transfer cost:', error);
+      console.error(
+        'Failed to estimate ARC-200 transfer cost:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-200 cost estimation failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -422,6 +477,9 @@ export class Arc200TransactionService {
   static async buildArc200TransferFromGroup(
     params: Arc200TransferFromParams
   ): Promise<Arc200TransactionGroup> {
+    // TASK-397: identical bytes for repeated single claims in one validity
+    // window are deliberate. The chain's txid dedupe stops a retry or double
+    // tap from claiming the allowance twice; a nonce note removes that protection.
     try {
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId as any)
@@ -446,13 +504,18 @@ export class Arc200TransactionService {
 
       const transactions: algosdk.Transaction[] = [];
 
-      // Check if recipient needs MBR payment
-      const hasBalance = await this.checkRecipientBalance(
-        params.to,
-        params.contractId,
-        networkService
+      const { transaction: transferFromTxn, simulated } =
+        await this.buildArc200TransferFromCall(
+          params,
+          suggestedParams,
+          networkService
+        );
+      const needsMbrPayment = await this.requiresMbr(
+        params.sender,
+        simulated,
+        params.forceMbrPayment,
+        params.networkId
       );
-      const needsMbrPayment = !hasBalance;
 
       // 1. Add MBR payment transaction if needed
       if (needsMbrPayment) {
@@ -472,11 +535,6 @@ export class Arc200TransactionService {
       }
 
       // 2. Build ARC-200 transferFrom application call
-      const transferFromTxn = await this.buildArc200TransferFromCall(
-        params,
-        suggestedParams,
-        networkService
-      );
       transactions.push(transferFromTxn);
 
       // 3. Create atomic transaction group if multiple transactions
@@ -496,7 +554,10 @@ export class Arc200TransactionService {
         needsMbrPayment,
       };
     } catch (error) {
-      console.error('Failed to build ARC-200 transferFrom group:', error);
+      console.error(
+        'Failed to build ARC-200 transferFrom group:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-200 transferFrom build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -510,7 +571,7 @@ export class Arc200TransactionService {
     params: Arc200TransferFromParams,
     suggestedParams: algosdk.SuggestedParams,
     networkService: any
-  ): Promise<algosdk.Transaction> {
+  ): Promise<{ transaction: algosdk.Transaction; simulated: boolean }> {
     try {
       // Create ABI method for proper encoding
       const method = new algosdk.ABIMethod(ARC200_TRANSFER_FROM_ABI);
@@ -546,7 +607,6 @@ export class Arc200TransactionService {
       });
 
       // Simulate the transaction to get box references
-      const algodClient = networkService.getAlgodClient();
 
       // Create a mock signed transaction with a 64-byte signature
       const mockSignedTxn = new algosdk.SignedTransaction({
@@ -566,18 +626,25 @@ export class Arc200TransactionService {
         fixSigners: true, // Automatically resolve signers for rekeyed accounts
       });
 
+      let simulated = false;
       let boxes: { appIndex: number; name: Uint8Array }[] = [];
 
       try {
-        const simulateResponse = await algodClient
-          .simulateTransactions(simulateRequest)
-          .do();
+        const result = await this.simulateTransfer(
+          simulateRequest,
+          simulationTxn,
+          simulationParams,
+          params.contractId,
+          networkService
+        );
+        const simulateResponse = result.response;
+        simulated = result.simulated;
 
         // Extract box references from simulation
         const unnamedResources =
           simulateResponse.txnGroups?.[0]?.unnamedResourcesAccessed;
         const txnBoxes =
-          simulateResponse.txnGroups?.[0]?.txnResults?.[0]
+          simulateResponse.txnGroups?.[0]?.txnResults?.at(-1)
             ?.unnamedResourcesAccessed?.boxes;
 
         if (unnamedResources?.boxes || txnBoxes) {
@@ -595,7 +662,10 @@ export class Arc200TransactionService {
             }));
         }
       } catch (error) {
-        console.error('Failed to simulate ARC-200 transferFrom:', error);
+        console.error(
+          'Failed to simulate ARC-200 transferFrom:',
+          redactError(error)
+        );
         throw error;
       }
 
@@ -611,9 +681,12 @@ export class Arc200TransactionService {
         suggestedParams,
       });
 
-      return appCallTxn;
+      return { transaction: appCallTxn, simulated };
     } catch (error) {
-      console.error('Failed to build ARC-200 transferFrom call:', error);
+      console.error(
+        'Failed to build ARC-200 transferFrom call:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-200 transferFrom call build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -626,10 +699,38 @@ export class Arc200TransactionService {
    */
   static async buildBatchClaimTransactionGroup(
     claims: Arc200ClaimParams[],
-    networkId?: string
+    networkId?: string,
+    forceMbrPayment = false
   ): Promise<Arc200TransactionGroup> {
     if (claims.length === 0) {
       throw new Error('No claims provided');
+    }
+
+    // TASK-397: validate the whole batch before network access or construction.
+    const claimsByContract = new Map<number, Set<string>>();
+    const recipientsByContract = new Map<number, string>();
+    for (const claim of claims) {
+      const contractId = Number(claim.contractId);
+      // The app call uses claim.sender directly, with no default fallback.
+      const ownerAndSender = JSON.stringify([claim.from, claim.sender]);
+      const seenClaims = claimsByContract.get(contractId) ?? new Set<string>();
+      if (seenClaims.has(ownerAndSender)) {
+        throw new Error(
+          `Duplicate claim for token ${contractId} from ${claim.from} by ${claim.sender}`
+        );
+      }
+      seenClaims.add(ownerAndSender);
+      claimsByContract.set(contractId, seenClaims);
+
+      if (
+        recipientsByContract.has(contractId) &&
+        recipientsByContract.get(contractId) !== claim.to
+      ) {
+        throw new Error(
+          `All claims for token ${contractId} must go to the same recipient`
+        );
+      }
+      recipientsByContract.set(contractId, claim.to);
     }
 
     const networkService = networkId
@@ -639,16 +740,44 @@ export class Arc200TransactionService {
 
     const allTransactions: algosdk.Transaction[] = [];
     let totalMbrNeeded = false;
+    // GH #20: at most ONE MBR payment per contract. Every MBR payment for a
+    // contract has the same sender, receiver, amount and note, so a second one
+    // is a byte-identical transaction and the node rejects the whole group.
+    // One payment covers the recipient's single balance box for that token
+    // (the only caller, ClaimAllConfirmationScreen, sends every claim in a
+    // batch to one recipient).
+    const fundedContracts = new Set<number>();
 
     for (const claim of claims) {
-      // Check if recipient needs MBR payment for this token
-      const hasBalance = await this.checkRecipientBalance(
-        claim.to,
-        claim.contractId,
-        networkService
-      );
+      // Build transferFrom transaction for this claim
+      const { transaction: transferFromTxn, simulated } =
+        await this.buildArc200TransferFromCall(
+          {
+            contractId: claim.contractId,
+            from: claim.from,
+            to: claim.to,
+            amount: claim.amount,
+            sender: claim.sender,
+            networkId,
+          },
+          suggestedParams,
+          networkService
+        );
 
-      if (!hasBalance) {
+      // Fund each recipient/contract at most once, before the claim needing it.
+      // Check every sender so a later remote signer also gets the fail-safe.
+      let needsMbrPayment = false;
+      if (!fundedContracts.has(Number(claim.contractId))) {
+        needsMbrPayment = await this.requiresMbr(
+          claim.sender,
+          simulated,
+          forceMbrPayment,
+          networkId
+        );
+      }
+
+      if (needsMbrPayment) {
+        fundedContracts.add(Number(claim.contractId));
         totalMbrNeeded = true;
         // Add MBR payment for this token
         const appEscrowAddress = algosdk.getApplicationAddress(
@@ -665,19 +794,6 @@ export class Arc200TransactionService {
         allTransactions.push(mbrPaymentTxn);
       }
 
-      // Build transferFrom transaction for this claim
-      const transferFromTxn = await this.buildArc200TransferFromCall(
-        {
-          contractId: claim.contractId,
-          from: claim.from,
-          to: claim.to,
-          amount: claim.amount,
-          sender: claim.sender,
-          networkId,
-        },
-        suggestedParams,
-        networkService
-      );
       allTransactions.push(transferFromTxn);
     }
 
@@ -704,8 +820,7 @@ export class Arc200TransactionService {
    * Returns fee per transaction and total estimated cost
    */
   static async estimateClaimCost(
-    claimCount: number,
-    needsMbrPayments: number = 0,
+    claimCount: Arc200ClaimParams[] | Arc200TransactionGroup,
     networkId?: string
   ): Promise<{
     feePerTxn: number;
@@ -713,22 +828,19 @@ export class Arc200TransactionService {
     totalMbr: number;
     total: number;
   }> {
-    const networkService = networkId
-      ? NetworkService.getInstance(networkId as any)
-      : defaultNetworkService;
-
-    const baseFee = await networkService.estimateTransactionFee();
-
-    // Each claim needs 1 txn (or 2 if MBR is needed)
-    const totalTxns = claimCount + needsMbrPayments;
-    const totalFees = baseFee * totalTxns;
-    const totalMbr = ARC200_MBR_AMOUNT * needsMbrPayments;
-
+    const group = Array.isArray(claimCount)
+      ? await this.buildBatchClaimTransactionGroup(claimCount, networkId)
+      : claimCount;
+    const totalFees = group.transactions.reduce(
+      (sum, txn) => sum + Number(txn.fee),
+      0
+    );
+    const total = this.groupCost(group);
     return {
-      feePerTxn: baseFee,
+      feePerTxn: Number(group.transactions[0]?.fee || 0),
       totalFees,
-      totalMbr,
-      total: totalFees + totalMbr,
+      totalMbr: total - totalFees,
+      total,
     };
   }
 }

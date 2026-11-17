@@ -35,6 +35,7 @@ import {
   getAccountSecret,
   clearAccountSecret,
   clearAllAccountSecrets,
+  storeMnemonicSecret,
   type AccountSecret,
 } from '../accountQRParser';
 
@@ -107,5 +108,30 @@ describe('accountQRParser secret store', () => {
     expect(() => clearAccountSecret(undefined)).not.toThrow();
     expect(() => clearAccountSecret('does-not-exist')).not.toThrow();
     expect(getAccountSecret('does-not-exist')).toBeUndefined();
+  });
+});
+
+describe('storeMnemonicSecret (TASK-224 onboarding carrier)', () => {
+  afterEach(() => {
+    clearAllAccountSecrets();
+  });
+
+  it('round-trips a phrase through an opaque id', () => {
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    expect(typeof id).toBe('string');
+    expect(id).not.toContain('fake-word-not-real');
+    expect(getAccountSecret(id)).toEqual({ mnemonic: FAKE_MNEMONIC });
+  });
+
+  it('issues a distinct id per call', () => {
+    const a = storeMnemonicSecret(FAKE_MNEMONIC);
+    const b = storeMnemonicSecret(FAKE_MNEMONIC);
+    expect(a).not.toBe(b);
+  });
+
+  it('clearAccountSecret removes it', () => {
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    clearAccountSecret(id);
+    expect(getAccountSecret(id)).toBeUndefined();
   });
 });

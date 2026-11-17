@@ -9,7 +9,9 @@ import algosdk from 'algosdk';
 import nacl from 'tweetnacl';
 import { getCrypto } from '@/platform';
 import { NetworkService } from '../network';
+import { NetworkId } from '@/types/network';
 import { SecureKeyManager } from '../secure/keyManager';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import {
   RemoteSignerRequest,
   RemoteSignerResponse,
@@ -33,6 +35,11 @@ import {
   assertCanonicalAddressSet,
 } from './pairing';
 import { isPlainObject, validateResponseEnvelope } from './responseValidation';
+import {
+  describeTransactionDangers,
+  detectTransactionDangers,
+} from '@/utils/transactionDangers';
+import { assertSignableKeyreg } from '@/utils/keyregSafety';
 
 // ============================================================================
 // Authenticated pairing crypto core (v2) — signer-side (key-touching)
@@ -74,6 +81,10 @@ export async function signPairingMessage(
       { address, purpose: 'verification' },
       pin
     );
+    // TASK-425 U2: a pairing proof is signed only with the address's own key.
+    if (!keyBelongsToAddress(sk, address)) {
+      throw new Error('The stored key does not belong to this account');
+    }
     return nacl.sign.detached(messageBytes, sk);
   } finally {
     if (sk) {
@@ -211,13 +222,15 @@ class RemoteSignerServiceClass {
     unsignedTxns: algosdk.Transaction[],
     signerAddresses: string[],
     options?: {
+      networkId?: NetworkId;
       authAddresses?: (string | undefined)[];
       dappName?: string;
       description?: string;
     }
   ): Promise<RemoteSignerRequest> {
     const networkService = NetworkService.getInstance();
-    const networkId = networkService.getCurrentNetworkId();
+    const networkId =
+      options?.networkId ?? networkService.getCurrentNetworkId();
     const genesisHash = unsignedTxns[0]?.genesisHash
       ? Buffer.from(unsignedTxns[0].genesisHash).toString('base64')
       : '';
@@ -359,7 +372,7 @@ class RemoteSignerServiceClass {
    */
   decodeTransaction(base64Txn: string): DecodedTransactionInfo {
     const txnBytes = Buffer.from(base64Txn, 'base64');
-    const txn = algosdk.decodeUnsignedTransaction(txnBytes) as any;
+    const txn = algosdk.decodeUnsignedTransaction(txnBytes);
 
     // Determine transaction type
     let type: TransactionDisplayType = 'unknown';
@@ -397,47 +410,41 @@ class RemoteSignerServiceClass {
       }
     }
 
-    // Handle both algosdk v2 and v3 field names
-    const senderField = txn.from || txn.sender;
-    const receiverField = txn.to || txn.receiver;
-    const rekeyField = txn.reKeyTo || txn.rekeyTo;
-    const closeField = txn.closeRemainderTo;
-    const firstRound = txn.firstRound ?? txn.firstValid;
-    const lastRound = txn.lastRound ?? txn.lastValid;
-    const assetIndex = txn.assetIndex ?? txn.xaid;
-    const appIndex = txn.appIndex ?? txn.apid;
+    // algosdk 3.x keeps type-specific fields in per-type sub-objects
+    // (`payment`, `assetTransfer`, `applicationCall`, ...), not at the top level
+    // as v2 did. Reading the v2 names left the review screen's amount,
+    // receiver, asset id and close-to blank (TASK-393). Display only: the bytes
+    // that get signed are decoded separately in signRequest.
+    const encodeAddr = (addr: algosdk.Address | undefined) =>
+      addr ? addr.toString() : undefined;
+    const pay = txn.payment;
+    const axfer = txn.assetTransfer;
+    const dangers = detectTransactionDangers(txn);
+    const assetIndex: bigint | undefined =
+      axfer?.assetIndex ??
+      txn.assetConfig?.assetIndex ??
+      txn.assetFreeze?.assetIndex;
 
     return {
       type,
-      sender: senderField?.publicKey
-        ? algosdk.encodeAddress(senderField.publicKey)
-        : String(senderField || ''),
-      receiver: receiverField?.publicKey
-        ? algosdk.encodeAddress(receiverField.publicKey)
-        : receiverField
-          ? String(receiverField)
-          : undefined,
-      amount: txn.amount !== undefined ? BigInt(txn.amount) : undefined,
-      fee: BigInt(txn.fee || 0),
+      sender: txn.sender.toString(),
+      receiver: encodeAddr(pay?.receiver ?? axfer?.receiver),
+      amount: pay?.amount ?? axfer?.amount,
+      fee: txn.fee,
       assetId: assetIndex,
-      appId: appIndex,
+      appId: txn.applicationCall?.appIndex,
       note,
-      firstValid: BigInt(firstRound || 0),
-      lastValid: BigInt(lastRound || 0),
-      genesisId: txn.genesisID || txn.gen,
+      firstValid: txn.firstValid,
+      lastValid: txn.lastValid,
+      genesisId: txn.genesisID,
       genesisHash: txn.genesisHash
         ? Buffer.from(txn.genesisHash).toString('base64')
         : '',
-      rekeyTo: rekeyField?.publicKey
-        ? algosdk.encodeAddress(rekeyField.publicKey)
-        : rekeyField
-          ? String(rekeyField)
-          : undefined,
-      closeRemainderTo: closeField?.publicKey
-        ? algosdk.encodeAddress(closeField.publicKey)
-        : closeField
-          ? String(closeField)
-          : undefined,
+      rekeyTo: dangers.rekeyTo,
+      closeRemainderTo: dangers.closeRemainderTo,
+      assetCloseTo: dangers.assetCloseTo,
+      assetSender: encodeAddr(axfer?.assetSender),
+      dangers: describeTransactionDangers(txn),
       raw: txn,
     };
   }
@@ -465,6 +472,12 @@ class RemoteSignerServiceClass {
     try {
       const signedTxns: Uint8Array[] = [];
       const total = request.txns.length;
+
+      // TASK-439: refuse the whole request, before any key is loaded, if any
+      // transaction is a permanent non-participation keyreg.
+      for (const txnData of request.txns) {
+        assertSignableKeyreg(Buffer.from(txnData.b, 'base64'));
+      }
 
       for (let i = 0; i < total; i++) {
         const txnData = request.txns[i];

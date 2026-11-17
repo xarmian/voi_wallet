@@ -62,15 +62,15 @@ afterEach(() => {
 });
 
 describe('useReducedMotion', () => {
-  it('defaults to false (motion allowed) before the OS value settles', () => {
-    const { getByText } = render(<Probe />);
+  it('defaults to false (motion allowed) before the OS value settles', async () => {
+    const { getByText } = await render(<Probe />);
     expect(getByText('full')).toBeTruthy();
   });
 
   it('adopts the initial OS value once the async read resolves', async () => {
     mockInitial = true;
 
-    const { getByText } = render(<Probe />);
+    const { getByText } = await render(<Probe />);
     await act(async () => {
       await Promise.resolve();
     });
@@ -80,22 +80,22 @@ describe('useReducedMotion', () => {
   });
 
   it('stays reactive: a later reduceMotionChanged event re-renders consumers', async () => {
-    const { getByText } = render(<Probe />);
+    const { getByText } = await render(<Probe />);
     await act(async () => {
       await Promise.resolve();
     });
     expect(getByText('full')).toBeTruthy();
 
-    act(() => emitChange(true));
+    await act(() => emitChange(true));
     expect(getByText('reduced')).toBeTruthy();
 
     // ...and back again, so the gate is not one-way.
-    act(() => emitChange(false));
+    await act(() => emitChange(false));
     expect(getByText('full')).toBeTruthy();
   });
 
-  it('subscribes to the reduceMotionChanged event exactly once for many consumers', () => {
-    render(
+  it('subscribes to the reduceMotionChanged event exactly once for many consumers', async () => {
+    await render(
       <>
         <Probe />
         <Probe />
@@ -110,31 +110,31 @@ describe('useReducedMotion', () => {
     );
   });
 
-  it('removes the native listener only after the last consumer unmounts', () => {
-    const first = render(<Probe />);
-    const second = render(<Probe />);
+  it('removes the native listener only after the last consumer unmounts', async () => {
+    const first = await render(<Probe />);
+    const second = await render(<Probe />);
 
-    first.unmount();
+    await first.unmount();
     expect(mockRemove).not.toHaveBeenCalled();
 
-    second.unmount();
+    await second.unmount();
     expect(mockRemove).toHaveBeenCalledTimes(1);
   });
 
-  it('re-subscribes after a full teardown', () => {
-    render(<Probe />).unmount();
-    render(<Probe />);
+  it('re-subscribes after a full teardown', async () => {
+    await (await render(<Probe />)).unmount();
+    await render(<Probe />);
 
     expect(mockAddEventListener).toHaveBeenCalledTimes(2);
   });
 
-  it('still subscribes only once when the platform returns no subscription handle', () => {
+  it('still subscribes only once when the platform returns no subscription handle', async () => {
     // react-native-web's AccessibilityInfo returns `undefined` from
     // addEventListener when the runtime has no matchMedia; the guard must not
     // key off the returned handle or every consumer re-registers.
     mockAddEventListener.mockImplementation((() => undefined) as never);
 
-    render(
+    await render(
       <>
         <Probe />
         <Probe />
@@ -152,7 +152,7 @@ describe('useReducedMotion', () => {
       Promise.reject(new Error('unsupported on this target'))
     );
 
-    const { getByText } = render(<Probe />);
+    const { getByText } = await render(<Probe />);
     await act(async () => {
       await Promise.resolve();
     });
@@ -163,13 +163,13 @@ describe('useReducedMotion', () => {
 
   it('exposes the settled value to non-React callers via the snapshot', async () => {
     mockInitial = true;
-    const { unmount } = render(<Probe />);
+    const { unmount } = await render(<Probe />);
     await act(async () => {
       await Promise.resolve();
     });
 
     expect(getReducedMotionSnapshot()).toBe(true);
-    unmount();
+    await unmount();
   });
 
   it('notifies imperative subscribers and stops after unsubscribe', () => {

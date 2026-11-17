@@ -7,6 +7,7 @@
  * WITHOUT submitting to the network.
  */
 
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -70,6 +71,7 @@ export function AirgapVerificationFlow({
   onCancel,
 }: AirgapVerificationFlowProps) {
   const { theme } = useTheme();
+  const covered = useCoverPaused();
 
   const [state, setState] = useState<VerificationState>('building');
   const [error, setError] = useState<string | null>(null);
@@ -507,7 +509,7 @@ export function AirgapVerificationFlow({
 
   return (
     <Modal
-      visible
+      visible={!covered}
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={onCancel}

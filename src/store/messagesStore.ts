@@ -24,6 +24,40 @@ import { computeSyncCursor } from '@/services/messaging/syncCursor';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import { shouldSkipForOffline } from '@/services/network/offline';
 import { useFriendsStore } from './friendsStore';
+import { useWalletStore } from './walletStore';
+
+// TASK-462: account adoption follows the wallet's active account.
+function activeWalletAddress(): string | null {
+  const wallet = useWalletStore.getState().wallet;
+  return (
+    wallet?.accounts.find((account) => account.id === wallet.activeAccountId)
+      ?.address ?? null
+  );
+}
+
+// TASK-464: reactive form of activeWalletAddress, a string so the selector is
+// referentially stable.
+function useActiveWalletAddress(): string | null {
+  return useWalletStore((state) => {
+    const wallet = state.wallet;
+    return (
+      wallet?.accounts.find((account) => account.id === wallet.activeAccountId)
+        ?.address ?? null
+    );
+  });
+}
+
+// TASK-464: threads held in memory belong to currentUserAddress. Show them only
+// while that is the wallet's active account, so a switch to an account that
+// can't fetch (Ledger/watch, registration pending) never renders the previous
+// account's conversations.
+const NO_THREADS: Record<string, MessageThread> = {};
+function useVisibleThreads(): Record<string, MessageThread> {
+  const threads = useMessagesStore((state) => state.threads);
+  const owner = useMessagesStore((state) => state.currentUserAddress);
+  const active = useActiveWalletAddress();
+  return owner !== null && owner === active ? threads : NO_THREADS;
+}
 
 const STORAGE_KEY_PREFIX = '@messages/';
 const HIDDEN_THREADS_STORAGE_KEY_PREFIX = '@messages/hidden/';
@@ -37,11 +71,83 @@ const POLLING_INTERVAL_MS = 30000; // 30 seconds (used when chat is open)
 // this many messages; incremental polls drain every page in the new range.
 const CONVERSATION_FETCH_LIMIT = 100;
 
+/**
+ * Optimistic sent messages carry a local id with this prefix until the send
+ * returns a txid (TASK-454).
+ */
+export const PENDING_PLACEHOLDER_PREFIX = 'pending-';
+
+/**
+ * How long a placeholder for a send that may have landed, with no txid, keeps
+ * its spinner (TASK-454). With no txid there is no identity to resolve it by
+ * on chain, so this is a fixed UI window, not a claim about the send: if it
+ * landed, its chain record appears in the thread as usual (alongside the
+ * spinner until the window ends). Ageing out offers no resend.
+ */
+export const PENDING_PLACEHOLDER_TTL_MS = 10 * 60 * 1000;
+
 // Addresses with a fetchAllThreads currently in flight. Concurrent fetches for
 // the SAME account (e.g. a focus fetch overlapping a poll or pull-to-refresh)
 // are coalesced so two bootstraps can't each commit a different newest window
 // and skip the gap between them.
 const inFlightThreadFetches = new Set<string>();
+
+// Account switches use an epoch (TASK-460). Stale calls for a non-active
+// account are refused before taking one (TASK-462); a cache load that finishes
+// after a newer epoch commits nothing.
+let accountEpoch = 0;
+
+// Only the newest key-registration check writes isKeyRegistered (TASK-460),
+// so a slow check for A can't land after B's. A check also can't write once
+// the store has switched to another account since it began. It is not tied
+// to currentUserAddress outright: the inbox checks an unregistered account
+// while the store still holds the previous one (it never syncs), and that
+// result must land.
+let keyCheckSeq = 0;
+let accountSwitches = 0;
+
+interface KeyCheck {
+  seq: number;
+  switches: number;
+  userAddress: string;
+}
+
+const startKeyCheck = (userAddress: string): KeyCheck => ({
+  seq: ++keyCheckSeq,
+  switches: accountSwitches,
+  userAddress,
+});
+
+const keyCheckMayWrite = (check: KeyCheck, current: string | null) =>
+  check.seq === keyCheckSeq &&
+  (check.switches === accountSwitches || current === check.userAddress);
+
+// The newest action to set isLoading owns it (TASK-460). An action that
+// abandons a superseded result clears the flag only while it is still the
+// owner, so it can neither leave the spinner stuck nor end a newer action's.
+let loadingOwner = 0;
+
+/** isLoading: false, but only while `loading` still owns the flag. */
+const doneLoading = (loading: number): Partial<MessagesState> =>
+  loading === loadingOwner ? { isLoading: false } : {};
+
+/**
+ * A failed action's completion (TASK-460): nothing once a newer action owns
+ * the flag, and no lastError onto another account's state.
+ */
+function failedLoading(
+  loading: number,
+  userAddress: string,
+  error: unknown,
+  current: string | null
+): Partial<MessagesState> {
+  if (loading !== loadingOwner) return {};
+  if (current !== null && current !== userAddress) return { isLoading: false };
+  return {
+    lastError: error instanceof Error ? error.message : 'Unknown error',
+    isLoading: false,
+  };
+}
 
 // Helper to get storage key for a specific account
 const getStorageKey = (userAddress: string) =>
@@ -78,8 +184,18 @@ interface MessagesState {
   addMessage: (message: Message) => void;
   addPendingMessage: (message: Message) => void;
   removePendingMessage: (tempId: string) => void;
+  settlePendingMessage: (
+    tempId: string,
+    txId?: string,
+    attemptedAt?: number
+  ) => void;
+  failPendingMessage: (tempId: string) => void;
+  expireUnsettledPlaceholders: (friendAddress: string) => void;
   updateMessageStatus: (txId: string, status: MessageStatus) => void;
-  markThreadAsRead: (friendAddress: string) => Promise<void>;
+  markThreadAsRead: (
+    friendAddress: string,
+    userAddress: string
+  ) => Promise<void>;
 
   // Hidden threads
   hideThread: (friendAddress: string) => Promise<void>;
@@ -283,6 +399,91 @@ export const useMessagesStore = create<MessagesState>()(
     },
 
     /**
+     * Keep a placeholder pending for a send that may have landed (TASK-454):
+     * never 'failed', so it offers no retry that could send it twice. With a
+     * txid it is re-keyed to that id, and the thread's next chain load
+     * confirms it by id. Without one it keeps its spinner for
+     * PENDING_PLACEHOLDER_TTL_MS from the attempt start, then ages out.
+     */
+    settlePendingMessage: (
+      tempId: string,
+      txId?: string,
+      attemptedAt?: number
+    ) => {
+      const { threads } = get();
+      for (const [addr, thread] of Object.entries(threads)) {
+        const msgIndex = thread.messages.findIndex((m) => m.id === tempId);
+        if (msgIndex < 0) continue;
+
+        let messages = thread.messages.map((m, i) =>
+          i === msgIndex
+            ? {
+                ...m,
+                status: 'pending' as const,
+                unsettled: !txId,
+                // A retry is a new attempt: its spinner window starts when it
+                // began, not at the original bubble's timestamp.
+                attemptedAt: attemptedAt ?? m.timestamp,
+              }
+            : m
+        );
+        if (txId) {
+          messages = messages.some((m) => m.id === txId)
+            ? messages.filter((m) => m.id !== tempId)
+            : messages.map((m) => (m.id === tempId ? { ...m, id: txId } : m));
+        }
+        const lastMsg = messages[messages.length - 1];
+        set({
+          threads: {
+            ...threads,
+            [addr]: {
+              ...thread,
+              messages,
+              lastMessage: lastMsg,
+              lastMessageTimestamp: lastMsg?.timestamp || 0,
+            },
+          },
+        });
+        return;
+      }
+    },
+
+    /**
+     * Mark a placeholder failed after a genuine send failure, unless another
+     * attempt has left it unsettled: that send may have landed, so it must
+     * never regain a retry (TASK-454).
+     */
+    failPendingMessage: (tempId: string) => {
+      const { threads } = get();
+      for (const thread of Object.values(threads)) {
+        const msg = thread.messages.find((m) => m.id === tempId);
+        if (!msg) continue;
+        if (msg.unsettled) return;
+        get().updateMessageStatus(tempId, 'failed');
+        return;
+      }
+    },
+
+    /**
+     * Age out a thread's unsettled placeholders without a network round trip,
+     * so a chat left open can't spin forever even when fetches fail
+     * (TASK-454).
+     */
+    expireUnsettledPlaceholders: (friendAddress: string) => {
+      const { threads } = get();
+      const thread = threads[friendAddress];
+      if (!thread) return;
+      const reconciled = withReconciledPlaceholders(thread, Date.now());
+      if (reconciled === thread) return;
+      if (reconciled.messages.length > 0) {
+        set({ threads: { ...threads, [friendAddress]: reconciled } });
+      } else {
+        const { [friendAddress]: _emptied, ...rest } = threads;
+        set({ threads: rest });
+      }
+    },
+
+    /**
      * Update the status of a message (e.g., from pending to confirmed)
      */
     updateMessageStatus: (txId: string, status: MessageStatus) => {
@@ -314,7 +515,9 @@ export const useMessagesStore = create<MessagesState>()(
     /**
      * Mark all messages in a thread as read
      */
-    markThreadAsRead: async (friendAddress: string) => {
+    markThreadAsRead: async (friendAddress: string, userAddress: string) => {
+      // Chat callbacks can outlive the account whose unread state they saw (TASK-462).
+      if (get().currentUserAddress !== userAddress) return;
       const { threads } = get();
       const thread = threads[friendAddress];
 
@@ -335,8 +538,8 @@ export const useMessagesStore = create<MessagesState>()(
       });
 
       const { currentUserAddress, threads: updatedThreads } = get();
-      if (currentUserAddress) {
-        await persistThreads(currentUserAddress, updatedThreads);
+      if (currentUserAddress === userAddress) {
+        await persistThreads(userAddress, updatedThreads);
       }
     },
 
@@ -377,10 +580,13 @@ export const useMessagesStore = create<MessagesState>()(
      * Check if the user has registered their messaging key on-chain
      */
     checkKeyRegistration: async (userAddress: string) => {
+      const check = startKeyCheck(userAddress);
       try {
         const isRegistered =
           await MessagingService.isKeyRegistered(userAddress);
-        set({ isKeyRegistered: isRegistered });
+        if (keyCheckMayWrite(check, get().currentUserAddress)) {
+          set({ isKeyRegistered: isRegistered });
+        }
         return isRegistered;
       } catch (error) {
         console.error('Failed to check key registration:', error);
@@ -392,15 +598,22 @@ export const useMessagesStore = create<MessagesState>()(
      * Register the user's messaging key on-chain
      */
     registerMessagingKey: async (userAddress: string, pin?: string) => {
+      const check = startKeyCheck(userAddress);
+      const loading = ++loadingOwner;
       try {
         set({ isLoading: true, lastError: null });
         const txId = await MessagingService.registerKey(userAddress, pin);
-        set({ isKeyRegistered: true, isLoading: false });
+        if (keyCheckMayWrite(check, get().currentUserAddress)) {
+          set({ isKeyRegistered: true });
+        }
+        set(doneLoading(loading));
         return txId;
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
-        set({ lastError: message, isLoading: false });
+        // The caller gets the error either way; the store's error and
+        // spinner are only this call's while it still owns them (TASK-460).
+        set(
+          failedLoading(loading, userAddress, error, get().currentUserAddress)
+        );
         throw error;
       }
     },
@@ -410,56 +623,21 @@ export const useMessagesStore = create<MessagesState>()(
      * Call this before fetchThreadMessages when switching accounts.
      */
     loadCachedThreads: async (userAddress: string) => {
-      const { currentUserAddress } = get();
-
-      // Only load if switching to a different account
-      if (currentUserAddress === userAddress) {
-        return;
-      }
-
-      const storageKey = getStorageKey(userAddress);
-      const storedThreadsJson = await AsyncStorage.getItem(storageKey);
-      const rawStoredThreads = storedThreadsJson
-        ? JSON.parse(storedThreadsJson)
-        : {};
-
-      // Also load hidden threads for the new account
-      const hiddenStorageKey = getHiddenStorageKey(userAddress);
-      const storedHiddenJson = await AsyncStorage.getItem(hiddenStorageKey);
-      const storedHidden = storedHiddenJson
-        ? new Set<string>(JSON.parse(storedHiddenJson))
-        : new Set<string>();
-
-      // Deduplicate messages for display. The durable sync cursor is loaded
-      // from its own key (falling back to the greatest held ingestion id) — NOT
-      // recomputed forward from these rows — so a persisted partial drain can't
-      // advance it past rows we never fetched.
-      const { threads: storedThreads } = deduplicateThreads(rawStoredThreads);
-      const committedId = await resolveCommittedCursor(
-        userAddress,
-        storedThreads
-      );
-
-      set({
-        threads: storedThreads,
-        currentUserAddress: userAddress,
-        committedId,
-        hiddenThreads: storedHidden,
-        showHiddenThreads: false,
-      });
-
-      // Re-persist if deduplication changed anything
-      if (JSON.stringify(storedThreads) !== JSON.stringify(rawStoredThreads)) {
-        await persistThreads(userAddress, storedThreads);
-      }
+      await adoptAccount(userAddress, set, get);
     },
 
     /**
      * Fetch messages for a specific thread from the blockchain
      */
     fetchThreadMessages: async (userAddress, friendAddress, pin) => {
+      const loading = ++loadingOwner;
+      const abandon = () => set(doneLoading(loading));
       try {
         set({ isLoading: true, lastError: null });
+
+        // Merge only into this account's own threads, never into whichever
+        // account the store last held (TASK-460).
+        if (!(await adoptAccount(userAddress, set, get))) return abandon();
 
         // Derive messaging keypair (automatic for software wallets)
         const messagingKeyPair = await MessagingService.deriveMessagingKeyPair(
@@ -472,6 +650,10 @@ export const useMessagesStore = create<MessagesState>()(
           friendAddress,
           messagingKeyPair
         );
+
+        // The account may have switched while the fetch was in flight. From
+        // here to the set() below nothing awaits (TASK-460).
+        if (get().currentUserAddress !== userAddress) return abandon();
 
         const { threads } = get();
         const existingThread = threads[friendAddress];
@@ -505,21 +687,22 @@ export const useMessagesStore = create<MessagesState>()(
                 unreadCount: 0, // Reset when explicitly fetching
               },
             },
-            currentUserAddress: userAddress,
-            isLoading: false,
+            ...doneLoading(loading),
           });
 
           await persistThreads(userAddress, get().threads);
+        } else if (existingThread) {
+          // Its only message was a placeholder that aged out (TASK-454).
+          const { [friendAddress]: _emptied, ...rest } = threads;
+          set({ threads: rest, ...doneLoading(loading) });
+          await persistThreads(userAddress, get().threads);
         } else {
-          set({
-            currentUserAddress: userAddress,
-            isLoading: false,
-          });
+          set(doneLoading(loading));
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
-        set({ lastError: message, isLoading: false });
+        set(
+          failedLoading(loading, userAddress, error, get().currentUserAddress)
+        );
       }
     },
 
@@ -535,6 +718,9 @@ export const useMessagesStore = create<MessagesState>()(
     ) => {
       try {
         // Don't set global isLoading to avoid UI flicker during pagination
+        if (!(await adoptAccount(userAddress, set, get))) {
+          return { hasMore: false };
+        }
         const messagingKeyPair = await MessagingService.deriveMessagingKeyPair(
           userAddress,
           pin
@@ -550,6 +736,11 @@ export const useMessagesStore = create<MessagesState>()(
         );
 
         if (messages.length === 0) {
+          return { hasMore: false };
+        }
+
+        // As in fetchThreadMessages: nothing awaits from here to the set().
+        if (get().currentUserAddress !== userAddress) {
           return { hasMore: false };
         }
 
@@ -615,64 +806,24 @@ export const useMessagesStore = create<MessagesState>()(
         return;
       }
       inFlightThreadFetches.add(userAddress);
+      const loading = ++loadingOwner;
+      const abandon = () => set(doneLoading(loading));
       try {
         set({ isLoading: true, lastError: null });
 
-        const { currentUserAddress } = get();
-
-        // If account changed, load from storage for the new account
-        if (currentUserAddress !== userAddress) {
-          const storageKey = getStorageKey(userAddress);
-          const storedThreadsJson = await AsyncStorage.getItem(storageKey);
-          const rawStoredThreads = storedThreadsJson
-            ? JSON.parse(storedThreadsJson)
-            : {};
-
-          // Also load hidden threads for the new account
-          const hiddenStorageKey = getHiddenStorageKey(userAddress);
-          const storedHiddenJson = await AsyncStorage.getItem(hiddenStorageKey);
-          const storedHidden = storedHiddenJson
-            ? new Set<string>(JSON.parse(storedHiddenJson))
-            : new Set<string>();
-
-          // Deduplicate messages for display. The durable sync cursor is
-          // loaded from its own key (falling back to the greatest held
-          // ingestion id) — NOT recomputed forward from these rows — so a
-          // persisted partial drain can't advance it past unfetched rows.
-          const { threads: storedThreads } =
-            deduplicateThreads(rawStoredThreads);
-          const committedId = await resolveCommittedCursor(
-            userAddress,
-            storedThreads
-          );
-
-          set({
-            threads: storedThreads,
-            currentUserAddress: userAddress,
-            committedId,
-            isKeyRegistered: false, // Will be checked below
-            hiddenThreads: storedHidden,
-            showHiddenThreads: false, // Reset to default when switching accounts
-          });
-
-          // Re-persist if deduplication changed anything
-          if (
-            JSON.stringify(storedThreads) !== JSON.stringify(rawStoredThreads)
-          ) {
-            await persistThreads(userAddress, storedThreads);
-          }
-        }
+        if (!(await adoptAccount(userAddress, set, get))) return abandon();
 
         // Check key registration status
+        const check = startKeyCheck(userAddress);
         const isRegistered =
           await MessagingService.isKeyRegistered(userAddress);
-        set({ isKeyRegistered: isRegistered });
+        if (get().currentUserAddress !== userAddress) return abandon();
+        if (keyCheckMayWrite(check, userAddress)) {
+          set({ isKeyRegistered: isRegistered });
+        }
 
         // If not registered, can't fetch messages (need to register first)
-        if (!isRegistered) {
-          set({ isLoading: false });
-          return;
-        }
+        if (!isRegistered) return abandon();
 
         // Derive messaging keypair (automatic for software wallets)
         const messagingKeyPair = await MessagingService.deriveMessagingKeyPair(
@@ -689,12 +840,12 @@ export const useMessagesStore = create<MessagesState>()(
         // committed cursor yet (first sync for this account), afterId is
         // undefined and the service bootstraps from the newest window. The
         // service drains the range so a burst of more than the page limit can't
-        // be truncated, and returns `complete` + `maxId` so we advance the
-        // durable cursor only through a fully-drained range.
+        // be truncated, and returns `stop` + `maxId` so we advance the durable
+        // cursor through the rows it fetched (see computeSyncCursor).
         const committed = get().committedId;
         const afterId = committed != null ? committed : undefined;
 
-        const { conversations, complete, maxId } =
+        const { conversations, stop, maxId } =
           await MessagingService.fetchAllConversations(
             userAddress,
             messagingKeyPair,
@@ -704,11 +855,16 @@ export const useMessagesStore = create<MessagesState>()(
 
         // The active account may have changed while this request was in flight
         // (account switch). Abandon the stale result rather than merge it into,
-        // or persist its cursor over, another account's state. Everything from
-        // here to the set() below runs without awaiting, so the account can't
-        // change mid-writeback.
-        if (get().currentUserAddress !== userAddress) {
-          return;
+        // or persist its cursor over, another account's state. The drain is
+        // also only valid against the cursor it started from: if that moved
+        // (a clearCache and reload), its rows are not the whole range above
+        // the cursor it would commit (TASK-460). Everything from here to the
+        // set() below runs without awaiting, so neither can change mid-writeback.
+        if (
+          get().currentUserAddress !== userAddress ||
+          get().committedId !== committed
+        ) {
+          return abandon();
         }
 
         const { threads: existingThreads } = get();
@@ -747,21 +903,26 @@ export const useMessagesStore = create<MessagesState>()(
           };
         }
 
-        // Preserve threads not in this fetch (they still exist)
+        // Preserve threads not in this fetch (they still exist), ageing out
+        // any placeholder whose spinner window has ended (TASK-454).
+        const now = Date.now();
         for (const [addr, thread] of Object.entries(existingThreads)) {
           if (!newThreads[addr]) {
-            newThreads[addr] = thread;
+            const reconciled = withReconciledPlaceholders(thread, now);
+            if (reconciled.messages.length > 0) newThreads[addr] = reconciled;
           }
         }
 
-        // Advance the durable committed cursor ONLY through a fully-drained
-        // range, to the greatest ingestion id fetched (see computeSyncCursor).
-        // A truncated drain, or the indexer fallback (maxId null), leaves the
-        // cursor untouched so nothing below it is skipped.
+        // Advance the durable committed cursor to the greatest ingestion id
+        // fetched (see computeSyncCursor). That covers a complete drain AND one
+        // stopped by the page cap: the rows are a contiguous prefix, and not
+        // advancing would refetch the same prefix on every poll. A stalled
+        // drain, or the indexer fallback (maxId null), leaves the cursor
+        // untouched so nothing below it is skipped.
         const previousCommitted = get().committedId;
         const nextCommitted = computeSyncCursor({
           previous: previousCommitted,
-          complete,
+          stop,
           maxId,
         });
 
@@ -769,7 +930,7 @@ export const useMessagesStore = create<MessagesState>()(
           threads: newThreads,
           currentUserAddress: userAddress,
           committedId: nextCommitted,
-          isLoading: false,
+          ...doneLoading(loading),
         });
 
         // Persist the message rows BEFORE the cursor, and only advance the
@@ -777,14 +938,24 @@ export const useMessagesStore = create<MessagesState>()(
         // be durably ahead of the rows it represents: a stale (lower) cursor
         // just re-fetches on the next sync (dedup-safe), whereas the reverse
         // would skip the just-fetched rows below the advanced cursor.
+        // A clearCache or switch while the rows were being written leaves the
+        // durable cursor where it was, which is the safe direction (TASK-460).
+        // This check suffices because AsyncStorage runs operations in issue
+        // order (a serial queue on iOS and Android): a write issued here,
+        // before a clearCache, lands before that clearCache's removals.
         const rowsPersisted = await persistThreads(userAddress, newThreads);
-        if (rowsPersisted && nextCommitted !== previousCommitted) {
+        if (
+          rowsPersisted &&
+          nextCommitted !== previousCommitted &&
+          get().currentUserAddress === userAddress &&
+          get().committedId === nextCommitted
+        ) {
           await persistCommittedId(userAddress, nextCommitted);
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
-        set({ lastError: message, isLoading: false });
+        set(
+          failedLoading(loading, userAddress, error, get().currentUserAddress)
+        );
       } finally {
         inFlightThreadFetches.delete(userAddress);
       }
@@ -806,7 +977,10 @@ export const useMessagesStore = create<MessagesState>()(
         // The interval keeps running — the next tick after connectivity
         // returns syncs from the same committed cursor, so nothing is lost.
         if (shouldSkipForOffline('messages-poll')) return;
-        get().fetchAllThreads(userAddress);
+        // TASK-462: only the wallet's active account may sync. This also
+        // permits a locked cold start, where the store has no account yet.
+        if (activeWalletAddress() === userAddress)
+          get().fetchAllThreads(userAddress);
       }, intervalMs);
 
       set({ pollingInterval: interval });
@@ -840,6 +1014,8 @@ export const useMessagesStore = create<MessagesState>()(
       // Clear messaging key cache in the service
       MessagingService.clearKeyCache();
 
+      // A cache load still in flight must not re-install the cleared account.
+      accountEpoch++;
       set({
         threads: {},
         currentUserAddress: null,
@@ -872,7 +1048,8 @@ export const useMessagesStore = create<MessagesState>()(
  */
 function mergeMessagesById(
   existing: Message[],
-  incoming: Message[]
+  incoming: Message[],
+  now: number = Date.now()
 ): Message[] {
   const merged = [...existing];
   for (const msg of incoming) {
@@ -892,7 +1069,139 @@ function mergeMessagesById(
       };
     }
   }
-  return merged;
+  return reconcilePlaceholders(merged, now);
+}
+
+function withReconciledPlaceholders(
+  thread: MessageThread,
+  now: number
+): MessageThread {
+  const messages = reconcilePlaceholders(thread.messages, now);
+  if (messages === thread.messages) return thread;
+  const lastMsg = messages[messages.length - 1];
+  return {
+    ...thread,
+    messages,
+    lastMessage: lastMsg,
+    lastMessageTimestamp: lastMsg?.timestamp || 0,
+  };
+}
+
+// Only a settled placeholder: one still in flight resolves through its send.
+function isTxidlessPlaceholder(message: Message): boolean {
+  return (
+    message.unsettled === true &&
+    message.direction === 'sent' &&
+    message.status === 'pending'
+  );
+}
+
+const attemptStart = (m: Message) => m.attemptedAt ?? m.timestamp;
+
+/**
+ * Age out txid-less unsettled placeholders past PENDING_PLACEHOLDER_TTL_MS
+ * (TASK-454). They are never matched to chain records by content: without a
+ * txid there is no identity, and content can't tell two same-text attempts
+ * apart.
+ */
+function reconcilePlaceholders(messages: Message[], now: number): Message[] {
+  const expired = messages.filter(
+    (m) =>
+      isTxidlessPlaceholder(m) &&
+      now - attemptStart(m) > PENDING_PLACEHOLDER_TTL_MS
+  );
+  if (expired.length === 0) return messages;
+  const drop = new Set(expired.map((m) => m.id));
+  return messages.filter((m) => !drop.has(m.id));
+}
+
+// In-flight and unsettled placeholders are memory-only (TASK-454): a stored
+// one would reload as a spinner that nothing can resolve. A failed placeholder
+// is kept, so its retry survives a restart.
+function isMemoryOnlyPlaceholder(m: Message): boolean {
+  return m.status === 'pending' && m.id.startsWith(PENDING_PLACEHOLDER_PREFIX);
+}
+
+function withoutMemoryOnlyPlaceholders(
+  threads: Record<string, MessageThread>
+): Record<string, MessageThread> {
+  const out: Record<string, MessageThread> = {};
+  for (const [addr, thread] of Object.entries(threads)) {
+    if (!thread.messages.some(isMemoryOnlyPlaceholder)) {
+      out[addr] = thread;
+      continue;
+    }
+    const messages = thread.messages.filter((m) => !isMemoryOnlyPlaceholder(m));
+    if (messages.length === 0) continue;
+    const lastMsg = messages[messages.length - 1];
+    out[addr] = {
+      ...thread,
+      messages,
+      lastMessage: lastMsg,
+      lastMessageTimestamp: lastMsg?.timestamp || 0,
+    };
+  }
+  return out;
+}
+
+type SetState = (partial: Partial<MessagesState>) => void;
+type GetState = () => MessagesState;
+
+/**
+ * Make userAddress the store's account, loading its cache when the store
+ * holds another one (TASK-460). TASK-462 refuses stale calls for a non-active
+ * account before taking an epoch. Resolves false when clearCache or a newer
+ * active-account adoption superseded this call.
+ */
+async function adoptAccount(
+  userAddress: string,
+  set: SetState,
+  get: GetState
+): Promise<boolean> {
+  if (activeWalletAddress() !== userAddress) return false;
+  const epoch = ++accountEpoch;
+  if (get().currentUserAddress === userAddress) return true;
+
+  const storedThreadsJson = await AsyncStorage.getItem(
+    getStorageKey(userAddress)
+  );
+  const rawStoredThreads = storedThreadsJson
+    ? JSON.parse(storedThreadsJson)
+    : {};
+
+  // Also load hidden threads for the new account
+  const storedHiddenJson = await AsyncStorage.getItem(
+    getHiddenStorageKey(userAddress)
+  );
+  const storedHidden = storedHiddenJson
+    ? new Set<string>(JSON.parse(storedHiddenJson))
+    : new Set<string>();
+
+  // Deduplicate messages for display. The durable sync cursor is loaded from
+  // its own key (falling back to the greatest held ingestion id) — NOT
+  // recomputed forward from these rows — so a persisted partial drain can't
+  // advance it past rows we never fetched.
+  const { threads: storedThreads } = deduplicateThreads(rawStoredThreads);
+  const committedId = await resolveCommittedCursor(userAddress, storedThreads);
+
+  if (epoch !== accountEpoch || activeWalletAddress() !== userAddress)
+    return false;
+
+  accountSwitches++;
+  set({
+    threads: storedThreads,
+    currentUserAddress: userAddress,
+    committedId,
+    isKeyRegistered: false, // Unknown for this account until checked
+    hiddenThreads: storedHidden,
+    showHiddenThreads: false, // Reset to default when switching accounts
+  });
+
+  // Re-persist if deduplication changed anything
+  if (JSON.stringify(storedThreads) !== JSON.stringify(rawStoredThreads)) {
+    await persistThreads(userAddress, storedThreads);
+  }
+  return get().currentUserAddress === userAddress;
 }
 
 /**
@@ -917,7 +1226,10 @@ function deduplicateThreads(threads: Record<string, MessageThread>): {
 } {
   const deduped: Record<string, MessageThread> = {};
 
-  for (const [friendAddress, thread] of Object.entries(threads)) {
+  // A placeholder stored by an older build can't be resolved (TASK-454).
+  for (const [friendAddress, thread] of Object.entries(
+    withoutMemoryOnlyPlaceholders(threads)
+  )) {
     // Deduplicate messages by ID
     const seen = new Set<string>();
     const uniqueMessages: Message[] = [];
@@ -955,9 +1267,12 @@ async function persistThreads(
 ): Promise<boolean> {
   try {
     const storageKey = getStorageKey(userAddress);
-    // Only persist threads that have actual messages
+    // Only persist threads that have actual messages, and never a
+    // memory-only placeholder (TASK-454)
     const threadsToSave = Object.fromEntries(
-      Object.entries(threads).filter(([, thread]) => thread.messages.length > 0)
+      Object.entries(withoutMemoryOnlyPlaceholders(threads)).filter(
+        ([, thread]) => thread.messages.length > 0
+      )
     );
     await AsyncStorage.setItem(storageKey, JSON.stringify(threadsToSave));
     return true;
@@ -1065,7 +1380,7 @@ async function persistHiddenThreads(
  * Uses stable selector that doesn't create new objects
  */
 export function useTotalUnreadCount(): number {
-  const threads = useMessagesStore((state) => state.threads);
+  const threads = useVisibleThreads();
   return Object.values(threads).reduce(
     (sum, thread) => sum + thread.unreadCount,
     0
@@ -1076,7 +1391,8 @@ export function useTotalUnreadCount(): number {
  * Hook to get a specific thread (reactive)
  */
 export function useThread(friendAddress: string): MessageThread | null {
-  return useMessagesStore((state) => state.threads[friendAddress] || null);
+  const threads = useVisibleThreads();
+  return threads[friendAddress] || null;
 }
 
 /**
@@ -1084,7 +1400,7 @@ export function useThread(friendAddress: string): MessageThread | null {
  * Filters out hidden threads unless showHiddenThreads is true
  */
 export function useSortedThreads(): MessageThread[] {
-  const threads = useMessagesStore((state) => state.threads);
+  const threads = useVisibleThreads();
   const hiddenThreads = useMessagesStore((state) => state.hiddenThreads);
   const showHiddenThreads = useMessagesStore(
     (state) => state.showHiddenThreads
@@ -1101,7 +1417,7 @@ export function useSortedThreads(): MessageThread[] {
  * Hook to get count of hidden threads (reactive)
  */
 export function useHiddenThreadsCount(): number {
-  const threads = useMessagesStore((state) => state.threads);
+  const threads = useVisibleThreads();
   const hiddenThreads = useMessagesStore((state) => state.hiddenThreads);
   return Object.keys(threads).filter((addr) => hiddenThreads.has(addr)).length;
 }
@@ -1111,7 +1427,9 @@ export function useHiddenThreadsCount(): number {
  */
 export function useIsThreadHidden(friendAddress: string): boolean {
   const hiddenThreads = useMessagesStore((state) => state.hiddenThreads);
-  return hiddenThreads.has(friendAddress);
+  const owner = useMessagesStore((state) => state.currentUserAddress);
+  const active = useActiveWalletAddress();
+  return owner !== null && owner === active && hiddenThreads.has(friendAddress);
 }
 
 /**

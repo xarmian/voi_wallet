@@ -11,6 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import MimirApiService, { Arc200Approval } from '@/services/mimir';
 import EnvoiService from '@/services/envoi';
 import { ClaimableItem, TokenApproval } from '@/types/claimable';
+import { dedupeLatestApprovals } from '@/utils/arc200Approvals';
 
 const HIDDEN_STORAGE_KEY_PREFIX = '@claimable/hidden/';
 
@@ -391,8 +392,13 @@ async function runFetchApprovals(
     const response =
       await MimirApiService.getArc200ApprovalsForSpender(accountAddress);
 
+    // GH #20: one claimable item per (contract, owner -> spender), from the
+    // latest approval event. Dedupe BEFORE the zero filter, so a newer zero
+    // approval (revoked or spent) hides an older non-zero one.
+    const latestApprovals = dedupeLatestApprovals(response.approvals);
+
     // Filter out zero-amount approvals
-    const nonZeroApprovals = response.approvals.filter(
+    const nonZeroApprovals = latestApprovals.filter(
       (approval) => approval.amount !== '0'
     );
 

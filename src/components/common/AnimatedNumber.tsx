@@ -18,8 +18,8 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   useDerivedValue,
-  runOnJS,
 } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 import { useTheme } from '@/contexts/ThemeContext';
 
 interface AnimatedNumberProps {
@@ -120,7 +120,7 @@ export const AnimatedNumber: React.FC<AnimatedNumberProps> = ({
   // Update display text based on animated value
   useDerivedValue(() => {
     const formatted = formatNumber(animatedValue.value);
-    runOnJS(setDisplayText)(`${prefix}${formatted}${suffix}`);
+    scheduleOnRN(setDisplayText, `${prefix}${formatted}${suffix}`);
     return formatted;
   });
 

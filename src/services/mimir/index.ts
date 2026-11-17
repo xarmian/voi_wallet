@@ -1,4 +1,7 @@
 import { shouldSkipForOffline } from '@/services/network/offline';
+import { fetchBuffered, BufferedResponse } from '@/utils/fetchBuffered';
+import { redactAddress, redactError } from '@/utils/logRedaction';
+import { withTimeout } from '@/utils/withTimeout';
 
 export interface MimirAsset {
   name: string;
@@ -127,6 +130,21 @@ export class MimirApiError extends Error {
       this.cause = cause;
     }
   }
+}
+
+/**
+ * True when a failed request says Mimir itself looks unhealthy: the transport
+ * gave up (timeout, DNS, offline; the retry ladder already ran), a 5xx, or a
+ * 429. Retrying the same work one owner at a time would only add load to it.
+ * Anything else (a 4xx, a malformed body, an unknown error) says nothing about
+ * the service's health and may be specific to one owner.
+ */
+function isServiceDegraded(error: unknown): boolean {
+  if (!(error instanceof MimirApiError)) return false;
+  if (error.code === 'NETWORK_ERROR') return true;
+  return (
+    error.status !== undefined && (error.status >= 500 || error.status === 429)
+  );
 }
 
 export class MimirApiService {
@@ -387,7 +405,7 @@ export class MimirApiService {
   private async fetchWithRetry(
     url: string,
     init?: RequestInit
-  ): Promise<Response> {
+  ): Promise<BufferedResponse> {
     // TASK-191: while the device is definitely offline, skip the ladder
     // outright rather than burning `retryAttempts` fetches plus their backoff
     // on a request that cannot reach the network. Deliberately the SAME error
@@ -405,28 +423,23 @@ export class MimirApiService {
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(
-          () => controller.abort(),
+        // TASK-440 #9: the deadline covers the body read too.
+        return await fetchBuffered(
+          url,
+          {
+            // Caller-supplied method/body (e.g. a POST batch) override the
+            // GET default; headers below are merged over any the caller passes so
+            // Accept/Content-Type stay set. Existing GET callers pass no init and
+            // are unaffected.
+            ...init,
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+              ...init?.headers,
+            },
+          },
           this.config.timeout
         );
-
-        const response = await fetch(url, {
-          signal: controller.signal,
-          // Caller-supplied method/body (e.g. a POST batch) override the
-          // GET default; headers below are merged over any the caller passes so
-          // Accept/Content-Type stay set. Existing GET callers pass no init and
-          // are unaffected.
-          ...init,
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            ...init?.headers,
-          },
-        });
-
-        clearTimeout(timeoutId);
-        return response;
       } catch (error) {
         lastError =
           error instanceof Error ? error : new Error('Unknown fetch error');
@@ -607,6 +620,20 @@ export class MimirApiService {
   private static readonly MAX_BATCH_ACCOUNTS = 100;
 
   /**
+   * Per-owner fallback limits (TASK-488). When a batched request fails for a
+   * reason that does not say the service is unhealthy, the chunk is retried one
+   * owner at a time; at most this many of those requests are in flight at once
+   * across the whole batchGetArc200Balances call...
+   */
+  static readonly FALLBACK_CONCURRENCY = 4;
+
+  /**
+   * ...and the fallback gets this much wall-clock time in total. Owners it has
+   * not answered by then are reported in `failed`, never as a zero balance.
+   */
+  static readonly FALLBACK_BUDGET_MS = 20_000;
+
+  /**
    * Fetch balances for many owners of ONE contract in a single request, using
    * the server's `accountIds` batch parameter (mimir-api TASK-282).
    *
@@ -693,6 +720,26 @@ export class MimirApiService {
       byContract.set(pair.contractId, owners);
     }
 
+    // Shared by every per-owner fallback in this call (TASK-488): a counting
+    // limiter, and one wall-clock budget that starts when the first fallback
+    // does. A slot is handed straight to the next waiter on release so the
+    // limit holds even when several are queued.
+    let activeFallbacks = 0;
+    const fallbackWaiters: (() => void)[] = [];
+    const acquireFallbackSlot = async (): Promise<void> => {
+      if (activeFallbacks < MimirApiService.FALLBACK_CONCURRENCY) {
+        activeFallbacks++;
+        return;
+      }
+      await new Promise<void>((resolve) => fallbackWaiters.push(resolve));
+    };
+    const releaseFallbackSlot = (): void => {
+      const next = fallbackWaiters.shift();
+      if (next) next();
+      else activeFallbacks--;
+    };
+    let fallbackDeadline: number | undefined;
+
     await Promise.all(
       Array.from(byContract.entries()).map(async ([contractId, owners]) => {
         for (
@@ -716,29 +763,70 @@ export class MimirApiService {
               );
             }
           } catch (error) {
-            // Batch failed: fall back to per-owner so one bad request cannot
-            // make a whole contract's balances unknown, and per-owner failures
-            // stay isolated in `failed` (TASK-188 semantics preserved).
+            if (isServiceDegraded(error)) {
+              // Mimir looks unhealthy: serial per-owner retries, each with its
+              // own timeout and retries, would take minutes, hold claimable
+              // validation pending and add load to the struggling service. The
+              // chunk is unknown, not zero.
+              console.warn(
+                `Batch balance fetch failed for contract ${contractId} (service degraded); not retrying per owner:`,
+                error
+              );
+              for (const owner of chunk) {
+                failed.add(`${contractId}_${owner}`);
+              }
+              continue;
+            }
+
+            // Batch failed for a reason that is not about service health:
+            // fall back to per-owner so one bad request cannot make a whole
+            // contract's balances unknown, and per-owner failures stay
+            // isolated in `failed` (TASK-188 semantics preserved). Bounded
+            // concurrency and one shared deadline (TASK-488).
             console.warn(
               `Batch balance fetch failed for contract ${contractId}; falling back to per-owner:`,
               error
             );
-            for (const owner of chunk) {
-              try {
-                balanceMap.set(
-                  `${contractId}_${owner}`,
-                  await this.getArc200Balance(contractId, owner)
-                );
-              } catch (err) {
-                console.error(
-                  `Failed to fetch balance for ${owner} on contract ${contractId}:`,
-                  err
-                );
-                // Record the failure instead of writing '0': the caller must be
-                // able to distinguish "owner holds nothing" from "we don't know".
-                failed.add(`${contractId}_${owner}`);
-              }
-            }
+            fallbackDeadline ??=
+              Date.now() + MimirApiService.FALLBACK_BUDGET_MS;
+            const deadline = fallbackDeadline;
+            await Promise.all(
+              chunk.map(async (owner) => {
+                const key = `${contractId}_${owner}`;
+                await acquireFallbackSlot();
+                try {
+                  const remaining = deadline - Date.now();
+                  if (remaining <= 0) {
+                    // Budget spent before this owner was even asked.
+                    failed.add(key);
+                    return;
+                  }
+                  try {
+                    // The request keeps running after the deadline (fetch is
+                    // not aborted here); its late answer is discarded.
+                    balanceMap.set(
+                      key,
+                      await withTimeout(
+                        this.getArc200Balance(contractId, owner),
+                        remaining,
+                        new Error('Mimir per-owner fallback budget exhausted')
+                      )
+                    );
+                  } catch (err) {
+                    console.error(
+                      `Failed to fetch balance for ${redactAddress(owner)} on contract ${contractId}:`,
+                      redactError(err)
+                    );
+                    // Record the failure instead of writing '0': the caller
+                    // must be able to distinguish "owner holds nothing" from
+                    // "we don't know".
+                    failed.add(key);
+                  }
+                } finally {
+                  releaseFallbackSlot();
+                }
+              })
+            );
           }
         }
       })

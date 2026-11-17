@@ -113,7 +113,7 @@ export const FIXTURE_APP_ID = 67890;
 /**
  * Round-trip a built transaction through the EXACT production decode path:
  * encode -> base64 -> `algosdk.decodeUnsignedTransaction`. This is what
- * TransactionRequestScreen / UniversalTransactionSigningScreen feed to the
+ * SignRequestController / UniversalTransactionSigningScreen feed to the
  * danger detector and signer, so fixtures decoded this way expose fields in the
  * same shape production sees (e.g. asset close-out lives under
  * `assetTransfer.closeRemainderTo`, app id under `applicationCall.appIndex`).

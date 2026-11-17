@@ -73,40 +73,40 @@ const settle = () => act(async () => {});
 
 describe('OfflineBanner', () => {
   it('renders nothing while online', async () => {
-    const { queryByTestId } = render(<OfflineBanner />);
+    const { queryByTestId } = await render(<OfflineBanner />);
     await settle();
     expect(queryByTestId('offline-banner')).toBeNull();
   });
 
   it('renders while offline', async () => {
     mockCurrent = OFFLINE;
-    const { getByTestId } = render(<OfflineBanner />);
+    const { getByTestId } = await render(<OfflineBanner />);
     await settle();
     expect(getByTestId('offline-banner')).toBeTruthy();
   });
 
   it('appears and disappears as connectivity changes', async () => {
-    const { queryByTestId } = render(<OfflineBanner />);
+    const { queryByTestId } = await render(<OfflineBanner />);
     await settle();
     expect(queryByTestId('offline-banner')).toBeNull();
 
-    act(() => {
+    await act(() => {
       mockEmit?.(OFFLINE);
     });
     expect(queryByTestId('offline-banner')).toBeTruthy();
 
-    act(() => {
+    await act(() => {
       mockEmit?.(ONLINE);
     });
     expect(queryByTestId('offline-banner')).toBeNull();
   });
 
   it('unsubscribes on unmount', async () => {
-    const { unmount } = render(<OfflineBanner />);
+    const { unmount } = await render(<OfflineBanner />);
     await settle();
     expect(mockEmit).not.toBeNull();
 
-    unmount();
+    await unmount();
     expect(mockEmit).toBeNull();
   });
 });

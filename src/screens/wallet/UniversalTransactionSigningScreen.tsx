@@ -1,4 +1,23 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import RequestAgeLabel from '@/components/walletconnect/RequestAgeLabel';
+import {
+  RequestCoordinator,
+  type ExitReason,
+  type RequestRef,
+} from '@/services/walletconnect/requestCoordinator';
+import Toast from 'react-native-toast-message';
+import {
+  routeReviewBinding,
+  type ReviewBinding,
+} from '@/services/walletconnect/reviewBinding';
+import { ReviewEndedError } from '@/services/auth/ReviewEndedError';
+import React, {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  useCallback,
+  useSyncExternalStore,
+} from 'react';
 import {
   View,
   Text,
@@ -6,12 +25,25 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  AppState,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import algosdk from 'algosdk';
+import * as LocalAuthentication from 'expo-local-authentication';
+import { useAuth } from '@/contexts/AuthContext';
+import {
+  reviewGrant,
+  walletConnectReviewDigest,
+} from '@/services/auth/reviewGrant';
+import { AppLockSignal } from '@/services/secure/appLockState';
+import LockedRequestGate, {
+  dappHost,
+} from '@/components/walletconnect/LockedRequestGate';
+import { signingSummary } from '@/utils/signingSummary';
 
 import { RootStackParamList } from '@/navigation/AppNavigator';
 import { AccountMetadata, AssetParams } from '@/types/wallet';
@@ -35,14 +67,18 @@ import {
 import { formatBaseUnitsToAmount } from '@/utils/bigint';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import {
+  useAppSwitcherProtection,
+  useSecureScreen,
+} from '@/hooks/useSecureScreen';
 import { Theme } from '@/constants/themes';
 import TransactionDangerBanner from '@/components/transaction/TransactionDangerBanner';
 import {
-  detectTransactionDangers,
-  aggregateDangers,
-  hasAnyDanger,
-  TransactionDangers,
+  describeTransactionDangers,
+  DangerItem,
 } from '@/utils/transactionDangers';
+import { useTransactionDangers } from '@/hooks/useTransactionDangers';
+import { isRequestMismatchError, toErrorAlert } from '@/utils/errorMapping';
 import {
   getNavigationCallbacks,
   clearNavigationCallbacks,
@@ -54,6 +90,11 @@ type UniversalTransactionSigningScreenRouteProp = RouteProp<
   RootStackParamList,
   'UniversalTransactionSigning'
 >;
+
+type SigningRouteParams = RootStackParamList['UniversalTransactionSigning'];
+type WalletConnectRouteParams = NonNullable<
+  SigningRouteParams['walletConnect']
+> & { ref?: RequestRef };
 
 interface Props {
   navigation: UniversalTransactionSigningScreenNavigationProp;
@@ -77,7 +118,12 @@ interface ParsedTransaction {
   /** ASA index from the type-specific field; `undefined` means native currency. */
   assetId?: bigint;
   type: string;
-  dangers?: TransactionDangers;
+  /** Every dangerous operation in this entry; undefined if undecodable. */
+  dangers?: DangerItem[];
+  /** False for a pre-signed or undecodable entry: this review doesn't sign it. */
+  signs?: boolean;
+  /** An application call: it may change any asset via inner transactions. */
+  mayTouchAssets?: boolean;
 }
 
 /** How a single account will produce its signature, resolved on chain. */
@@ -143,6 +189,17 @@ function decodeNoteForDisplay(note: Uint8Array): string | undefined {
 }
 
 /**
+ * TASK-437 (Luna P2): a WalletConnect review stays out of screenshots and the
+ * app-switcher snapshot for as long as it is mounted. Rendered only for dApp
+ * requests, so in-app signing screens keep their current capture behaviour.
+ */
+function WalletConnectPrivacyGuard(): null {
+  useSecureScreen();
+  useAppSwitcherProtection();
+  return null;
+}
+
+/**
  * Decode the batch for review.
  *
  * DR-9 — `decoded` is same-length and index-preserving: an entry that cannot be
@@ -163,6 +220,7 @@ function parseBatch(transactionBytes: string[]): {
       to: 'Protocol Transaction',
       fee: 0n,
       type: 'pre-signed / unreadable',
+      signs: false,
     });
     decoded.push(undefined);
   };
@@ -242,8 +300,11 @@ function parseBatch(transactionBytes: string[]): {
         note: decodeNoteForDisplay(txn.note),
         assetId,
         type: isAlreadySigned ? `${txnType} (pre-signed)` : txnType,
-        // Only surface danger fields for transactions we are about to sign.
-        dangers: isAlreadySigned ? undefined : detectTransactionDangers(txn),
+        // Pre-signed entries are not listed, but whether they may touch an
+        // asset decides whether its authority changes can be narrowed.
+        dangers: describeTransactionDangers(txn),
+        signs: !isAlreadySigned,
+        mayTouchAssets: !!txn.applicationCall,
       });
     } catch (error) {
       console.error('Failed to parse transaction:', error);
@@ -254,10 +315,35 @@ function parseBatch(transactionBytes: string[]): {
   return { parsed, decoded };
 }
 
+type ReviewParams = SigningRouteParams & {
+  walletConnect?: WalletConnectRouteParams;
+};
+
+/** The route screen: a thin wrapper that binds the review to its router. */
 export default function UniversalTransactionSigningScreen({
   navigation,
   route,
 }: Props) {
+  const binding = useMemo(
+    () => routeReviewBinding(navigation, route.key),
+    [navigation, route.key]
+  );
+  return (
+    <TransactionReview
+      params={route.params as ReviewParams}
+      binding={binding}
+    />
+  );
+}
+
+export function TransactionReview({
+  params,
+  binding,
+}: {
+  params: ReviewParams;
+  binding: ReviewBinding;
+}) {
+  const { navigation } = binding;
   const {
     transactions,
     onSuccess: directOnSuccess,
@@ -267,7 +353,7 @@ export default function UniversalTransactionSigningScreen({
     networkId,
     chainId,
     walletConnect,
-  } = route.params;
+  } = params;
 
   // DR-15 — the ARC-0001 entries are the single source of truth for a dApp
   // request: the wallet must review and sign exactly the bytes the dApp sent,
@@ -286,17 +372,66 @@ export default function UniversalTransactionSigningScreen({
   // other direction). Coerce to the real shape so display fields (color/label) and
   // the unified request account (which needs `type`/`authAddress` for signer
   // selection) are correctly typed. Behavior-preserving: same runtime object.
-  const account = route.params.account as unknown as AccountMetadata;
+  const account = params.account as unknown as AccountMetadata;
 
   // Get callbacks from registry if callbackId provided, otherwise use direct callbacks
   const registryCallbacks = getNavigationCallbacks(callbackId);
   const onSuccess = registryCallbacks?.onSuccess || directOnSuccess;
   const onReject = registryCallbacks?.onReject || directOnReject;
+  const onEnd = registryCallbacks?.onEnd;
+  const callbackNavigation = binding.nav;
+  const endedRef = useRef(false);
 
+  const { authState } = useAuth();
+  const requestKey = walletConnect?.requestKey ?? '';
+  const requiresReviewUnlock =
+    !!walletConnect && (authState.isLocked || !authState.isAuthenticated);
+  const grantValid = useSyncExternalStore(reviewGrant.subscribe, () =>
+    reviewGrant.isValid(requestKey)
+  );
+  const grantUnspent = useSyncExternalStore(reviewGrant.subscribe, () =>
+    reviewGrant.isUnspent(requestKey)
+  );
+  const [foreground, setForeground] = useState(
+    AppState.currentState !== 'background' &&
+      AppState.currentState !== 'inactive'
+  );
+  const canReview = !requiresReviewUnlock || (grantValid && foreground);
+  const [biometricLabel, setBiometricLabel] = useState('biometrics');
+  useEffect(() => {
+    LocalAuthentication.supportedAuthenticationTypesAsync()
+      .then((types) => {
+        setBiometricLabel(
+          Platform.OS === 'ios'
+            ? types.includes(
+                LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION
+              )
+              ? 'Face ID'
+              : 'Touch ID'
+            : 'biometrics'
+        );
+      })
+      .catch(() => {});
+  }, []);
+
+  const handlingOutcome = useRef(false);
+  // reviewFlowActive carries the once-per-flow behaviour: the listener acts only
+  // while a flow exists. reviewLapseHandled only blocks the re-entrant emit that
+  // the listener's own cancel() causes while it is handling a lapse.
+  const reviewLapseHandled = useRef(false);
+  const reviewFlowActive = useRef(false);
+  const rejecting = useRef(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [currentRequest, setCurrentRequest] =
     useState<UnifiedTransactionRequest | null>(null);
   const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
+  const endSittingState = useCallback(() => {
+    reviewFlowActive.current = false;
+    reviewLapseHandled.current = false;
+    setDangerAcknowledged(false);
+    setShowAuthModal(false);
+    setCurrentRequest(null);
+  }, []);
   /** Resolved ASA params keyed by asset id; `null` = looked up, unavailable. */
   const [assetParams, setAssetParams] = useState<
     Record<string, AssetParams | null>
@@ -312,14 +447,160 @@ export default function UniversalTransactionSigningScreen({
   const styles = useThemedStyles(createStyles);
   const authController = useTransactionAuthController();
 
+  const endRequest = useCallback(
+    async (reason: ExitReason) => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      authController.cancel();
+      endSittingState();
+      authController.clearUserCancellation();
+      await onEnd?.(reason, callbackNavigation);
+    },
+    [authController, onEnd, endSittingState, callbackNavigation]
+  );
+
+  useEffect(() => {
+    if (!walletConnect?.ref) return;
+    return RequestCoordinator.getInstance().subscribe(
+      walletConnect.ref,
+      ({ reason }) => {
+        if (
+          endedRef.current ||
+          (reason !== 'expired' && reason !== 'session-ended')
+        )
+          return;
+        Alert.alert(
+          'Request ended',
+          reason === 'expired'
+            ? 'Request expired. Try again in the dApp.'
+            : 'Connection ended. Reconnect in the dApp.'
+        );
+        void endRequest(reason);
+      }
+    );
+  }, [walletConnect?.ref, endRequest]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      setForeground(state === 'active');
+      if (state === 'background') {
+        const controllerState = authController.getState().state;
+        if (
+          walletConnect &&
+          !handlingOutcome.current &&
+          controllerState !== 'completed' &&
+          controllerState !== 'processing'
+        ) {
+          void endRequest(
+            authController.hasEnteredSigner() ? 'lapsed' : 'background'
+          );
+        }
+        reviewGrant.revoke(true, 'background');
+      }
+    });
+    return () => subscription.remove();
+  }, [walletConnect, authController, endRequest]);
+
+  useEffect(() => {
+    reviewLapseHandled.current = false;
+  }, [requestKey]);
+
+  useEffect(
+    () =>
+      reviewGrant.subscribe(() => {
+        if (reviewGrant.isValid(requestKey)) {
+          reviewLapseHandled.current = false;
+          return;
+        }
+        if (!AppLockSignal.isUnlocked()) setDangerAcknowledged(false);
+        if (!reviewFlowActive.current) {
+          reviewLapseHandled.current = false;
+          return;
+        }
+        const state = authController.getState().state;
+        if (
+          walletConnect &&
+          !endedRef.current &&
+          reviewGrant.endReason(requestKey) !== 'background' &&
+          !handlingOutcome.current &&
+          !reviewLapseHandled.current &&
+          state !== 'completed' &&
+          state !== 'error' &&
+          state !== 'signing' &&
+          state !== 'processing' &&
+          (!AppLockSignal.isUnlocked() ||
+            (showAuthModal && currentRequest?.reviewGrantKey))
+        ) {
+          reviewLapseHandled.current = true;
+          const byUser = authController.wasUserCancelled;
+          const enteredSigner = authController.hasEnteredSigner();
+          if (showAuthModal && !byUser) {
+            const timedOut = reviewGrant.endReason(requestKey) === 'idle';
+            const error = new ReviewEndedError(
+              enteredSigner
+                ? timedOut
+                  ? 'Your approval timed out before signing finished. Try again in the dApp.'
+                  : 'Your approval ended before signing finished. Try again in the dApp.'
+                : timedOut
+                  ? 'Your approval timed out. Unlock to review this request again.'
+                  : 'Unlock to review this request again.',
+              enteredSigner ? 'Request ended' : 'Approval ended'
+            );
+            Alert.alert(error.title, error.message);
+          }
+          if (!byUser) {
+            if (enteredSigner) void endRequest('lapsed');
+            else authController.cancel();
+          }
+          endSittingState();
+          authController.clearUserCancellation();
+        }
+      }),
+    [
+      walletConnect,
+      requestKey,
+      authController,
+      showAuthModal,
+      currentRequest,
+      endSittingState,
+      endRequest,
+    ]
+  );
+
   useEffect(() => {
     return () => {
+      endSittingState();
+      reviewGrant.leave(requestKey);
       authController.cleanup();
       // Clean up callback registry when unmounting
       clearNavigationCallbacks(callbackId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once teardown: it captures authController (a stable useState(() => new TransactionAuthController()) handle) and callbackId (stable route param), so the one-per-mount teardown targets the right instance.
   }, []);
+
+  // Tell the caller when this screen leaves the stack, however it was left
+  // (TASK-257). A navigation event, not an effect cleanup, so an effect
+  // replay never reports a departure that did not happen.
+  useEffect(
+    () =>
+      binding.onLeave(() => {
+        // The surface ended this review. After the signer was entered the
+        // person had approved, so the dApp hears the same system exit every
+        // other path uses there ('lapsed'), not the 'User rejected.' that
+        // abandoning sends. An outcome already in flight owns the answer.
+        if (
+          walletConnect &&
+          !endedRef.current &&
+          !handlingOutcome.current &&
+          authController.hasEnteredSigner()
+        ) {
+          void endRequest('lapsed');
+        }
+        reviewGrant.leave(requestKey);
+        getNavigationCallbacks(callbackId)?.onDismiss?.();
+      }),
+    [binding, callbackId, requestKey, walletConnect, authController, endRequest]
+  );
 
   /**
    * The network EVERY on-chain lookup on this screen resolves against, and the
@@ -363,9 +644,13 @@ export default function UniversalTransactionSigningScreen({
     };
   }, [boundNetworkId, chainId]);
 
+  // TASK-437 (Luna P2): nothing about the request is decoded before review is
+  // allowed. Everything below (asset metadata fetches, which log the asset id;
+  // signer-route resolution) derives from this list, so an empty list until
+  // canReview means no request detail is parsed, fetched or logged pre-auth.
   const { parsed: parsedTransactions, decoded: decodedTransactions } = useMemo(
-    () => parseBatch(transactionBytes),
-    [transactionBytes]
+    () => parseBatch(canReview ? transactionBytes : []),
+    [canReview, transactionBytes]
   );
 
   // -------------------------------------------------------------------------
@@ -693,15 +978,95 @@ export default function UniversalTransactionSigningScreen({
 
   const signersResolved = signerRoutes !== null;
 
-  // S-01: aggregate authority-transfer / balance-sweep dangers across all
-  // transactions. Declared before handleApprove so the guard and the render
-  // gating share the same scope.
-  const aggregatedDangers = aggregateDangers(
-    parsedTransactions.map((t) => t.dangers ?? {})
+  const walletConnectParams = useMemo(
+    () => ({
+      transactions: walletTransactions,
+      reviewedSigners,
+      sequentialSigning,
+      decodedTransactions,
+      sessionBinding: walletConnect?.binding ?? null,
+    }),
+    [
+      walletTransactions,
+      reviewedSigners,
+      sequentialSigning,
+      decodedTransactions,
+      walletConnect?.binding,
+    ]
   );
-  const hasDanger = hasAnyDanger(aggregatedDangers);
 
-  const handleApprove = () => {
+  // Bind the same network and parameters that the controller will receive.
+  useEffect(() => {
+    if (
+      walletConnect &&
+      grantValid &&
+      canReview &&
+      signersResolved &&
+      reviewedSigners.length > 0
+    ) {
+      const digest = walletConnectReviewDigest({
+        requestNetworkId: boundNetworkId,
+        sessionBindingNetworkId: walletConnectParams.sessionBinding?.networkId,
+        transactions: walletConnectParams.transactions,
+        reviewedSigners: walletConnectParams.reviewedSigners,
+      });
+      if (digest !== null) reviewGrant.bind(requestKey, digest);
+    }
+  }, [
+    walletConnect,
+    grantValid,
+    canReview,
+    signersResolved,
+    boundNetworkId,
+    reviewedSigners,
+    requestKey,
+    walletConnectParams,
+  ]);
+
+  // S-01 / TASK-440 audit #1, #2: EVERY dangerous operation across the batch,
+  // each with its transaction index (not the first target of each kind).
+  // Asset-authority items are narrowed against the asset's current holders on
+  // the bound network (Luna r1 #3). Declared before handleApprove so the guard
+  // and the render gating share the same scope.
+  const dangerEntries = useMemo(
+    () =>
+      parsedTransactions.map((t) => ({
+        dangers: t.dangers,
+        signs: t.signs,
+        opaque: t.mayTouchAssets,
+        networkId: boundNetworkId,
+      })),
+    [parsedTransactions, boundNetworkId]
+  );
+  const dangerList = useTransactionDangers(dangerEntries);
+  const hasDanger = dangerList.length > 0;
+
+  const handleApprove = async () => {
+    if (rejecting.current || (walletConnect && endedRef.current)) return;
+    if (
+      walletConnect?.ref &&
+      !RequestCoordinator.getInstance().isLive(walletConnect.ref)
+    ) {
+      if (!authController.hasEnteredSigner()) {
+        Toast.show({
+          type: 'info',
+          text1: 'Request expired',
+          text2: 'Nothing was signed. Try again in the dApp.',
+        });
+      } else {
+        Alert.alert(
+          'Request ended',
+          'Check the dApp, then try again there if you still need it.'
+        );
+      }
+      await endRequest('expired');
+      return;
+    }
+    if (
+      !canReview ||
+      (requiresReviewUnlock && !reviewGrant.isValid(requestKey))
+    )
+      return;
     if (hasDanger && !dangerAcknowledged) {
       Alert.alert(
         'Confirmation required',
@@ -728,44 +1093,83 @@ export default function UniversalTransactionSigningScreen({
     // this one" — before the signer ever saw them.
     const request: UnifiedTransactionRequest = {
       type: 'batch_transaction',
+      reviewGrantKey:
+        walletConnect &&
+        (requiresReviewUnlock || reviewGrant.isUnspent(requestKey))
+          ? requestKey
+          : undefined,
       account: signingAccount,
       networkId: boundNetworkId,
-      walletConnectParams: {
-        transactions: walletTransactions,
-        // Exactly the accounts the signer list displayed. The signer re-runs
-        // `evaluateBatchEntryEligibility` against this list, so an entry that
-        // was not shown as signing cannot be signed.
-        reviewedSigners,
-        sequentialSigning,
-        decodedTransactions,
-        // DR-15: bind a dApp request to its session + chain; `null` declares an
-        // in-app batch the wallet built itself.
-        sessionBinding: walletConnect?.binding ?? null,
-      },
+      walletConnectParams,
     };
 
+    reviewLapseHandled.current = false;
+    reviewFlowActive.current = true;
     setCurrentRequest(request);
     setShowAuthModal(true);
   };
 
   const handleAuthComplete = async (success: boolean, result?: any) => {
-    setShowAuthModal(false);
-    setCurrentRequest(null);
-
-    if (success && onSuccess) {
-      await onSuccess(result);
-    } else if (!success) {
-      const errorMessage =
-        result instanceof Error
-          ? result.message
-          : 'Failed to sign transactions';
-      Alert.alert('Error', errorMessage);
+    if (handlingOutcome.current) return;
+    handlingOutcome.current = true;
+    if (!walletConnect) {
+      setShowAuthModal(false);
+      setCurrentRequest(null);
+    }
+    try {
+      if (success && onSuccess) {
+        await onSuccess(result, callbackNavigation);
+      } else if (!success) {
+        const error = result?.error;
+        if (error instanceof ReviewEndedError) {
+          Alert.alert(error.title, error.message);
+          if (walletConnect && authController.hasEnteredSigner())
+            await endRequest('lapsed');
+        } else {
+          // Signer entry ends any WalletConnect request, including one with no
+          // review grant. An
+          // error with no specific mapping gets the product text that points
+          // there; a mapped reason (for example not enough balance) keeps its own.
+          const ended = !!walletConnect && authController.hasEnteredSigner();
+          const mappedAlert = toErrorAlert(error, {
+            fallbackMessage: 'Failed to sign transactions.',
+            fallbackTitle: 'Error',
+          });
+          if (ended && isRequestMismatchError(error)) {
+            Alert.alert(
+              'Request ended',
+              "That QR code didn't match this request. Try again in the dApp."
+            );
+          } else if (ended && mappedAlert.title === 'Error') {
+            Alert.alert(
+              'Signing failed',
+              "Couldn't sign. Try again in the dApp."
+            );
+          } else {
+            Alert.alert(mappedAlert.title, mappedAlert.message);
+          }
+          if (ended)
+            await endRequest(
+              authController.hasReceivedSignature() ? 'lapsed' : 'sign-failed'
+            );
+        }
+      }
+    } finally {
+      // The flow ends when handleAuthComplete returns, the user leaves the screen,
+      // Cancel, or the 60 s idle window restarted at the signer's end, whichever is first.
+      reviewGrant.leave(requestKey);
+      endSittingState();
+      authController.clearUserCancellation();
+      handlingOutcome.current = false;
     }
   };
 
   const handleReject = async () => {
+    rejecting.current = true;
+    endSittingState();
+    if (requiresReviewUnlock && !grantValid) reviewGrant.leave(requestKey);
     if (onReject) {
-      await onReject();
+      await onReject(callbackNavigation);
     } else {
       if (navigation.canGoBack()) {
         navigation.goBack();
@@ -971,101 +1375,153 @@ export default function UniversalTransactionSigningScreen({
     reviewedSigners.length > 0 &&
     (!hasDanger || dangerAcknowledged);
 
+  const usesLedger = signingAccounts.some(
+    ([, resolution]) => resolution.method === 'ledger'
+  );
+  const signingMethod = usesLedger
+    ? 'Ledger'
+    : authState.biometricEnabled
+      ? biometricLabel
+      : 'PIN';
+
+  const summary = signingSummary(
+    parsedTransactions,
+    networkInfo.currency,
+    assetParams,
+    dappHost(walletConnect?.dapp)
+  );
+
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView
+      onTouchStart={() => reviewGrant.touch(requestKey)}
+      style={styles.container}
+      edges={['top', 'bottom']}
+    >
       <UniversalHeader
         title={title}
         onAccountSelectorPress={() => {}}
         showAccountSelector={false}
       />
+      {walletConnect && <WalletConnectPrivacyGuard />}
 
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {networkInfo.known ? (
-          <View style={styles.networkContainer}>
-            <View style={styles.networkHeader}>
-              <Ionicons name="globe" size={20} color={theme.colors.primary} />
-              <Text style={styles.networkTitle}>Network</Text>
-            </View>
-            <Text style={styles.networkName}>{networkInfo.name}</Text>
-            <Text style={styles.networkCurrency}>
-              Currency: {networkInfo.currency}
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.networkWarningContainer}>
-            <View style={styles.networkHeader}>
-              <Ionicons
-                name="alert-circle"
-                size={20}
-                color={theme.colors.warning}
+      {!canReview ? (
+        <LockedRequestGate
+          requestKey={requestKey}
+          dapp={walletConnect?.dapp}
+          network={networkInfo.name}
+          biometricEnabled={authState.biometricEnabled}
+          onReject={handleReject}
+        />
+      ) : (
+        <>
+          <ScrollView
+            style={styles.scrollView}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            {walletConnect?.ref && (
+              <RequestAgeLabel requestRef={walletConnect.ref} />
+            )}
+            {networkInfo.known ? (
+              <View style={styles.networkContainer}>
+                <View style={styles.networkHeader}>
+                  <Ionicons
+                    name="globe"
+                    size={20}
+                    color={theme.colors.primary}
+                  />
+                  <Text style={styles.networkTitle}>Network</Text>
+                </View>
+                <Text style={styles.networkName}>{networkInfo.name}</Text>
+                <Text style={styles.networkCurrency}>
+                  Currency: {networkInfo.currency}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.networkWarningContainer}>
+                <View style={styles.networkHeader}>
+                  <Ionicons
+                    name="alert-circle"
+                    size={20}
+                    color={theme.colors.warning}
+                  />
+                  <Text style={styles.networkWarningTitle}>
+                    Unrecognized network
+                  </Text>
+                </View>
+                <Text style={styles.networkWarningText}>
+                  This wallet cannot identify the network these transactions
+                  target ({String(networkInfo.name)}). Amounts and fees are
+                  shown without a currency. Do not approve unless you know
+                  exactly what you are signing.
+                </Text>
+              </View>
+            )}
+
+            {renderTransactionSummary()}
+
+            {hasDanger && (
+              <TransactionDangerBanner
+                dangers={dangerList}
+                acknowledged={dangerAcknowledged}
+                onToggleAcknowledged={() => setDangerAcknowledged((v) => !v)}
               />
-              <Text style={styles.networkWarningTitle}>
-                Unrecognized network
+            )}
+
+            {renderSigners()}
+
+            <View style={styles.warningContainer}>
+              <Ionicons name="warning" size={24} color={theme.colors.warning} />
+              <Text style={styles.warningText}>
+                Carefully review all transaction details before signing. This
+                action cannot be undone.
               </Text>
             </View>
-            <Text style={styles.networkWarningText}>
-              This wallet cannot identify the network these transactions target
-              ({String(networkInfo.name)}). Amounts and fees are shown without a
-              currency. Do not approve unless you know exactly what you are
-              signing.
-            </Text>
+          </ScrollView>
+
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.rejectButton]}
+              onPress={handleReject}
+              disabled={false}
+            >
+              <Text style={styles.rejectButtonText}>Reject</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.button, styles.approveButton]}
+              onPress={handleApprove}
+              disabled={!canSign}
+            >
+              <Text style={styles.approveButtonText}>
+                {requiresReviewUnlock || (grantValid && grantUnspent)
+                  ? 'Sign'
+                  : authState.hasPin === false && !usesLedger
+                    ? 'Sign'
+                    : `Sign with ${signingMethod}`}
+              </Text>
+            </TouchableOpacity>
           </View>
-        )}
-
-        {renderTransactionSummary()}
-
-        {hasDanger && (
-          <TransactionDangerBanner
-            dangers={aggregatedDangers}
-            acknowledged={dangerAcknowledged}
-            onToggleAcknowledged={() => setDangerAcknowledged((v) => !v)}
-          />
-        )}
-
-        {renderSigners()}
-
-        <View style={styles.warningContainer}>
-          <Ionicons name="warning" size={24} color={theme.colors.warning} />
-          <Text style={styles.warningText}>
-            Carefully review all transaction details before signing. This action
-            cannot be undone.
-          </Text>
-        </View>
-      </ScrollView>
-
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity
-          style={[styles.button, styles.rejectButton]}
-          onPress={handleReject}
-          disabled={false}
-        >
-          <Text style={styles.rejectButtonText}>Reject</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.approveButton]}
-          onPress={handleApprove}
-          disabled={!canSign}
-        >
-          <Text style={styles.approveButtonText}>Sign</Text>
-        </TouchableOpacity>
-      </View>
-
+        </>
+      )}
       <UnifiedTransactionAuthModal
         visible={showAuthModal}
         controller={authController}
         request={currentRequest}
         onComplete={handleAuthComplete}
         onCancel={() => {
-          setShowAuthModal(false);
-          setCurrentRequest(null);
+          if (handlingOutcome.current) return;
+          reviewGrant.leave(requestKey);
+          endSittingState();
+          authController.clearUserCancellation();
+          if (walletConnect && authController.hasEnteredSigner())
+            void endRequest('declined');
         }}
         title="Sign Transaction"
-        message="Authenticate to sign the transaction"
+        message={canReview ? summary : ''}
+        biometricOnOpen={
+          !requiresReviewUnlock && !usesLedger && authState.biometricEnabled
+        }
       />
     </SafeAreaView>
   );

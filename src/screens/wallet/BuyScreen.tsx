@@ -16,6 +16,7 @@ import { useWalletStore, useActiveAccount } from '@/store/walletStore';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import AccountListModal from '@/components/account/AccountListModal';
 import { useTheme } from '@/contexts/ThemeContext';
+import { redactSensitiveForLog } from '@/utils/logRedaction';
 
 export default function BuyScreen() {
   const route = useRoute();
@@ -211,7 +212,7 @@ export default function BuyScreen() {
           onLoadError={(errorDescription) => {
             console.error(
               '[BuyScreen] iBuyVoi loading error:',
-              errorDescription
+              redactSensitiveForLog(errorDescription)
             );
           }}
           refreshControl={

@@ -18,9 +18,32 @@
  *    clearNavigationCallbacks(callbackId);
  */
 
+import type { ExitReason } from '@/services/walletconnect/requestCoordinator';
+
+export interface CallbackNavigation {
+  goBack(): boolean;
+  canGoBack(): boolean;
+  navigate: (...args: any[]) => void;
+  replace: (name: string, params?: object) => boolean;
+}
+
 export interface NavigationCallbacks {
-  onSuccess?: (result: any) => Promise<void>;
-  onReject?: () => Promise<void>;
+  /** The target screen ended the request for reason; the caller settles it and moves on. */
+  onEnd?: (
+    reason: ExitReason,
+    navigation?: CallbackNavigation
+  ) => Promise<void>;
+  onSuccess?: (
+    result: unknown,
+    navigation?: CallbackNavigation
+  ) => Promise<void>;
+  onReject?: (navigation?: CallbackNavigation) => Promise<void>;
+  /**
+   * Called when the target screen is removed from the navigation stack,
+   * however it was left (including the OS back button or a swipe-back). The
+   * caller decides whether anything was left unanswered (TASK-257).
+   */
+  onDismiss?: () => void;
 }
 
 const callbackRegistry = new Map<string, NavigationCallbacks>();

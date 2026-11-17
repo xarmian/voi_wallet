@@ -1,3 +1,4 @@
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import React from 'react';
 import {
   ActivityIndicator,
@@ -41,6 +42,7 @@ const SigningPrompt: React.FC<SigningPromptProps> = ({
   showConnectDeviceButton = false,
   showRetryButton = false,
 }) => {
+  const covered = useCoverPaused();
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
 
@@ -52,7 +54,7 @@ const SigningPrompt: React.FC<SigningPromptProps> = ({
 
   return (
     <Modal
-      visible={visible}
+      visible={visible && !covered}
       transparent
       animationType="fade"
       onRequestClose={onCancel ?? (() => {})}

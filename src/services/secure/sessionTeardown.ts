@@ -2,8 +2,10 @@
  * Session-security teardown (Wave-2, DOC-137 §6.3 / Codex P1-D + P1-E, PR3)
  *
  * The SINGLE place that drops every piece of in-memory session key material.
- * AuthContext.lock() calls this on EVERY lock path (explicit, inactivity-timeout,
- * and background-grace), so teardown lives in exactly one location:
+ * AuthContext calls this on EVERY path that lands locked: lock() (explicit,
+ * inactivity-timeout, and background-grace) and every auth-check verdict that
+ * lands locked, at boot and on recheckAuthState() (TASK-557). Teardown lives in
+ * exactly one location:
  *
  *   1. SessionKeyVault.clear()            — zero memoized wrap keys + drop the
  *                                           secret + bump the vault epoch (P1-D).
@@ -23,11 +25,35 @@ import { SessionKeyVault } from './SessionKeyVault';
 import { AppLockSignal } from './appLockState';
 import { clearMessagingKeyCache } from '../messaging/keyDerivation';
 
+/**
+ * Run every step even if an earlier one throws, then rethrow the first error.
+ * The vault and the lock signal notify listeners after changing their own
+ * state, and a throwing listener must never leave a later cache holding key
+ * material (TASK-557).
+ */
+function runAllThenRethrow(steps: (() => void)[]): void {
+  let failed = false;
+  let firstError: unknown;
+  for (const step of steps) {
+    try {
+      step();
+    } catch (error) {
+      if (!failed) {
+        failed = true;
+        firstError = error;
+      }
+    }
+  }
+  if (failed) throw firstError;
+}
+
 /** Clear the session vault, the 60 s key cache, and the messaging key cache. */
 export function clearSessionSecurity(): void {
-  SessionKeyVault.clear();
-  AccountSecureStorage.clearPrivateKeyCache();
-  clearMessagingKeyCache();
+  runAllThenRethrow([
+    () => SessionKeyVault.clear(),
+    () => AccountSecureStorage.clearPrivateKeyCache(),
+    () => clearMessagingKeyCache(),
+  ]);
 }
 
 /**
@@ -38,11 +64,17 @@ export function clearSessionSecurity(): void {
  *      before the lock and resolves during teardown then refuses to repopulate
  *      the ~30 min messaging cache.
  *   2. Run the cache teardown (vault + 60 s + messaging).
+ * Step 2 runs even if a lock listener throws in step 1; the first error is
+ * rethrown after every step has run.
  *
  * AuthContext.lock() calls this on every real lock (i.e. only when a PIN is set;
- * a no-PIN wallet never locks, so its always-unlocked signal is left untouched).
+ * lock() leaves a no-PIN wallet unlocked, so its signal is left untouched). Every
+ * auth-check verdict that lands locked calls it too, whatever hasPin is, since
+ * that state is locked and the signal must match it (TASK-557).
  */
 export function enterLockedState(): void {
-  AppLockSignal.setUnlocked(false);
-  clearSessionSecurity();
+  runAllThenRethrow([
+    () => AppLockSignal.setUnlocked(false),
+    () => clearSessionSecurity(),
+  ]);
 }

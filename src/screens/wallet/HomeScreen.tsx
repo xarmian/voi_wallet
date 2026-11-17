@@ -1,3 +1,5 @@
+import HomeEmptyState from '@/components/wallet/HomeEmptyState';
+import WalletLoadFailedBanner from '@/components/wallet/WalletLoadFailedBanner';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -30,7 +32,7 @@ import Animated, {
   withTiming,
   Easing,
 } from 'react-native-reanimated';
-import { AssetBalance, needsBackupVerification } from '@/types/wallet';
+import { AssetBalance } from '@/types/wallet';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   useActiveAccount,
@@ -71,11 +73,14 @@ import {
   useVisibleClaimableCountForAccount,
 } from '@/store/claimableStore';
 import UpdateBanner from '@/components/update/UpdateBanner';
+import RemovedAccountNoticeHost from '@/components/account/RemovedAccountNoticeHost';
 import { useUpdateStore } from '@/store/updateStore';
 import { useUpdates } from 'expo-updates';
 import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsModal';
 import SignerModeBanner from '@/components/remoteSigner/SignerModeBanner';
+import { useHomeBackupReminder } from '@/store/useHomeBackupReminder';
 import BackupWarningBanner from '@/components/wallet/BackupWarningBanner';
+import ControlledByNotice from '@/components/wallet/ControlledByNotice';
 import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
 import { toErrorAlert } from '@/utils/errorMapping';
@@ -377,6 +382,10 @@ export default function HomeScreen() {
   }));
 
   const initialize = useWalletStore((state) => state.initialize);
+  const walletLoadFailed = useWalletStore((state) => state.walletLoadFailed);
+  const walletLoadFailures = useWalletStore(
+    (state) => state.walletLoadFailures
+  );
   // Wallet-store hydration flag (F-48, TASK-182). This is the SAME signal the
   // splash readiness owner (AppStack) gates on, so the "Loading wallet..."
   // placeholder and the splash hide stay in lockstep. Once the store is
@@ -396,7 +405,6 @@ export default function HomeScreen() {
     // Exposed by the store since forever but destructured by no consumer, so
     // balance failures rendered as "no balance" (TASK-40 / U-03).
     error: balanceError,
-    reload: reloadBalance,
   } = useActiveAccountBalance();
   const {
     nameInfo: envoiNameInfo,
@@ -1146,8 +1154,10 @@ export default function HomeScreen() {
         setNetworkStatusError(networkHealth.reason);
       }
 
-      // Load balance and transactions through the store
-      await reloadBalance();
+      // Load balance and transactions through the store. Forced and keyed on
+      // the account resolved above: pull-to-refresh must never be a fresh-cache
+      // no-op, nor reload a previously active account (GH #12 / TASK-390).
+      await loadAccountBalance(accountId, true);
       // Multi-network aggregate is what the assets card renders in
       // multi-network view; refreshing it here keeps pull-to-refresh honest
       // in both view modes. (if-statement instead of a ternary in the array:
@@ -1217,12 +1227,7 @@ export default function HomeScreen() {
     fetchApprovals(activeAccount.address);
   }, [activeAccount?.address, fetchApprovals]);
 
-  // Navigate to claimable tokens screen
-  // TASK-45 / DR-10: the warning is driven by the persisted `backupVerified`
-  // flag via needsBackupVerification(), which fails closed — non-standard
-  // accounts are excluded, and anything other than an explicit `true` (legacy
-  // record, restored account, skipped quiz) keeps the warning up.
-  const showBackupWarning = needsBackupVerification(activeAccount);
+  const showBackupWarning = useHomeBackupReminder();
 
   const handleBackupBannerPress = useCallback(() => {
     if (!activeAccount) return;
@@ -1483,6 +1488,11 @@ export default function HomeScreen() {
 
           {activeAccount && (
             <>
+              <RemovedAccountNoticeHost
+                onReimport={() =>
+                  navigation.navigate('MnemonicImport', { isOnboarding: false })
+                }
+              />
               {/* Update Available Banner */}
               {isUpdateAvailable && (
                 <UpdateBanner
@@ -1714,6 +1724,17 @@ export default function HomeScreen() {
                 <BackupWarningBanner onPress={handleBackupBannerPress} />
               )}
 
+              <ControlledByNotice />
+
+              {/* A failed wallet read while accounts are on screen (TASK-514) */}
+              <WalletLoadFailedBanner
+                walletLoadFailed={walletLoadFailed}
+                failureCount={walletLoadFailures}
+                onTryAgain={() => {
+                  void useWalletStore.getState().refresh();
+                }}
+              />
+
               {/* Claimable Tokens Banner */}
               {visibleClaimableCount > 0 && (
                 <ClaimableBanner
@@ -1823,38 +1844,13 @@ export default function HomeScreen() {
             </>
           )}
           {!activeAccount && (
-            <View style={styles.emptyStateContainer}>
-              <GlassCard
-                variant="medium"
-                style={styles.emptyStateCard}
-                borderRadius={theme.borderRadius.xl}
-                padding="lg"
-              >
-                <View style={styles.emptyStateIconContainer}>
-                  <Ionicons
-                    name="wallet-outline"
-                    size={64}
-                    color={theme.colors.primary}
-                  />
-                </View>
-                <Text style={styles.emptyStateTitle}>
-                  Welcome to Voi Wallet
-                </Text>
-                <Text style={styles.emptyStateSubtitle}>
-                  Set up an account to access all wallet features including
-                  sending, receiving, and managing your assets.
-                </Text>
-                <Pressable
-                  style={[
-                    styles.emptyStateButton,
-                    { backgroundColor: theme.colors.primary },
-                  ]}
-                  onPress={() => setIsOnboardingModalVisible(true)}
-                >
-                  <Text style={styles.emptyStateButtonText}>Get Started</Text>
-                </Pressable>
-              </GlassCard>
-            </View>
+            <HomeEmptyState
+              walletLoadFailed={walletLoadFailed}
+              onGetStarted={() => setIsOnboardingModalVisible(true)}
+              onTryAgain={() => {
+                void useWalletStore.getState().refresh();
+              }}
+            />
           )}
         </ScrollView>
 
@@ -2209,48 +2205,4 @@ const createStyles = (theme: Theme) =>
       padding: theme.spacing.xs,
     },
     // Empty State (no account)
-    emptyStateContainer: {
-      flex: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
-      paddingVertical: theme.spacing.xxl,
-    },
-    emptyStateCard: {
-      alignItems: 'center',
-      width: '100%',
-    },
-    emptyStateIconContainer: {
-      width: 120,
-      height: 120,
-      borderRadius: 60,
-      backgroundColor: `${theme.colors.primary}15`,
-      justifyContent: 'center',
-      alignItems: 'center',
-      marginBottom: theme.spacing.lg,
-    },
-    emptyStateTitle: {
-      fontSize: theme.typography.heading2.fontSize,
-      fontWeight: '700',
-      color: theme.colors.text,
-      textAlign: 'center',
-      marginBottom: theme.spacing.sm,
-    },
-    emptyStateSubtitle: {
-      fontSize: theme.typography.body.fontSize,
-      color: theme.colors.textMuted,
-      textAlign: 'center',
-      lineHeight: 22,
-      marginBottom: theme.spacing.xl,
-      paddingHorizontal: theme.spacing.md,
-    },
-    emptyStateButton: {
-      paddingVertical: theme.spacing.md,
-      paddingHorizontal: theme.spacing.xxl,
-      borderRadius: theme.borderRadius.lg,
-    },
-    emptyStateButtonText: {
-      fontSize: theme.typography.body.fontSize,
-      fontWeight: '600',
-      color: theme.colors.buttonText,
-    },
   });

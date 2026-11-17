@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useCoverPaused } from '@/hooks/useCoverPaused';
+import { isCovered } from '@/utils/lockCover';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Alert,
   Modal,
@@ -75,6 +77,7 @@ export default function UnifiedAuthModal({
   onLedgerRetry,
 }: UnifiedAuthModalProps) {
   const { theme } = useTheme();
+  const covered = useCoverPaused();
   const styles = useThemedStyles(createStyles);
   const { authState } = useAuth();
   const [pin, setPin] = useState('');
@@ -89,6 +92,19 @@ export default function UnifiedAuthModal({
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [biometricAttempted, setBiometricAttempted] = useState(false);
   const [biometricAuthenticated, setBiometricAuthenticated] = useState(false);
+  // Bumped every time the modal closes. A biometric result that resolves after
+  // the modal was closed (an aborted prompt, then a new one) is stale and must
+  // not mark the NEW prompt as biometrically authenticated.
+  const biometricRunRef = useRef(0);
+  const coverEpoch = useRef(0);
+  useEffect(() => {
+    if (covered) {
+      coverEpoch.current += 1;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- The external lock must discard typed input and fresh-auth proof before the Modal reopens.
+      setPin('');
+      setBiometricAuthenticated(false);
+    }
+  }, [covered]);
 
   const MAX_ATTEMPTS = 5;
   const LOCKOUT_TIME = 30000; // 30 seconds
@@ -101,15 +117,11 @@ export default function UnifiedAuthModal({
     console.log('UnifiedAuthModal: isProcessing changed to:', isProcessing);
   }, [isProcessing]);
 
-  useEffect(() => {
-    if (visible && shouldUseBiometrics && !biometricAttempted) {
-      promptBiometric();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt on open; fires on the visible/biometric/attempted gates, promptBiometric is read at that commit and must not re-fire on its own identity.
-  }, [visible, shouldUseBiometrics, biometricAttempted]);
-
   // Reset state when modal opens
   useEffect(() => {
+    // Bump on CLOSE only to invalidate results from the previous modal.
+    // Reset before the auto-prompt effect so its attempted flag is retained.
+    if (!visible) biometricRunRef.current += 1;
     if (visible) {
       setPin('');
       setAttempts(0);
@@ -118,6 +130,13 @@ export default function UnifiedAuthModal({
       setBiometricAuthenticated(false);
     }
   }, [visible]);
+
+  useEffect(() => {
+    if (visible && shouldUseBiometrics && !biometricAttempted && !covered) {
+      promptBiometric();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt on open; fires on the visible/biometric/attempted/covered gates, promptBiometric is read at that commit and must not re-fire on its own identity.
+  }, [visible, shouldUseBiometrics, biometricAttempted, covered]);
 
   // Read the stored credential kind once on mount so the correct input renders.
   useEffect(() => {
@@ -197,6 +216,9 @@ export default function UnifiedAuthModal({
   };
 
   const promptBiometric = async () => {
+    if (isCovered()) return;
+    const run = biometricRunRef.current;
+    const epoch = coverEpoch.current;
     setBiometricAttempted(true);
     setIsAuthenticating(true);
 
@@ -223,13 +245,24 @@ export default function UnifiedAuthModal({
         return;
       }
 
+      if (isCovered() || epoch !== coverEpoch.current) {
+        setIsAuthenticating(false);
+        setBiometricAttempted(false);
+        return;
+      }
       const result = await LocalAuthentication.authenticateAsync({
         promptMessage: getAuthMessage(purpose),
         fallbackLabel: 'Use PIN',
         cancelLabel: 'Cancel',
-        requireConfirmation: false,
+        requireConfirmation: true,
       });
 
+      if (epoch !== coverEpoch.current || isCovered()) {
+        setPin('');
+        setIsAuthenticating(false);
+        return;
+      }
+      if (run !== biometricRunRef.current) return; // stale: the modal was reset
       if (result.success) {
         setIsAuthenticating(false);
         setBiometricAuthenticated(true);
@@ -262,11 +295,17 @@ export default function UnifiedAuthModal({
   };
 
   const verifyPin = async (enteredPin: string) => {
+    const epoch = coverEpoch.current;
     setIsAuthenticating(true);
 
     try {
       const isValid = await AccountSecureStorage.verifyPin(enteredPin);
 
+      if (epoch !== coverEpoch.current || isCovered()) {
+        setPin('');
+        setIsAuthenticating(false);
+        return;
+      }
       if (isValid) {
         setPin('');
         setAttempts(0);
@@ -333,6 +372,7 @@ export default function UnifiedAuthModal({
   };
 
   const handleCancel = () => {
+    coverEpoch.current += 1;
     setPin('');
     setAttempts(0);
     setBiometricAttempted(false);
@@ -388,60 +428,58 @@ export default function UnifiedAuthModal({
     );
   };
 
-  const renderKeypad = () => {
-    const numbers = [
-      ['1', '2', '3'],
-      ['4', '5', '6'],
-      ['7', '8', '9'],
-      ['', '0', 'backspace'],
-    ];
+  const numbers = [
+    ['1', '2', '3'],
+    ['4', '5', '6'],
+    ['7', '8', '9'],
+    ['', '0', 'backspace'],
+  ];
 
-    return (
-      <View style={styles.keypad}>
-        {numbers.map((row, rowIndex) => (
-          <View key={rowIndex} style={styles.keypadRow}>
-            {row.map((item, itemIndex) => {
-              if (item === '') {
-                return <View key={itemIndex} style={styles.keypadButton} />;
-              }
+  const keypad = (
+    <View style={styles.keypad}>
+      {numbers.map((row, rowIndex) => (
+        <View key={rowIndex} style={styles.keypadRow}>
+          {row.map((item, itemIndex) => {
+            if (item === '') {
+              return <View key={itemIndex} style={styles.keypadButton} />;
+            }
 
-              if (item === 'backspace') {
-                return (
-                  <TouchableOpacity
-                    key={itemIndex}
-                    style={styles.keypadButton}
-                    onPress={handleBackspace}
-                    disabled={isLocked || isAuthenticating}
-                  >
-                    <Ionicons
-                      name="backspace-outline"
-                      size={20}
-                      color={theme.colors.text}
-                    />
-                  </TouchableOpacity>
-                );
-              }
-
+            if (item === 'backspace') {
               return (
                 <TouchableOpacity
                   key={itemIndex}
                   style={styles.keypadButton}
-                  onPress={() => handleNumberPress(item)}
+                  onPress={handleBackspace}
                   disabled={isLocked || isAuthenticating}
                 >
-                  <Text style={styles.keypadButtonText}>{item}</Text>
+                  <Ionicons
+                    name="backspace-outline"
+                    size={20}
+                    color={theme.colors.text}
+                  />
                 </TouchableOpacity>
               );
-            })}
-          </View>
-        ))}
-      </View>
-    );
-  };
+            }
+
+            return (
+              <TouchableOpacity
+                key={itemIndex}
+                style={styles.keypadButton}
+                onPress={() => handleNumberPress(item)}
+                disabled={isLocked || isAuthenticating}
+              >
+                <Text style={styles.keypadButtonText}>{item}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ))}
+    </View>
+  );
 
   return (
     <Modal
-      visible={visible}
+      visible={visible && !covered}
       transparent
       animationType="fade"
       onRequestClose={() => {
@@ -558,7 +596,7 @@ export default function UnifiedAuthModal({
                 </TouchableOpacity>
               )}
 
-              {isPassphrase ? renderPassphraseInput() : renderKeypad()}
+              {isPassphrase ? renderPassphraseInput() : keypad}
 
               {isLocked && (
                 <View style={styles.lockoutContainer}>

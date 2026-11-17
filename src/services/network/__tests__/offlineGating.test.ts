@@ -70,6 +70,8 @@ const jsonResponse = (body: unknown) => ({
   status: 200,
   statusText: 'OK',
   json: async () => body,
+  // TASK-440 #9: fetchBuffered reads the body as text inside its deadline.
+  text: async () => JSON.stringify(body),
 });
 
 const envoi = EnvoiService.getInstance();
@@ -124,8 +126,9 @@ describe('offline gating of retry ladders (TASK-191)', () => {
     AlgorandPriceService.clearCache();
     // Envoi exposes no config setter; its ladder delay is shortened directly.
     // Each envoi test uses a freshly generated address, so its cache needs no
-    // reset between tests. The abort timer matters too: none of these services
-    // clears it on a REJECTED fetch, so a 10s default would outlive the run.
+    // reset between tests. The short timeout keeps any request that does stall
+    // well inside the run (fetchBuffered clears its timer on every outcome
+    // since TASK-440 #9).
     const envoiConfig = (envoi as unknown as { config: Record<string, number> })
       .config;
     envoiConfig.retryDelay = 0;

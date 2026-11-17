@@ -203,7 +203,7 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   colorOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   topGradient: {
     position: 'absolute',

@@ -10,6 +10,7 @@
 
 import { UR, UREncoder, URDecoder } from '@ngraveio/bc-ur';
 import { REMOTE_SIGNER_CONSTANTS } from '@/types/remoteSigner';
+import { redactError } from '@/utils/logRedaction';
 
 /**
  * Configuration for animated QR encoding
@@ -315,7 +316,10 @@ export class AnimatedQRService {
 
       return data;
     } catch (error) {
-      console.error('[AnimatedQRService] decodeSinglePartUR error:', error);
+      console.error(
+        '[AnimatedQRService] decodeSinglePartUR error:',
+        redactError(error)
+      );
       throw new Error(
         `Failed to decode UR: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
