@@ -103,8 +103,10 @@ export default function RestoreWalletScreen() {
       setShowPasswordModal(!!selectedFile && !restoreInFlight.current);
     }
   }, [covered, selectedFile]);
-  // Bumped whenever the screen is left or the app leaves the foreground. A PIN
-  // check that started before the bump must not fill the vault when it ends.
+  // Bumped whenever the screen is left or the app leaves the foreground, except
+  // for 'inactive' while the step's biometric check runs (the OS prompt itself
+  // causes it; see the AppState listener). A PIN check that started before the
+  // bump must not fill the vault when it ends.
   const oldPinGeneration = useRef(0);
   // True while the old-PIN step's biometric check runs (its OS prompt is up).
   const biometricPromptActive = useRef(false);

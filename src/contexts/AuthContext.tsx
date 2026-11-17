@@ -150,8 +150,9 @@ export interface AuthContextType {
   /**
    * TASK-509: the old-PIN step's biometric unlock, run only on a tap. Checks,
    * in order and before any prompt: the flag is absent (and the device can
-   * offer it), no wipe is pending, PIN entry is not paused. Then reads the
-   * biometric item (the OS prompt) and passes its secret to `unlockForRestore`
+   * offer it), no wipe is pending, PIN entry is not paused, and `isCurrent()`
+   * (left → `cancelled`). Then reads the biometric item (the OS prompt), checks
+   * `isCurrent()` again, and passes its secret to `unlockForRestore`
    * unchanged, so the verify, its throttle, the wipe refusal, `isCurrent` and
    * the vault fill are the PIN path's own. Writes nothing to the biometric item
    * or its flag on any outcome.
@@ -1081,6 +1082,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
       return { status: 'locked' };
     }
+    // The step may have been left during the checks above (the forgotten link
+    // stays pressable): then no prompt.
+    if (!isCurrent()) return { status: 'cancelled' };
     // The secret lives only in this local, for the one unlockForRestore call.
     let saved: Awaited<
       ReturnType<typeof AccountSecureStorage.getBiometricSecret>
@@ -1094,6 +1098,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { status: 'biometric_cancelled' };
     }
     if (!saved) return { status: 'no_item' };
+    // Left while the prompt was up: no verify (no throttle write, no counted
+    // try). unlockForRestore checks again after its verify.
+    if (!isCurrent()) return { status: 'cancelled' };
     return unlockForRestore(saved.secret, isCurrent);
   };
 

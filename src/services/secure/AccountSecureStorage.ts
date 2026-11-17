@@ -4655,12 +4655,18 @@ export class AccountSecureStorage {
    * on the persisted flag: the lock-screen biometric unlock reads it only when
    * the flag is `'true'` (via `unlockVaultWithBiometrics`), and the onboarding
    * old-PIN step (TASK-509, `unlockForRestoreWithBiometrics`) reads it only when
-   * the flag is ABSENT (a reinstall keeps the item but loses the flag). An
-   * explicit `false` closes both. So flipping the flag to `false` is the
+   * the flag is ABSENT (a reinstall wipes AsyncStorage but keeps the item).
+   * An explicit `false` closes both. So flipping the flag to `false` is the
    * PRIMARY, AWAITED protection; deleting the item is best-effort cleanup that
    * may fail (a SecureStore op) WITHOUT weakening the guarantee. The
    * enabled-flag is AsyncStorage-backed (separate from the failing SecureStore
-   * item), so this write typically succeeds even when the item op does not. We
+   * item), so this write typically succeeds even when the item op does not.
+   * `setBiometricEnabled(false)` also leaves a plain secure-store `'false'`
+   * (best-effort), so the `false` outlives a reinstall: after one, the
+   * old-PIN step still reads `'false'` and never reads a surviving item. If
+   * that marker write fails too (the secure store is failing), a reinstall
+   * before the item is gone would leave the flag absent and the item offered;
+   * a stale item then only fails `verifyPin` (one counted try). We
    * deliberately do NOT chase the delete — a cascade of storage failures is a
    * device-broken condition out of scope.
    *
@@ -4772,17 +4778,45 @@ export class AccountSecureStorage {
   }
 
   // Biometric Settings
+  /**
+   * Store the biometric-enabled flag. AsyncStorage holds the setting (the
+   * awaited write; its failure throws). The secure-store copy of the same key
+   * is only ever `'false'`:
+   *   - `false`: also writes a plain (NOT auth-gated) secure-store `'false'`,
+   *     best-effort (a failure is ignored). A reinstall wipes AsyncStorage but
+   *     keeps the keychain, so this marker is what keeps an explicit "off"
+   *     after a reinstall: the old-PIN step reads the flag as `'false'`, not
+   *     absent, and never offers a leftover biometric item.
+   *   - `true`: deletes the secure-store copy. A secure-store `'true'` is
+   *     never written (the legacy migration in `isBiometricEnabled` would
+   *     turn it back on after a reinstall).
+   * `clearAll` deletes both copies.
+   */
   static async setBiometricEnabled(enabled: boolean): Promise<void> {
     try {
       await storage.setItem(this.BIOMETRIC_ENABLED_KEY, enabled.toString());
-      await secureStorage
-        .deleteItem(this.BIOMETRIC_ENABLED_KEY)
-        .catch(() => {});
     } catch {
       throw new AccountStorageError('Failed to store biometric setting');
     }
+    if (enabled) {
+      await secureStorage
+        .deleteItem(this.BIOMETRIC_ENABLED_KEY)
+        .catch(() => {});
+    } else {
+      await secureStorage
+        .setItem(this.BIOMETRIC_ENABLED_KEY, 'false')
+        .catch(() => {});
+    }
   }
 
+  /**
+   * Whether biometric unlock is on. Reads AsyncStorage, then the secure-store
+   * copy of the key. When only the secure copy is set it is copied to
+   * AsyncStorage; a legacy `'true'` is then deleted (old data from before the
+   * flag moved), while a `'false'` is kept, because it is the marker
+   * `setBiometricEnabled(false)` leaves to outlive a reinstall. Any failure
+   * reads as false.
+   */
   static async isBiometricEnabled(): Promise<boolean> {
     try {
       let enabled = await storage.getItem(this.BIOMETRIC_ENABLED_KEY);
@@ -4790,9 +4824,11 @@ export class AccountSecureStorage {
         const legacy = await secureStorage.getItem(this.BIOMETRIC_ENABLED_KEY);
         if (legacy) {
           await storage.setItem(this.BIOMETRIC_ENABLED_KEY, legacy);
-          await secureStorage
-            .deleteItem(this.BIOMETRIC_ENABLED_KEY)
-            .catch(() => {});
+          if (legacy !== 'false') {
+            await secureStorage
+              .deleteItem(this.BIOMETRIC_ENABLED_KEY)
+              .catch(() => {});
+          }
           enabled = legacy;
         }
       }
@@ -4805,8 +4841,9 @@ export class AccountSecureStorage {
   /**
    * TASK-509: the stored biometric-enabled flag as three states, read-only.
    * Reads the same two locations as `isBiometricEnabled` (AsyncStorage, then
-   * the legacy secure-store copy) but never migrates the legacy copy, so it
-   * writes nothing. `'absent'` only when neither location holds a value; any
+   * the secure-store copy: legacy data, or the `'false'` marker that
+   * `setBiometricEnabled(false)` leaves to outlive a reinstall) but never
+   * migrates the secure copy, so it writes nothing. `'absent'` only when neither location holds a value; any
    * stored value other than `'true'` reads as `'false'`. A read failure THROWS:
    * it is never reported as absent.
    */
@@ -4824,8 +4861,9 @@ export class AccountSecureStorage {
   /**
    * TASK-509: may the onboarding old-PIN step offer to read the biometric
    * convenience item? Only when the enabled flag is ABSENT (a reinstall keeps
-   * the item but loses the flag; an explicit `'false'`, such as the one
-   * `failSafeDisableBiometrics` writes, and `'true'` both mean no), the app runs
+   * the item but loses the AsyncStorage flag; an explicit `'false'`, such as
+   * the one `failSafeDisableBiometrics` writes, which also survives a
+   * reinstall in the secure store, and `'true'` both mean no), the app runs
    * on mobile (`isMobile()`: the mobile adapter is the only one whose
    * getItemWithAuth is gated by the OS; elsewhere it is a plain read), and
    * biometrics is enrolled. Reads only, and never the item itself (that read is

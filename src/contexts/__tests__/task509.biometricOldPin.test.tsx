@@ -18,6 +18,7 @@ jest.mock('@/platform', () => {
   const ops: string[] = [];
   const flags = {
     failReadOf: null as string | null,
+    failWriteOf: null as string | null,
     authRead: 'normal' as 'normal' | 'throw',
     mobile: true,
     enrolled: true,
@@ -32,6 +33,7 @@ jest.mock('@/platform', () => {
       kv.clear();
       ops.length = 0;
       flags.failReadOf = null;
+      flags.failWriteOf = null;
       flags.authRead = 'normal';
       flags.mobile = true;
       flags.enrolled = true;
@@ -50,6 +52,10 @@ jest.mock('@/platform', () => {
         return secure.has(k) ? secure.get(k)! : null;
       },
       setItem: async (k: string, v: string) => {
+        if (flags.failWriteOf === `secure:${k}`) {
+          ops.push(`secure:setfail:${k}`);
+          throw new Error('write failed');
+        }
         ops.push(`secure:set:${k}`);
         secure.set(k, v);
       },
@@ -160,6 +166,7 @@ const mockPlatform = platform as unknown as {
   __ops: string[];
   __flags: {
     failReadOf: string | null;
+    failWriteOf: string | null;
     authRead: 'normal' | 'throw';
     mobile: boolean;
     enrolled: boolean;
@@ -533,13 +540,194 @@ describe('unlockForRestoreWithBiometrics', () => {
   it('screen left while verifying (isCurrent false after the verify): cancelled, vault empty', async () => {
     seedItem(OLD_PIN);
     const auth = await bootAuth();
+    const verifySpy = jest.spyOn(AccountSecureStorage, 'verifyPin');
+    // Current until the verify has started, then left.
+    const isCurrent = jest.fn(() => verifySpy.mock.calls.length === 0);
+    expect(await unlockWithItem(auth, isCurrent)).toEqual({
+      status: 'cancelled',
+    });
+    expect(verifySpy).toHaveBeenCalledTimes(1);
+    expect(SessionKeyVault.isUnlocked()).toBe(false);
+    expectNoBiometricWrites();
+    expectSecretNeverLogged();
+  });
+
+  it('step already left before the read: cancelled, no prompt, no verify', async () => {
+    seedItem(OLD_PIN);
+    const auth = await bootAuth();
+    const verifySpy = jest.spyOn(AccountSecureStorage, 'verifyPin');
     const isCurrent = jest.fn(() => false);
     expect(await unlockWithItem(auth, isCurrent)).toEqual({
       status: 'cancelled',
     });
     expect(isCurrent).toHaveBeenCalled();
+    expect(getItemWithAuth).not.toHaveBeenCalled();
+    expect(verifySpy).not.toHaveBeenCalled();
+    expect(SessionKeyVault.isUnlocked()).toBe(false);
+    expectNoBiometricWrites();
+  });
+
+  it('step left during the prompt: cancelled, no verify, vault empty', async () => {
+    seedItem(OLD_PIN);
+    const auth = await bootAuth();
+    const verifySpy = jest.spyOn(AccountSecureStorage, 'verifyPin');
+    let current = true;
+    getItemWithAuth.mockImplementationOnce(async (k: string) => {
+      // The person taps "I don't remember it" while the OS sheet is up.
+      current = false;
+      return mockPlatform.__secure.get(k) ?? null;
+    });
+    expect(await unlockWithItem(auth, () => current)).toEqual({
+      status: 'cancelled',
+    });
+    expect(getItemWithAuth).toHaveBeenCalledTimes(1);
+    expect(verifySpy).not.toHaveBeenCalled();
     expect(SessionKeyVault.isUnlocked()).toBe(false);
     expectNoBiometricWrites();
     expectSecretNeverLogged();
+  });
+});
+
+// An explicit "biometrics off" must outlive a reinstall. A reinstall wipes
+// AsyncStorage but keeps the keychain, so setBiometricEnabled(false) also
+// leaves a plain (not auth-gated) secure-store 'false', which the old-PIN step
+// reads as "not absent".
+describe('the biometrics-off marker survives a reinstall', () => {
+  function reinstall() {
+    // AsyncStorage is wiped; the keychain (secure store) is kept.
+    mockPlatform.__kv.clear();
+  }
+
+  it("setBiometricEnabled(false) writes 'false' to AsyncStorage and to the secure store", async () => {
+    await AccountSecureStorage.setBiometricEnabled(false);
+    expect(mockPlatform.__kv.get(FLAG)).toBe('false');
+    expect(mockPlatform.__secure.get(FLAG)).toBe('false');
+    expect(mockPlatform.__ops).toEqual([
+      `kv:set:${FLAG}`,
+      `secure:set:${FLAG}`,
+    ]);
+  });
+
+  it('a failing secure-store write is ignored: AsyncStorage still says false and the call resolves', async () => {
+    mockPlatform.__flags.failWriteOf = `secure:${FLAG}`;
+    await expect(
+      AccountSecureStorage.setBiometricEnabled(false)
+    ).resolves.toBeUndefined();
+    expect(mockPlatform.__kv.get(FLAG)).toBe('false');
+    expect(mockPlatform.__ops).toEqual([
+      `kv:set:${FLAG}`,
+      `secure:setfail:${FLAG}`,
+    ]);
+  });
+
+  it("setBiometricEnabled(true) removes the secure copy and never writes a secure 'true'", async () => {
+    await AccountSecureStorage.setBiometricEnabled(false);
+    mockPlatform.__ops.length = 0;
+    await AccountSecureStorage.setBiometricEnabled(true);
+    expect(mockPlatform.__kv.get(FLAG)).toBe('true');
+    expect(mockPlatform.__secure.has(FLAG)).toBe(false);
+    expect(mockPlatform.__ops).toEqual([
+      `kv:set:${FLAG}`,
+      `secure:del:${FLAG}`,
+    ]);
+  });
+
+  it('after a reinstall the old-PIN step sees false, offers nothing, and the marker stays', async () => {
+    seedItem(OLD_PIN);
+    await AccountSecureStorage.setBiometricEnabled(false);
+    reinstall();
+    expect(await AccountSecureStorage.readBiometricEnabledFlagState()).toBe(
+      'false'
+    );
+    expect(await AccountSecureStorage.isBiometricRestoreAvailable()).toBe(
+      false
+    );
+    expect(await AccountSecureStorage.isBiometricEnabled()).toBe(false);
+    // The migration copies it to AsyncStorage but keeps the marker.
+    expect(mockPlatform.__kv.get(FLAG)).toBe('false');
+    expect(mockPlatform.__secure.get(FLAG)).toBe('false');
+    expect(getItemWithAuth).not.toHaveBeenCalled();
+  });
+
+  it('after a reinstall the step refuses before any prompt', async () => {
+    seedItem(OLD_PIN);
+    await AccountSecureStorage.setBiometricEnabled(false);
+    // Keep the PIN credential's AsyncStorage copy so the provider boots as on
+    // a reinstalled phone; drop only the flag's AsyncStorage copy.
+    mockPlatform.__kv.delete(FLAG);
+    const auth = await bootAuth();
+    expect(await canOffer(auth)).toBe(false);
+    expect(await unlockWithItem(auth)).toEqual({ status: 'unavailable' });
+    expect(getItemWithAuth).not.toHaveBeenCalled();
+    expect(mockPlatform.__secure.get(FLAG)).toBe('false');
+  });
+
+  it("secure 'false' with AsyncStorage empty: copied to AsyncStorage, and the secure copy is kept", async () => {
+    mockPlatform.__secure.set(FLAG, 'false');
+    expect(await AccountSecureStorage.isBiometricEnabled()).toBe(false);
+    expect(mockPlatform.__kv.get(FLAG)).toBe('false');
+    expect(mockPlatform.__secure.get(FLAG)).toBe('false');
+    expect(mockPlatform.__ops).toEqual([`kv:set:${FLAG}`]);
+  });
+
+  it("legacy secure 'true' with AsyncStorage empty: migrated and deleted as before", async () => {
+    mockPlatform.__secure.set(FLAG, 'true');
+    expect(await AccountSecureStorage.isBiometricEnabled()).toBe(true);
+    expect(mockPlatform.__kv.get(FLAG)).toBe('true');
+    expect(mockPlatform.__secure.has(FLAG)).toBe(false);
+  });
+
+  it('clearAll removes the marker with everything else', async () => {
+    seedItem(OLD_PIN);
+    await AccountSecureStorage.setBiometricEnabled(false);
+    expect(mockPlatform.__secure.get(FLAG)).toBe('false');
+    await AccountSecureStorage.clearAll();
+    expect(mockPlatform.__secure.has(FLAG)).toBe(false);
+    expect(mockPlatform.__secure.has(ITEM)).toBe(false);
+    expect(mockPlatform.__kv.has(FLAG)).toBe(false);
+  });
+
+  // Every production "biometrics off" goes through setBiometricEnabled(false),
+  // so each one leaves the marker; nothing else writes the flag key.
+  it('every production biometrics-off call goes through the one function', () => {
+    const { readFileSync, readdirSync, statSync } = require('fs');
+    const { join, relative, resolve } = require('path');
+    const root = resolve(__dirname, '../..');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name);
+        if (statSync(full).isDirectory()) {
+          if (name !== '__tests__') walk(full);
+        } else if (/\.(ts|tsx)$/.test(name) && !/\.test\./.test(name)) {
+          files.push(full);
+        }
+      }
+    };
+    walk(root);
+    const callers: Record<string, number> = {};
+    const keyUsers: string[] = [];
+    for (const file of files) {
+      const source: string = readFileSync(file, 'utf8');
+      const rel = relative(root, file);
+      const calls = source.match(
+        /await (?:this|AccountSecureStorage)\.setBiometricEnabled\(false\)/g
+      );
+      if (calls) callers[rel] = calls.length;
+      if (source.includes('voi_biometric_enabled')) keyUsers.push(rel);
+    }
+    expect(callers).toEqual({
+      'contexts/AuthContext.tsx': 1,
+      'screens/onboarding/SecuritySetupScreen.tsx': 2,
+      'services/secure/AccountSecureStorage.ts': 1,
+      'services/secure/biometricUnlock.ts': 1,
+      'services/secure/orphanPin.ts': 1,
+    });
+    // The backup collector names the key but reads the flag through
+    // isBiometricEnabled; only AccountSecureStorage writes it.
+    expect(keyUsers.sort()).toEqual([
+      'services/backup/collectors.ts',
+      'services/secure/AccountSecureStorage.ts',
+    ]);
   });
 });
