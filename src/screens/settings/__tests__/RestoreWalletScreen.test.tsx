@@ -35,10 +35,14 @@ jest.mock('@/contexts/ThemeContext', () => ({
 let mockConfirmRestore: () => void = () => {};
 const mockUnlockForRestore = jest.fn();
 const mockClearRestoreVault = jest.fn();
+const mockCanOfferBiometric = jest.fn(async () => false);
+const mockUnlockWithBiometrics = jest.fn();
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
     recheckAuthState: mockRecheck,
     unlockForRestore: mockUnlockForRestore,
+    canOfferBiometricForRestore: mockCanOfferBiometric,
+    unlockForRestoreWithBiometrics: mockUnlockWithBiometrics,
     clearRestoreVault: mockClearRestoreVault,
   }),
 }));
@@ -180,6 +184,8 @@ beforeEach(() => {
   mockLockedUntil = null;
   mockUnlockForRestore.mockReset();
   mockClearRestoreVault.mockClear();
+  mockCanOfferBiometric.mockReset().mockResolvedValue(false);
+  mockUnlockWithBiometrics.mockReset();
   jest.restoreAllMocks();
 });
 
@@ -516,6 +522,94 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
 });
 
 // DOC-507 section 5: the forgotten-PIN step on the screen.
+describe('restore screen: biometric unlock on the old-PIN step (TASK-509)', () => {
+  const NORMAL =
+    'This phone still has a PIN from before. Enter it to restore your backup.';
+  let handler: (state: string) => void;
+  beforeEach(() => {
+    jest.spyOn(AppState, 'addEventListener').mockImplementation((_type, fn) => {
+      handler = fn as (state: string) => void;
+      return { remove: jest.fn() } as never;
+    });
+  });
+
+  async function openOnboardingWithPin() {
+    mockParams = { isOnboarding: true };
+    mockHasPin = true;
+    const view = await render(<RestoreWalletScreen />);
+    await view.findByText(NORMAL);
+    return view;
+  }
+
+  it('no button when the device cannot offer it, and nothing is read', async () => {
+    const view = await openOnboardingWithPin();
+    await act(async () => {});
+    expect(mockCanOfferBiometric).toHaveBeenCalled();
+    expect(view.queryByText('Use Biometric')).toBeNull();
+    expect(mockUnlockWithBiometrics).not.toHaveBeenCalled();
+  });
+
+  it('a verified biometric unlock opens the chooser and the restore carries its epoch', async () => {
+    mockCanOfferBiometric.mockResolvedValue(true);
+    mockUnlockWithBiometrics.mockResolvedValue({
+      status: 'verified',
+      epoch: 77,
+    });
+    jest
+      .mocked(BackupService.validateBackupFile)
+      .mockResolvedValue({ accountCount: 1 } as never);
+    jest
+      .mocked(BackupService.restoreBackup)
+      .mockResolvedValue(restoreResult(false) as never);
+    jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const view = await openOnboardingWithPin();
+    await fireEvent.press(await view.findByText('Use Biometric'));
+    expect(mockUnlockForRestore).not.toHaveBeenCalled();
+    await fireEvent.press(await view.findByText('Select Backup File'));
+    await fireEvent.press(await view.findByText('Confirm password'));
+    await fireEvent.press(await view.findByText('Confirm restore'));
+    await view.findByText('Select Backup File');
+    expect(BackupService.restoreBackup).toHaveBeenCalledWith(
+      'file:///b.voibackup',
+      'pw',
+      { oldPinSession: { epoch: 77 } }
+    );
+  });
+
+  describe('a biometric check still running', () => {
+    async function pending() {
+      let isCurrent: () => boolean = () => false;
+      mockCanOfferBiometric.mockResolvedValue(true);
+      mockUnlockWithBiometrics.mockImplementation((current: () => boolean) => {
+        isCurrent = current;
+        return new Promise(() => {});
+      });
+      const view = await openOnboardingWithPin();
+      void fireEvent.press(await view.findByText('Use Biometric'));
+      await waitFor(() => expect(mockUnlockWithBiometrics).toHaveBeenCalled());
+      return { view, current: () => isCurrent() };
+    }
+
+    it('is current while the screen stays in the foreground', async () => {
+      const { current } = await pending();
+      expect(current()).toBe(true);
+    });
+
+    it('is no longer current after the app goes to the background', async () => {
+      const { current } = await pending();
+      handler('background');
+      expect(current()).toBe(false);
+    });
+
+    it('is no longer current after the user taps "I don\'t remember it", which still works', async () => {
+      const { view, current } = await pending();
+      await fireEvent.press(view.getByText("I don't remember it"));
+      expect(current()).toBe(false);
+      expect(view.queryByLabelText('Old PIN')).toBeNull();
+    });
+  });
+});
+
 describe('restore screen: the forgotten-PIN step', () => {
   const NORMAL =
     'This phone still has a PIN from before. Enter it to restore your backup.';

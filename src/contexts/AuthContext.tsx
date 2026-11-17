@@ -138,6 +138,26 @@ export interface AuthContextType {
     secret: string,
     isCurrent?: () => boolean
   ) => Promise<RestoreUnlockResult>;
+  /**
+   * TASK-509: may the old-PIN step offer the biometric unlock? True only when
+   * the biometric-enabled flag is ABSENT (a reinstall keeps the biometric item
+   * but loses the flag), the platform has an auth-gated store, biometrics is
+   * enrolled and no wipe is pending. Reads only; it never reads the biometric
+   * item (that read is the OS prompt). Any failure is false. Stable identity.
+   */
+  canOfferBiometricForRestore: () => Promise<boolean>;
+  /**
+   * TASK-509: the old-PIN step's biometric unlock, run only on a tap. Checks,
+   * in order and before any prompt: the flag is absent (and the device can
+   * offer it), no wipe is pending, PIN entry is not paused. Then reads the
+   * biometric item (the OS prompt) and passes its secret to `unlockForRestore`
+   * unchanged, so the verify, its throttle, the wipe refusal, `isCurrent` and
+   * the vault fill are the PIN path's own. Writes nothing to the biometric item
+   * or its flag on any outcome.
+   */
+  unlockForRestoreWithBiometrics: (
+    isCurrent?: () => boolean
+  ) => Promise<BiometricRestoreUnlockResult>;
   /** Empty the session vault: the old-PIN restore calls it when the user leaves,
    *  cancels, finishes, backgrounds the app or the lock timeout fires. */
   clearRestoreVault: () => void;
@@ -150,6 +170,18 @@ export type RestoreUnlockResult =
   /** The screen left or the app backgrounded while the PIN was being checked:
    *  nothing was put in the vault. */
   | { status: 'cancelled' };
+
+export type BiometricRestoreUnlockResult =
+  | RestoreUnlockResult
+  /** Not offered here: the flag is present, the platform or enrollment does not
+   *  allow it, or the check could not be read. Nothing was read. */
+  | { status: 'unavailable' }
+  /** PIN entry is paused (or the throttle could not be read). No prompt. */
+  | { status: 'locked' }
+  /** The prompt succeeded but no usable biometric item is saved. */
+  | { status: 'no_item' }
+  /** The person cancelled the OS prompt or it failed. */
+  | { status: 'biometric_cancelled' };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -1013,6 +1045,57 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     SessionKeyVault.clear();
   }, []);
 
+  // TASK-509. Stable across provider renders: the old-PIN step runs it once when
+  // it opens, from an effect keyed on its identity.
+  const canOfferBiometricForRestore =
+    useCallback(async (): Promise<boolean> => {
+      try {
+        if (!(await AccountSecureStorage.isBiometricRestoreAvailable())) {
+          return false;
+        }
+        return !(await AccountSecureStorage.readWipeIntentStrict());
+      } catch {
+        return false;
+      }
+    }, []);
+
+  const unlockForRestoreWithBiometrics = async (
+    isCurrent: () => boolean = () => true
+  ): Promise<BiometricRestoreUnlockResult> => {
+    // Every check below runs BEFORE the item is read, so none of them prompts.
+    if (!(await AccountSecureStorage.isBiometricRestoreAvailable())) {
+      return { status: 'unavailable' };
+    }
+    if (await refuseUnlockWhilePendingWipe()) {
+      return { status: 'wipe_pending' };
+    }
+    try {
+      // The stored throttle, the same read the step shows its countdown from.
+      const { lockedUntil } = await AccountSecureStorage.getPinThrottleState();
+      if (lockedUntil !== null) return { status: 'locked' };
+    } catch (error) {
+      console.error(
+        'PIN throttle read failed before biometric unlock:',
+        redactError(error)
+      );
+      return { status: 'locked' };
+    }
+    // The secret lives only in this local, for the one unlockForRestore call.
+    let saved: Awaited<
+      ReturnType<typeof AccountSecureStorage.getBiometricSecret>
+    >;
+    try {
+      saved = await AccountSecureStorage.getBiometricSecret(
+        'Unlock with your old PIN'
+      );
+    } catch {
+      // The OS prompt was cancelled or failed. Nothing is cleared.
+      return { status: 'biometric_cancelled' };
+    }
+    if (!saved) return { status: 'no_item' };
+    return unlockForRestore(saved.secret, isCurrent);
+  };
+
   const unlockWithBiometrics = async (
     isCurrent = () => true
   ): Promise<boolean> => {
@@ -1233,6 +1316,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateTimeoutSetting,
     consumeUnlockRefusal,
     unlockForRestore,
+    canOfferBiometricForRestore,
+    unlockForRestoreWithBiometrics,
     clearRestoreVault,
   };
 

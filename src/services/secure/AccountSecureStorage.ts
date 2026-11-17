@@ -5,6 +5,7 @@ import {
   crypto as platformCrypto,
   biometrics,
   deviceId as platformDeviceId,
+  isMobile,
 } from '../../platform';
 
 // Buffer polyfill for extension compatibility
@@ -4650,22 +4651,26 @@ export class AccountSecureStorage {
    * Fail-safe teardown: make a surviving biometric-convenience item INERT.
    *
    * BOUNDARY (Codex P1): the enabled-FLAG is the READ GATE — a stale convenience
-   * item is only dangerous if it is READ, and it is read ONLY when biometrics is
-   * ENABLED (biometric unlock gates on the persisted flag via
-   * `unlockVaultWithBiometrics`). So flipping the flag to `false` is the PRIMARY,
-   * AWAITED protection; deleting the item is best-effort cleanup that may fail
-   * (a SecureStore op) WITHOUT weakening the guarantee. The enabled-flag is
-   * AsyncStorage-backed (separate from the failing SecureStore item), so this
-   * write typically succeeds even when the item op does not. We deliberately do
-   * NOT chase the delete — a cascade of storage failures is a device-broken
-   * condition out of scope.
+   * item is only dangerous if it is READ to unlock, and both unlock readers gate
+   * on the persisted flag: the lock-screen biometric unlock reads it only when
+   * the flag is `'true'` (via `unlockVaultWithBiometrics`), and the onboarding
+   * old-PIN step (TASK-509, `unlockForRestoreWithBiometrics`) reads it only when
+   * the flag is ABSENT (a reinstall keeps the item but loses the flag). An
+   * explicit `false` closes both. So flipping the flag to `false` is the
+   * PRIMARY, AWAITED protection; deleting the item is best-effort cleanup that
+   * may fail (a SecureStore op) WITHOUT weakening the guarantee. The
+   * enabled-flag is AsyncStorage-backed (separate from the failing SecureStore
+   * item), so this write typically succeeds even when the item op does not. We
+   * deliberately do NOT chase the delete — a cascade of storage failures is a
+   * device-broken condition out of scope.
    *
    * If even the flag write fails (total storage failure), the WORST case is a
    * failed biometric unlock that falls back to PIN — the new PIN always works —
-   * NEVER a security bypass or mnemonic-recovery event. (Even if a stale
-   * old-PIN secret were somehow loaded, a v2 unwrap under it would MAC-fail → the
-   * op errors → PIN fallback.) Swallows all errors so it never rolls back the
-   * already-committed PIN change. Never logs the secret.
+   * NEVER a security bypass or mnemonic-recovery event. (A stale secret read by
+   * the old-PIN step goes through `verifyPin`, fails, and fills nothing. Even
+   * if a stale old-PIN secret were somehow loaded, a v2 unwrap under it would
+   * MAC-fail → the op errors → PIN fallback.) Swallows all errors so it never
+   * rolls back the already-committed PIN change. Never logs the secret.
    */
   private static async failSafeDisableBiometrics(): Promise<void> {
     try {
@@ -4797,6 +4802,48 @@ export class AccountSecureStorage {
     }
   }
 
+  /**
+   * TASK-509: the stored biometric-enabled flag as three states, read-only.
+   * Reads the same two locations as `isBiometricEnabled` (AsyncStorage, then
+   * the legacy secure-store copy) but never migrates the legacy copy, so it
+   * writes nothing. `'absent'` only when neither location holds a value; any
+   * stored value other than `'true'` reads as `'false'`. A read failure THROWS:
+   * it is never reported as absent.
+   */
+  static async readBiometricEnabledFlagState(): Promise<
+    'true' | 'false' | 'absent'
+  > {
+    let value = await storage.getItem(this.BIOMETRIC_ENABLED_KEY);
+    if (value == null) {
+      value = await secureStorage.getItem(this.BIOMETRIC_ENABLED_KEY);
+    }
+    if (value == null) return 'absent';
+    return value === 'true' ? 'true' : 'false';
+  }
+
+  /**
+   * TASK-509: may the onboarding old-PIN step offer to read the biometric
+   * convenience item? Only when the enabled flag is ABSENT (a reinstall keeps
+   * the item but loses the flag; an explicit `'false'`, such as the one
+   * `failSafeDisableBiometrics` writes, and `'true'` both mean no), the platform
+   * has an auth-gated store (on the extension getItemWithAuth is a plain read),
+   * and biometrics is enrolled. Reads only, and never the item itself (that read
+   * is the OS prompt). Any failure reads as false.
+   */
+  static async isBiometricRestoreAvailable(): Promise<boolean> {
+    try {
+      if ((await this.readBiometricEnabledFlagState()) !== 'absent') {
+        return false;
+      }
+      if (!isMobile() || typeof secureStorage.getItemWithAuth !== 'function') {
+        return false;
+      }
+      return (await biometrics.isEnrolled()) === true;
+    } catch {
+      return false;
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // BIOMETRIC-CONVENIENCE ITEM (DOC-137 §3). READ BEFORE CHANGING.
   //
@@ -4859,13 +4906,19 @@ export class AccountSecureStorage {
    * Return contract mirrors expo-secure-store's documented `getItemAsync`:
    *   - resolves the parsed `{ secret, secretSource }` on success;
    *   - resolves `null` when the item is ABSENT or has been INVALIDATED
-   *     (biometric-enrollment change / lock removal) — the caller treats this as
-   *     the invalidation case (§3.4: clear the enabled flag, fall back to PIN,
-   *     NEVER the mnemonic), and a structurally corrupt item is coerced to null
-   *     for the same safe handling;
+   *     (biometric-enrollment change / lock removal), and a structurally corrupt
+   *     item is coerced to null. The lock-screen unlock
+   *     (`unlockVaultWithBiometrics`) treats null as the invalidation case
+   *     (§3.4: clear the enabled flag, fall back to PIN, NEVER the mnemonic).
+   *     The onboarding old-PIN step (TASK-509) clears nothing: it reports that
+   *     no biometric unlock is saved and the person enters the PIN;
    *   - THROWS only when the OS auth itself fails or the user cancels — the
-   *     caller must treat a throw as a cancel (keep biometrics enabled), NOT as
-   *     an invalidation.
+   *     unlock callers treat a throw as a cancel (nothing is cleared), NOT as
+   *     an invalidation; the secret-change refresh instead fails safe (see
+   *     `refreshBiometricSecretAfterSecretChange`).
+   *
+   * This read never writes. Callers that write in response (the lock-screen
+   * invalidation, the secret-change refresh) do so themselves.
    */
   static async getBiometricSecret(
     prompt: string

@@ -21,3 +21,16 @@ export function formatTimeLeft(ms: number): string {
 export function oldPinLockedText(msLeft: number): string {
   return `Too many wrong tries, so PIN entry is paused. Try again in ${formatTimeLeft(msLeft)}. Nothing on this phone has changed.`;
 }
+
+// Biometric unlock on the old-PIN step (TASK-509). The label matches the lock
+// screen's biometric button; the lines are one plain sentence each.
+export const BIOMETRIC_UNLOCK_LABEL = 'Use Biometric';
+
+export const BIOMETRIC_NO_ITEM_TEXT =
+  'No biometric unlock is saved on this phone. Enter your old PIN.';
+
+export const BIOMETRIC_CANCELLED_TEXT =
+  "Biometric unlock didn't finish. Enter your old PIN or try again.";
+
+export const BIOMETRIC_INVALID_TEXT =
+  "The saved biometric unlock doesn't match. Enter your old PIN.";

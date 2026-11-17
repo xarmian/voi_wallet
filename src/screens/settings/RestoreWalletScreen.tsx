@@ -52,7 +52,13 @@ export default function RestoreWalletScreen() {
   const route = useRoute();
   const isOnboarding = (route.params as { isOnboarding?: boolean } | undefined)
     ?.isOnboarding;
-  const { recheckAuthState, unlockForRestore, clearRestoreVault } = useAuth();
+  const {
+    recheckAuthState,
+    unlockForRestore,
+    canOfferBiometricForRestore,
+    unlockForRestoreWithBiometrics,
+    clearRestoreVault,
+  } = useAuth();
   // One selector, one primitive (a derived object would loop the store).
   const deviceAccountCount = useWalletStore(
     (state) => state.wallet?.accounts.length ?? 0
@@ -500,6 +506,15 @@ export default function RestoreWalletScreen() {
             readLockedUntil={readLockedUntil}
             onVerified={handleOldPinVerified}
             onForgotten={handleForgotten}
+            canOfferBiometric={canOfferBiometricForRestore}
+            unlockWithBiometric={() => {
+              // The same guard as the PIN: a check that outlives the step
+              // (left, backgrounded, the forgotten link) fills nothing.
+              const generation = oldPinGeneration.current;
+              return unlockForRestoreWithBiometrics(
+                () => oldPinGeneration.current === generation
+              );
+            }}
           />
         )}
 
