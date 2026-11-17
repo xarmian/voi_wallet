@@ -2,8 +2,10 @@
  * Session-security teardown (Wave-2, DOC-137 §6.3 / Codex P1-D + P1-E, PR3)
  *
  * The SINGLE place that drops every piece of in-memory session key material.
- * AuthContext.lock() calls this on EVERY lock path (explicit, inactivity-timeout,
- * and background-grace), so teardown lives in exactly one location:
+ * AuthContext calls this on EVERY path that lands locked: lock() (explicit,
+ * inactivity-timeout, and background-grace) and every auth-check verdict that
+ * lands locked, at boot and on recheckAuthState() (TASK-557). Teardown lives in
+ * exactly one location:
  *
  *   1. SessionKeyVault.clear()            — zero memoized wrap keys + drop the
  *                                           secret + bump the vault epoch (P1-D).
@@ -40,7 +42,9 @@ export function clearSessionSecurity(): void {
  *   2. Run the cache teardown (vault + 60 s + messaging).
  *
  * AuthContext.lock() calls this on every real lock (i.e. only when a PIN is set;
- * a no-PIN wallet never locks, so its always-unlocked signal is left untouched).
+ * lock() leaves a no-PIN wallet unlocked, so its signal is left untouched). Every
+ * auth-check verdict that lands locked calls it too, whatever hasPin is, since
+ * that state is locked and the signal must match it (TASK-557).
  */
 export function enterLockedState(): void {
   AppLockSignal.setUnlocked(false);
