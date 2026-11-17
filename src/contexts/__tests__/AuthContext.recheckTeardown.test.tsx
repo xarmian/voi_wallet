@@ -567,12 +567,14 @@ describe('guards', () => {
     expect(SessionKeyVault.isUnlocked()).toBe(false);
   });
 
-  // A lock listener that throws must not stop the verdict landing: the
-  // recheck resolves, and the state and the signal are locked. The listener
-  // throws once, on the unlocked-to-locked transition.
+  // A lock listener that throws must not stop the verdict landing, nor cut the
+  // teardown short: the recheck resolves, the state and the signal are locked,
+  // and the vault and both caches are still cleared. The listener throws once,
+  // on the unlocked-to-locked transition.
   it('throwingLockListener_stillLandsLocked', async () => {
     const rendered = await mount();
     await unlockLive(rendered);
+    const seeded = seedCaches();
     let wasUnlocked = AppLockSignal.isUnlocked();
     let thrown = 0;
     const unsubscribe = AppLockSignal.subscribe(() => {
@@ -596,7 +598,7 @@ describe('guards', () => {
       isAuthenticated: false,
       authChecked: true,
     });
-    expect(AppLockSignal.isUnlocked()).toBe(false);
+    expectTornDown(seeded);
     expect(console.error).toHaveBeenCalledWith(
       'Session teardown failed while locking:',
       expect.anything()

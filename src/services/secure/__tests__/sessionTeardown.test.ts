@@ -27,6 +27,12 @@ import { SessionKeyVault } from '../SessionKeyVault';
 import { AppLockSignal } from '../appLockState';
 import { clearMessagingKeyCache } from '../../messaging/keyDerivation';
 
+// A failing assertion skips a test's own mockRestore; restore here so a spy
+// (e.g. a throwing vault clear) never leaks into the next test.
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
 describe('clearSessionSecurity', () => {
   it('clears the vault, the 60s key cache, and the messaging key cache', () => {
     const vaultSpy = jest.spyOn(SessionKeyVault, 'clear');
@@ -37,6 +43,27 @@ describe('clearSessionSecurity', () => {
     clearSessionSecurity();
 
     expect(vaultSpy).toHaveBeenCalledTimes(1);
+    expect(cacheSpy).toHaveBeenCalledTimes(1);
+    expect(clearMessagingKeyCache).toHaveBeenCalledTimes(1);
+
+    vaultSpy.mockRestore();
+    cacheSpy.mockRestore();
+  });
+
+  it('still clears both caches when the vault clear throws, then rethrows', () => {
+    (clearMessagingKeyCache as jest.Mock).mockClear();
+    const failure = new Error('vault listener failed');
+    const vaultSpy = jest
+      .spyOn(SessionKeyVault, 'clear')
+      .mockImplementation(() => {
+        throw failure;
+      });
+    const cacheSpy = jest
+      .spyOn(AccountSecureStorage, 'clearPrivateKeyCache')
+      .mockImplementation(() => {});
+
+    expect(() => clearSessionSecurity()).toThrow(failure);
+
     expect(cacheSpy).toHaveBeenCalledTimes(1);
     expect(clearMessagingKeyCache).toHaveBeenCalledTimes(1);
 
@@ -69,6 +96,33 @@ describe('enterLockedState (Codex P1-E: sync lock signal BEFORE teardown)', () =
     );
 
     signalSpy.mockRestore();
+    vaultSpy.mockRestore();
+    cacheSpy.mockRestore();
+  });
+
+  it('still runs the whole teardown when a lock listener throws, then rethrows', () => {
+    (clearMessagingKeyCache as jest.Mock).mockClear();
+    AppLockSignal.setUnlocked(true);
+    const failure = new Error('lock listener failed');
+    const unsubscribe = AppLockSignal.subscribe(() => {
+      if (!AppLockSignal.isUnlocked()) throw failure;
+    });
+    const vaultSpy = jest.spyOn(SessionKeyVault, 'clear');
+    const cacheSpy = jest
+      .spyOn(AccountSecureStorage, 'clearPrivateKeyCache')
+      .mockImplementation(() => {});
+
+    try {
+      expect(() => enterLockedState()).toThrow(failure);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(AppLockSignal.isUnlocked()).toBe(false);
+    expect(vaultSpy).toHaveBeenCalledTimes(1);
+    expect(cacheSpy).toHaveBeenCalledTimes(1);
+    expect(clearMessagingKeyCache).toHaveBeenCalledTimes(1);
+
     vaultSpy.mockRestore();
     cacheSpy.mockRestore();
   });

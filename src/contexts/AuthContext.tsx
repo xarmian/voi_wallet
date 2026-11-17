@@ -342,8 +342,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // teardown lock() runs (lock signal to locked, then vault, 60 s cache and
   // messaging cache cleared), synchronously and BEFORE the state update, on boot
   // and on every recheckAuthState(). No await and no storage read, so the boot
-  // verdict is unchanged. A throwing lock or vault listener is logged (redacted,
-  // never a secret) and the verdict still lands, so authChecked always arrives.
+  // verdict is unchanged. A throwing lock or vault listener does not cut the
+  // teardown short (enterLockedState runs every step, then rethrows); the error
+  // is logged here (redacted, never a secret) and the verdict still lands, so
+  // authChecked always arrives.
   const landLocked = (
     fields: Partial<AuthState> & { isLocked: true; isAuthenticated: false }
   ) => {
