@@ -93,8 +93,8 @@ describe('Android permissions (TASK-553)', () => {
   });
 
   it('bumps the build number on both platforms', () => {
-    expect(appConfig.expo.android.versionCode).toBe(25);
-    expect(appConfig.expo.ios.buildNumber).toBe('25');
+    expect(appConfig.expo.android.versionCode).toBe(26);
+    expect(appConfig.expo.ios.buildNumber).toBe('26');
   });
 });
 

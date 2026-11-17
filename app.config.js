@@ -174,7 +174,7 @@ export default {
       "supportsTablet": true,
       "jsEngine": "hermes",
       "bundleIdentifier": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
-      "buildNumber": "25",
+      "buildNumber": "26",
       "icon": "./assets/voi_wallet_logo.png",
       "splash": {
         "image": "./assets/voi_wallet_logo.png",
@@ -209,7 +209,7 @@ export default {
       "predictiveBackGestureEnabled": false,
       "package": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
       "googleServicesFile": IS_DEV ? "./google-services-dev.json" : "./google-services.json",
-      "versionCode": 25,
+      "versionCode": 26,
       "permissions": [
         "CAMERA",
         "USE_BIOMETRIC",
