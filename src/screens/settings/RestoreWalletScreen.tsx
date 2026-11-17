@@ -52,7 +52,13 @@ export default function RestoreWalletScreen() {
   const route = useRoute();
   const isOnboarding = (route.params as { isOnboarding?: boolean } | undefined)
     ?.isOnboarding;
-  const { recheckAuthState, unlockForRestore, clearRestoreVault } = useAuth();
+  const {
+    recheckAuthState,
+    unlockForRestore,
+    canOfferBiometricForRestore,
+    unlockForRestoreWithBiometrics,
+    clearRestoreVault,
+  } = useAuth();
   // One selector, one primitive (a derived object would loop the store).
   const deviceAccountCount = useWalletStore(
     (state) => state.wallet?.accounts.length ?? 0
@@ -97,9 +103,13 @@ export default function RestoreWalletScreen() {
       setShowPasswordModal(!!selectedFile && !restoreInFlight.current);
     }
   }, [covered, selectedFile]);
-  // Bumped whenever the screen is left or the app leaves the foreground. A PIN
-  // check that started before the bump must not fill the vault when it ends.
+  // Bumped whenever the screen is left or the app leaves the foreground, except
+  // for 'inactive' while the step's biometric check runs (the OS prompt itself
+  // causes it; see the AppState listener). A PIN check that started before the
+  // bump must not fill the vault when it ends.
   const oldPinGeneration = useRef(0);
+  // True while the old-PIN step's biometric check runs (its OS prompt is up).
+  const biometricPromptActive = useRef(false);
   const sessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const endOldPinSession = useCallback(
@@ -147,11 +157,16 @@ export default function RestoreWalletScreen() {
     };
   }, [isOnboarding]);
 
-  // The vault is cleared when the user leaves, the app goes to the background,
-  // or the session times out; the step returns.
+  // The vault is cleared when the user leaves, the app leaves the foreground,
+  // or the session times out; the step returns. One exception: the OS
+  // biometric prompt moves iOS to 'inactive' while it is up, so 'inactive'
+  // during the step's own biometric check does not end the session (that would
+  // cancel the check the person is authenticating). 'background' always does.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') endOldPinSession('needed');
+      if (state === 'active') return;
+      if (state === 'inactive' && biometricPromptActive.current) return;
+      endOldPinSession('needed');
     });
     return () => {
       sub.remove();
@@ -500,6 +515,20 @@ export default function RestoreWalletScreen() {
             readLockedUntil={readLockedUntil}
             onVerified={handleOldPinVerified}
             onForgotten={handleForgotten}
+            canOfferBiometric={canOfferBiometricForRestore}
+            unlockWithBiometric={async () => {
+              // The same guard as the PIN: a check that outlives the step
+              // (left, backgrounded, the forgotten link) fills nothing.
+              const generation = oldPinGeneration.current;
+              biometricPromptActive.current = true;
+              try {
+                return await unlockForRestoreWithBiometrics(
+                  () => oldPinGeneration.current === generation
+                );
+              } finally {
+                biometricPromptActive.current = false;
+              }
+            }}
           />
         )}
 
