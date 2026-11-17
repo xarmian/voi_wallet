@@ -10,7 +10,7 @@
  * the caller checks it exactly as a typed PIN. The step only sees the result;
  * the secret never reaches it. Nothing is read until the button is tapped.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -25,6 +25,7 @@ import {
   BIOMETRIC_CANCELLED_TEXT,
   BIOMETRIC_INVALID_TEXT,
   BIOMETRIC_NO_ITEM_TEXT,
+  BIOMETRIC_UNAVAILABLE_TEXT,
   BIOMETRIC_UNLOCK_LABEL,
   OLD_PIN_NORMAL_TEXT,
   OLD_PIN_WRONG_TEXT,
@@ -60,7 +61,16 @@ const BIOMETRIC_LINES: Partial<
   no_item: BIOMETRIC_NO_ITEM_TEXT,
   biometric_cancelled: BIOMETRIC_CANCELLED_TEXT,
   invalid: BIOMETRIC_INVALID_TEXT,
+  cancelled: BIOMETRIC_CANCELLED_TEXT,
+  unavailable: BIOMETRIC_UNAVAILABLE_TEXT,
 };
+
+// After these the button is hidden for the rest of the step: a stale saved PIN
+// would cost another try, and a missing or unusable one would only prompt
+// again. A cancelled prompt or check keeps the button for a retry.
+const BIOMETRIC_HIDE_AFTER: ReadonlySet<
+  BiometricRestoreUnlockResult['status']
+> = new Set(['invalid', 'no_item', 'unavailable']);
 
 export default function OldPinStep({
   unlock,
@@ -78,6 +88,9 @@ export default function OldPinStep({
   const [busy, setBusy] = useState(false);
   const [biometricOffered, setBiometricOffered] = useState(false);
   const [biometricLine, setBiometricLine] = useState<string | null>(null);
+  // Set before the first await, so a second tap that lands before React
+  // re-renders with `busy` cannot start a second check (and a second prompt).
+  const biometricInFlight = useRef(false);
   const [lockedUntil, setLockedUntil] = useState<number | null>(null);
   const [tick, setTick] = useState(now());
 
@@ -162,7 +175,10 @@ export default function OldPinStep({
   // One authentication at a time: shares `busy` with the PIN submit. The
   // forgotten link does not wait on it.
   const submitBiometric = useCallback(async () => {
-    if (busy || locked || !unlockWithBiometric) return;
+    if (biometricInFlight.current || busy || locked || !unlockWithBiometric) {
+      return;
+    }
+    biometricInFlight.current = true;
     setBusy(true);
     setWrong(false);
     setBiometricLine(null);
@@ -177,10 +193,12 @@ export default function OldPinStep({
       // after every outcome, as after a PIN submit.
       const line = BIOMETRIC_LINES[result.status];
       if (line) setBiometricLine(line);
+      if (BIOMETRIC_HIDE_AFTER.has(result.status)) setBiometricOffered(false);
       await refresh();
     } catch {
       setBiometricLine(BIOMETRIC_CANCELLED_TEXT);
     } finally {
+      biometricInFlight.current = false;
       setBusy(false);
     }
   }, [busy, locked, unlockWithBiometric, onVerified, refresh]);

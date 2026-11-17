@@ -4825,19 +4825,18 @@ export class AccountSecureStorage {
    * TASK-509: may the onboarding old-PIN step offer to read the biometric
    * convenience item? Only when the enabled flag is ABSENT (a reinstall keeps
    * the item but loses the flag; an explicit `'false'`, such as the one
-   * `failSafeDisableBiometrics` writes, and `'true'` both mean no), the platform
-   * has an auth-gated store (on the extension getItemWithAuth is a plain read),
-   * and biometrics is enrolled. Reads only, and never the item itself (that read
-   * is the OS prompt). Any failure reads as false.
+   * `failSafeDisableBiometrics` writes, and `'true'` both mean no), the app runs
+   * on mobile (`isMobile()`: the mobile adapter is the only one whose
+   * getItemWithAuth is gated by the OS; elsewhere it is a plain read), and
+   * biometrics is enrolled. Reads only, and never the item itself (that read is
+   * the OS prompt). Any failure reads as false.
    */
   static async isBiometricRestoreAvailable(): Promise<boolean> {
     try {
       if ((await this.readBiometricEnabledFlagState()) !== 'absent') {
         return false;
       }
-      if (!isMobile() || typeof secureStorage.getItemWithAuth !== 'function') {
-        return false;
-      }
+      if (!isMobile()) return false;
       return (await biometrics.isEnrolled()) === true;
     } catch {
       return false;

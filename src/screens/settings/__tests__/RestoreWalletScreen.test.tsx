@@ -412,6 +412,14 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
       expect(view.queryByText('Select Backup File')).toBeNull();
     });
 
+    it('going inactive clears the vault and brings the step back', async () => {
+      const view = await verified();
+      handler('inactive');
+      expect(mockClearRestoreVault).toHaveBeenCalledTimes(1);
+      expect(await view.findByText(NORMAL)).toBeTruthy();
+      expect(view.queryByText('Select Backup File')).toBeNull();
+    });
+
     it('leaving the screen clears the vault', async () => {
       const view = await verified();
       await view.unmount();
@@ -444,6 +452,12 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
       it('is no longer current after the app goes to the background', async () => {
         const { current } = await pending();
         handler('background');
+        expect(current()).toBe(false);
+      });
+
+      it('is no longer current after the app goes inactive', async () => {
+        const { current } = await pending();
+        handler('inactive');
         expect(current()).toBe(false);
       });
 
@@ -521,7 +535,7 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
   });
 });
 
-// DOC-507 section 5: the forgotten-PIN step on the screen.
+// TASK-509: the biometric unlock on the old-PIN step, on the screen.
 describe('restore screen: biometric unlock on the old-PIN step (TASK-509)', () => {
   const NORMAL =
     'This phone still has a PIN from before. Enter it to restore your backup.';
@@ -608,8 +622,72 @@ describe('restore screen: biometric unlock on the old-PIN step (TASK-509)', () =
       expect(view.queryByLabelText('Old PIN')).toBeNull();
     });
   });
+
+  // The OS biometric sheet moves iOS to 'inactive' while it is up, and back to
+  // 'active' when it closes.
+  describe('the OS prompt', () => {
+    async function prompting() {
+      let isCurrent: () => boolean = () => false;
+      let finish: () => void = () => {};
+      mockCanOfferBiometric.mockResolvedValue(true);
+      mockUnlockWithBiometrics.mockImplementation((current: () => boolean) => {
+        isCurrent = current;
+        // As unlockForRestore: a check that is no longer current fills nothing.
+        return new Promise((resolve) => {
+          finish = () =>
+            resolve(
+              current()
+                ? { status: 'verified', epoch: 5 }
+                : { status: 'cancelled' }
+            );
+        });
+      });
+      const view = await openOnboardingWithPin();
+      void fireEvent.press(await view.findByText('Use Biometric'));
+      await waitFor(() => expect(mockUnlockWithBiometrics).toHaveBeenCalled());
+      return { view, current: () => isCurrent(), finish: () => finish() };
+    }
+
+    it('going inactive and back while the prompt is up keeps the check current, and a verified result opens the chooser', async () => {
+      const { view, current, finish } = await prompting();
+      handler('inactive');
+      handler('active');
+      expect(current()).toBe(true);
+      await act(async () => {
+        finish();
+      });
+      expect(await view.findByText('Select Backup File')).toBeTruthy();
+      expect(view.queryByText(NORMAL)).toBeNull();
+      expect(mockClearRestoreVault).not.toHaveBeenCalled();
+    });
+
+    it('going to the background while the prompt is up ends the check', async () => {
+      const { view, current, finish } = await prompting();
+      handler('inactive');
+      handler('background');
+      expect(current()).toBe(false);
+      await act(async () => {
+        finish();
+      });
+      expect(view.getByText(NORMAL)).toBeTruthy();
+      expect(view.queryByText('Select Backup File')).toBeNull();
+    });
+
+    it('once the prompt has closed, going inactive ends the verified session as before', async () => {
+      const { view, finish } = await prompting();
+      await act(async () => {
+        finish();
+      });
+      await view.findByText('Select Backup File');
+      handler('inactive');
+      expect(mockClearRestoreVault).toHaveBeenCalledTimes(1);
+      expect(await view.findByText(NORMAL)).toBeTruthy();
+      expect(view.queryByText('Select Backup File')).toBeNull();
+    });
+  });
 });
 
+// DOC-507 section 5: the forgotten-PIN step on the screen.
 describe('restore screen: the forgotten-PIN step', () => {
   const NORMAL =
     'This phone still has a PIN from before. Enter it to restore your backup.';

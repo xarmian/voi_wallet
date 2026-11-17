@@ -106,6 +106,8 @@ export default function RestoreWalletScreen() {
   // Bumped whenever the screen is left or the app leaves the foreground. A PIN
   // check that started before the bump must not fill the vault when it ends.
   const oldPinGeneration = useRef(0);
+  // True while the old-PIN step's biometric check runs (its OS prompt is up).
+  const biometricPromptActive = useRef(false);
   const sessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const endOldPinSession = useCallback(
@@ -153,11 +155,16 @@ export default function RestoreWalletScreen() {
     };
   }, [isOnboarding]);
 
-  // The vault is cleared when the user leaves, the app goes to the background,
-  // or the session times out; the step returns.
+  // The vault is cleared when the user leaves, the app leaves the foreground,
+  // or the session times out; the step returns. One exception: the OS
+  // biometric prompt moves iOS to 'inactive' while it is up, so 'inactive'
+  // during the step's own biometric check does not end the session (that would
+  // cancel the check the person is authenticating). 'background' always does.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') endOldPinSession('needed');
+      if (state === 'active') return;
+      if (state === 'inactive' && biometricPromptActive.current) return;
+      endOldPinSession('needed');
     });
     return () => {
       sub.remove();
@@ -507,13 +514,18 @@ export default function RestoreWalletScreen() {
             onVerified={handleOldPinVerified}
             onForgotten={handleForgotten}
             canOfferBiometric={canOfferBiometricForRestore}
-            unlockWithBiometric={() => {
+            unlockWithBiometric={async () => {
               // The same guard as the PIN: a check that outlives the step
               // (left, backgrounded, the forgotten link) fills nothing.
               const generation = oldPinGeneration.current;
-              return unlockForRestoreWithBiometrics(
-                () => oldPinGeneration.current === generation
-              );
+              biometricPromptActive.current = true;
+              try {
+                return await unlockForRestoreWithBiometrics(
+                  () => oldPinGeneration.current === generation
+                );
+              } finally {
+                biometricPromptActive.current = false;
+              }
             }}
           />
         )}

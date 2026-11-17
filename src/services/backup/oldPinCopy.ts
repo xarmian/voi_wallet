@@ -34,3 +34,6 @@ export const BIOMETRIC_CANCELLED_TEXT =
 
 export const BIOMETRIC_INVALID_TEXT =
   "The saved biometric unlock doesn't match. Enter your old PIN.";
+
+export const BIOMETRIC_UNAVAILABLE_TEXT =
+  "Biometric unlock isn't available here. Enter your old PIN.";

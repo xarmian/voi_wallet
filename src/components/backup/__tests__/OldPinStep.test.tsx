@@ -6,6 +6,7 @@ import {
   BIOMETRIC_CANCELLED_TEXT,
   BIOMETRIC_INVALID_TEXT,
   BIOMETRIC_NO_ITEM_TEXT,
+  BIOMETRIC_UNAVAILABLE_TEXT,
   BIOMETRIC_UNLOCK_LABEL,
   OLD_PIN_NORMAL_TEXT,
   OLD_PIN_WRONG_TEXT,
@@ -137,6 +138,9 @@ describe('biometric copy (pinned)', () => {
     expect(BIOMETRIC_INVALID_TEXT).toBe(
       "The saved biometric unlock doesn't match. Enter your old PIN."
     );
+    expect(BIOMETRIC_UNAVAILABLE_TEXT).toBe(
+      "Biometric unlock isn't available here. Enter your old PIN."
+    );
   });
 });
 
@@ -242,34 +246,44 @@ describe('OldPinStep: biometric unlock (TASK-509)', () => {
     expect(onVerified).toHaveBeenCalledWith(42);
   });
 
+  // A stale, missing or unusable saved PIN hides the button for the rest of
+  // the step (a retry would only prompt again, and a stale one costs a try);
+  // a cancelled prompt or check keeps it for a retry.
   it.each([
-    ['no_item', BIOMETRIC_NO_ITEM_TEXT],
-    ['biometric_cancelled', BIOMETRIC_CANCELLED_TEXT],
-    ['invalid', BIOMETRIC_INVALID_TEXT],
+    ['no_item', BIOMETRIC_NO_ITEM_TEXT, false],
+    ['biometric_cancelled', BIOMETRIC_CANCELLED_TEXT, true],
+    ['invalid', BIOMETRIC_INVALID_TEXT, false],
+    ['cancelled', BIOMETRIC_CANCELLED_TEXT, true],
+    ['unavailable', BIOMETRIC_UNAVAILABLE_TEXT, false],
   ] as const)(
-    '%s shows its line and keeps PIN entry and the forgotten link working',
-    async (status, line) => {
+    '%s shows %p, keeps the button: %p, and PIN entry and the forgotten link still work',
+    async (status, line, keepsButton) => {
       const onVerified = jest.fn();
       const onForgotten = jest.fn();
       const unlock = jest.fn(async (): Promise<Result> => ({
         status: 'verified',
         epoch: 9,
       }));
-      const { view } = await renderStep({
+      const { view, readLockedUntil } = await renderStep({
         canOfferBiometric: async () => true,
         unlockWithBiometric: async () => ({ status }) as Result,
         onVerified,
         onForgotten,
         unlock,
       });
+      readLockedUntil.mockClear();
       await act(async () => {
         fireEvent.press(view.getByText(BIOMETRIC_UNLOCK_LABEL));
       });
       expect(view.getByText(line)).toBeTruthy();
       expect(view.queryByText(OLD_PIN_WRONG_TEXT)).toBeNull();
       expect(onVerified).not.toHaveBeenCalled();
-      // The button stays for a retry.
-      expect(view.getByText(BIOMETRIC_UNLOCK_LABEL)).toBeTruthy();
+      expect(readLockedUntil).toHaveBeenCalledTimes(1);
+      if (keepsButton) {
+        expect(view.getByText(BIOMETRIC_UNLOCK_LABEL)).toBeTruthy();
+      } else {
+        expect(view.queryByText(BIOMETRIC_UNLOCK_LABEL)).toBeNull();
+      }
 
       await act(async () => {
         fireEvent.press(view.getByText("I don't remember it"));
@@ -287,7 +301,7 @@ describe('OldPinStep: biometric unlock (TASK-509)', () => {
     }
   );
 
-  it.each(['locked', 'wipe_pending', 'cancelled', 'unavailable'] as const)(
+  it.each(['locked', 'wipe_pending'] as const)(
     '%s re-reads the stored throttle and shows no extra line',
     async (status) => {
       const { view, readLockedUntil } = await renderStep({
@@ -302,9 +316,39 @@ describe('OldPinStep: biometric unlock (TASK-509)', () => {
       expect(view.queryByText(BIOMETRIC_NO_ITEM_TEXT)).toBeNull();
       expect(view.queryByText(BIOMETRIC_CANCELLED_TEXT)).toBeNull();
       expect(view.queryByText(BIOMETRIC_INVALID_TEXT)).toBeNull();
+      expect(view.queryByText(BIOMETRIC_UNAVAILABLE_TEXT)).toBeNull();
       expect(view.queryByText(OLD_PIN_WRONG_TEXT)).toBeNull();
     }
   );
+
+  it('two taps before the first check ends start one check', async () => {
+    let finish: (r: Result) => void = () => {};
+    const unlockWithBiometric = jest.fn(
+      () =>
+        new Promise<Result>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const { view } = await renderStep({
+      canOfferBiometric: async () => true,
+      unlockWithBiometric,
+    });
+    const button = view.getByText(BIOMETRIC_UNLOCK_LABEL);
+    // Both taps land before React re-renders with the busy state.
+    await act(async () => {
+      fireEvent.press(button);
+      fireEvent.press(button);
+    });
+    expect(unlockWithBiometric).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish({ status: 'biometric_cancelled' });
+    });
+    // Once it ends, the button works again.
+    await act(async () => {
+      fireEvent.press(view.getByText(BIOMETRIC_UNLOCK_LABEL));
+    });
+    expect(unlockWithBiometric).toHaveBeenCalledTimes(2);
+  });
 
   it('a locked result hides the button and the input once the throttle is re-read', async () => {
     let stored: number | null = null;

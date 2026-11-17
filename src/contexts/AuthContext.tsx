@@ -141,8 +141,9 @@ export interface AuthContextType {
   /**
    * TASK-509: may the old-PIN step offer the biometric unlock? True only when
    * the biometric-enabled flag is ABSENT (a reinstall keeps the biometric item
-   * but loses the flag), the platform has an auth-gated store, biometrics is
-   * enrolled and no wipe is pending. Reads only; it never reads the biometric
+   * but loses the flag), the app runs on mobile (`isMobile()`, the only
+   * platform whose biometric read is gated by the OS), biometrics is enrolled
+   * and no wipe is pending. Reads only; it never reads the biometric
    * item (that read is the OS prompt). Any failure is false. Stable identity.
    */
   canOfferBiometricForRestore: () => Promise<boolean>;
