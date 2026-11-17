@@ -24,8 +24,8 @@
  */
 
 import React from 'react';
-import { Alert } from 'react-native';
-import { render, fireEvent } from '@testing-library/react-native';
+import { Alert, TextInput } from 'react-native';
+import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import algosdk from 'algosdk';
 
 jest.mock('@/services/wallet', () => ({}));
@@ -39,6 +39,12 @@ jest.mock('@/store/walletStore', () => ({
 jest.mock('@react-navigation/native', () => ({
   CommonActions: { reset: jest.fn(), navigate: jest.fn() },
   useFocusEffect: () => {},
+}));
+
+// The screen reads the tab bar height from bottom-tabs; the real module needs
+// the full navigation library, which is mocked above.
+jest.mock('@react-navigation/bottom-tabs', () => ({
+  BottomTabBarHeightContext: require('react').createContext(undefined),
 }));
 
 jest.mock('react-native-safe-area-context', () => {
@@ -343,5 +349,96 @@ describe('MnemonicImportScreen — onboarding phraseTyped hand-off (TASK-556)', 
       'SecuritySetup',
       expect.objectContaining({ source: 'mnemonic', phraseTyped: false })
     );
+  });
+});
+
+describe('MnemonicImportScreen — focus and neighbours after a typed split (TASK-554)', () => {
+  // TextInput's jest mock shares one focus() mock across all instances; the
+  // instance each call ran on (mock.contexts) names the field. setSelection is
+  // not part of the mock, so it is added here.
+  type MockInput = { props: { placeholder?: string } };
+  const inputProto = TextInput.prototype as unknown as {
+    focus: jest.Mock;
+    setSelection?: jest.Mock;
+  };
+  const focusedFields = () =>
+    inputProto.focus.mock.contexts.map(
+      (input) => (input as MockInput).props.placeholder
+    );
+
+  beforeEach(() => {
+    inputProto.setSelection = jest.fn();
+  });
+
+  afterEach(() => {
+    delete inputProto.setSelection;
+  });
+
+  async function typeInto(screen: Screen, index: number, texts: string[]) {
+    for (const text of texts) {
+      await fireEvent.changeText(field(screen, index), text);
+    }
+  }
+
+  const values = (screen: Screen) =>
+    Array.from({ length: 25 }, (_, i) => field(screen, i).props.value);
+
+  it('focuses the field holding the partial word, with the cursor at its end', async () => {
+    const { screen } = await renderScreen(false);
+
+    // "act" is a prefix of longer words, so it does not auto-advance.
+    await typeInto(screen, 0, ['a', 'ac', 'act', 'act ', 'act i']);
+    expect(field(screen, 0).props.value).toBe('act');
+    expect(field(screen, 1).props.value).toBe('i');
+
+    await waitFor(() => expect(focusedFields()).toContain('Word 2'));
+    expect(focusedFields()).not.toContain('Word 3');
+    const selection = inputProto.setSelection!;
+    expect(selection).toHaveBeenCalledWith(1, 1);
+    expect(
+      (selection.mock.contexts.at(-1) as MockInput).props.placeholder
+    ).toBe('Word 2');
+
+    await typeInto(screen, 1, ['ic', 'ice']);
+    expect(field(screen, 1).props.value).toBe('ice');
+  });
+
+  it('a paste still focuses the next empty field after the pasted words', async () => {
+    const { screen } = await renderScreen(false);
+
+    await insertWords(screen, 0, WORDS.slice(0, 3));
+
+    await waitFor(() => expect(focusedFields()).toContain('Word 4'));
+    expect(focusedFields()).not.toContain('Word 3');
+  });
+
+  it('does not overwrite a non-empty next field: later words move right into the first empty field', async () => {
+    const { screen } = await renderScreen(false);
+    await fireEvent.changeText(field(screen, 1), WORDS[1]);
+    await fireEvent.changeText(field(screen, 2), WORDS[2]);
+    // Field 4 stays empty; field 5 holds a word that must not move.
+    await fireEvent.changeText(field(screen, 4), WORDS[4]);
+
+    await typeInto(screen, 0, ['a', 'ac', 'act', 'act ', 'act i']);
+
+    expect(values(screen).slice(0, 6)).toEqual([
+      'act',
+      'i',
+      WORDS[1],
+      WORDS[2],
+      WORDS[4],
+      '',
+    ]);
+    await waitFor(() => expect(focusedFields()).toContain('Word 2'));
+  });
+
+  it('with no empty field after it, refuses the split and keeps every word', async () => {
+    const { screen } = await renderScreen(false);
+    await typeWords(screen, 0, 25);
+
+    await typeInto(screen, 0, [`${WORDS[0]} `, `${WORDS[0]} x`]);
+
+    expect(field(screen, 0).props.value).toBe(`${WORDS[0]} `);
+    expect(values(screen).map((w) => w.trim())).toEqual(WORDS);
   });
 });
