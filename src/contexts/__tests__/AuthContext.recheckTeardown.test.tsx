@@ -611,4 +611,41 @@ describe('guards', () => {
     );
     expect(logged).not.toContain(FIXTURE_PIN);
   });
+
+  // The same for an explicit lock(): a throwing lock listener must not leave
+  // the React state unlocked over a torn-down session.
+  it('throwingLockListener_explicitLock_stillLandsLocked', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    const seeded = seedCaches();
+    let thrown = 0;
+    const unsubscribe = AppLockSignal.subscribe(() => {
+      if (!AppLockSignal.isUnlocked() && thrown === 0) {
+        thrown += 1;
+        throw new Error('listener failed');
+      }
+    });
+    probe.renders = [];
+    probe.armed = true;
+    try {
+      await act(async () => {
+        rendered.result.current.lock();
+      });
+      await flush();
+    } finally {
+      probe.armed = false;
+      unsubscribe();
+    }
+
+    expect(thrown).toBe(1);
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: true,
+      isAuthenticated: false,
+    });
+    expectTornDown(seeded);
+    expect(console.error).toHaveBeenCalledWith(
+      'Session teardown failed while locking:',
+      expect.anything()
+    );
+  });
 });

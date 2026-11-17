@@ -219,6 +219,20 @@ const withTimeout = <T,>(
   });
 };
 
+// The session teardown for every path that locks (lock signal to locked, then
+// vault, 60 s cache and messaging cache cleared), run synchronously before the
+// locked state is set. A throwing lock or vault listener does not cut the
+// teardown short (enterLockedState runs every step, then rethrows); the error
+// is logged through redactError, as elsewhere in this file, and the caller
+// still sets the locked state, so a listener can never leave the UI unlocked.
+const runLockTeardown = () => {
+  try {
+    enterLockedState();
+  } catch (error) {
+    console.error('Session teardown failed while locking:', redactError(error));
+  }
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Lazy initializer: the seed runs exactly once (React keeps only the first
   // render's value anyway), so evaluating Date.now() here — instead of in a
@@ -339,24 +353,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [authState.timeoutMinutes]);
 
   // TASK-557: every checkInitialAuthState verdict that lands LOCKED runs the
-  // teardown lock() runs (lock signal to locked, then vault, 60 s cache and
-  // messaging cache cleared), synchronously and BEFORE the state update, on boot
-  // and on every recheckAuthState(). No await and no storage read, so the boot
-  // verdict is unchanged. A throwing lock or vault listener does not cut the
-  // teardown short (enterLockedState runs every step, then rethrows); the error
-  // is logged here (redacted, never a secret) and the verdict still lands, so
-  // authChecked always arrives.
+  // same teardown as lock(), on boot and on every recheckAuthState(). No await
+  // and no storage read, so the boot verdict is unchanged, and authChecked
+  // always arrives.
   const landLocked = (
     fields: Partial<AuthState> & { isLocked: true; isAuthenticated: false }
   ) => {
-    try {
-      enterLockedState();
-    } catch (error) {
-      console.error(
-        'Session teardown failed while locking:',
-        redactError(error)
-      );
-    }
+    runLockTeardown();
     setAuthState((prev) => ({ ...prev, ...fields }));
   };
 
@@ -1087,8 +1090,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // and the ~30 min messaging cache (Codex P1-E). Doing this synchronously
       // (not via the effect below) closes the post-lock re-cache race: an
       // in-flight key derivation resolving during teardown sees the locked
-      // signal and refuses to repopulate the messaging cache.
-      enterLockedState();
+      // signal and refuses to repopulate the messaging cache. A throwing
+      // listener is logged and the state update below still runs (TASK-557).
+      runLockTeardown();
     }
 
     setAuthState((prev) => {
