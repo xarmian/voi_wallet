@@ -4666,7 +4666,10 @@ export class AccountSecureStorage {
    * old-PIN step still reads `'false'` and never reads a surviving item. If
    * that marker write fails too (the secure store is failing), a reinstall
    * before the item is gone would leave the flag absent and the item offered;
-   * a stale item then only fails `verifyPin` (one counted try). We
+   * a stale item then only fails `verifyPin` (one counted try), but an item
+   * left by a turn-off whose delete also failed still holds the current
+   * secret and would verify. That needs both the item delete and the marker
+   * write to fail on the same turn-off. We
    * deliberately do NOT chase the delete — a cascade of storage failures is a
    * device-broken condition out of scope.
    *

@@ -399,7 +399,7 @@ describe('unlockForRestoreWithBiometrics', () => {
     });
     expect(getItemWithAuth).toHaveBeenCalledTimes(1);
     expect(getItemWithAuth).toHaveBeenCalledWith(ITEM, {
-      prompt: 'Unlock with your old PIN',
+      prompt: 'Unlock to restore your backup',
     });
     expect(verifySpy).toHaveBeenCalledTimes(1);
     expect(verifySpy).toHaveBeenCalledWith(OLD_PIN);

@@ -8,7 +8,8 @@
  * TASK-509: when the caller can offer it, a biometric button reads the old PIN
  * saved for biometric unlock (on a reinstalled phone the keychain keeps it) and
  * the caller checks it exactly as a typed PIN. The step only sees the result;
- * the secret never reaches it. Nothing is read until the button is tapped.
+ * the secret never reaches it. The saved PIN is not read until the button is
+ * tapped; opening the step reads only the flag, enrollment and wipe state.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {

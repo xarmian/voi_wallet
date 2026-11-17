@@ -1091,7 +1091,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     >;
     try {
       saved = await AccountSecureStorage.getBiometricSecret(
-        'Unlock with your old PIN'
+        'Unlock to restore your backup'
       );
     } catch {
       // The OS prompt was cancelled or failed. Nothing is cleared.
