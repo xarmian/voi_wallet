@@ -219,6 +219,20 @@ const withTimeout = <T,>(
   });
 };
 
+// The session teardown for every path that locks (lock signal to locked, then
+// vault, 60 s cache and messaging cache cleared), run synchronously before the
+// locked state is set. A throwing lock or vault listener does not cut the
+// teardown short (enterLockedState runs every step, then rethrows); the error
+// is logged through redactError, as elsewhere in this file, and the caller
+// still sets the locked state, so a listener can never leave the UI unlocked.
+const runLockTeardown = () => {
+  try {
+    enterLockedState();
+  } catch (error) {
+    console.error('Session teardown failed while locking:', redactError(error));
+  }
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Lazy initializer: the seed runs exactly once (React keeps only the first
   // render's value anyway), so evaluating Date.now() here — instead of in a
@@ -254,8 +268,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const backgroundedAtRef = useRef<number | null>(null);
 
   // Always-fresh mirror of authState so the inactivity interval can read the
-  // latest activity/auth flags and route through the single lock() (below)
-  // rather than mutating state inline (needed so lock's session teardown runs).
+  // latest activity/auth flags and route through lock() (below) rather than
+  // mutating state inline (needed so the session teardown runs). The auth-check
+  // verdicts that land locked run the same teardown through landLocked().
   const authStateRef = useRef(authState);
   // eslint-disable-next-line react-hooks/refs -- HT-250 (Option A): the mirror is written in the render body ON PURPOSE. This ref is the inactivity-lock source of truth (ACTIVITY_CHECK_INTERVAL reads authStateRef.current). Deferring the write into an effect flushes it AFTER paint, reopening exactly the suspend-before-commit lock-BYPASS window the :186-193 ref comment documents (a commit skipped by the OS suspending the JS runtime would leave the interval reading stale auth flags). Must NOT be relocated to useEffect/useLayoutEffect. TASK-248 carries this one documented refs exception when promoting the rule to error.
   authStateRef.current = authState;
@@ -337,6 +352,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [authState.timeoutMinutes]);
 
+  // TASK-557: every checkInitialAuthState verdict that lands LOCKED runs the
+  // same teardown as lock(), on boot and on every recheckAuthState(). No await
+  // and no storage read, so the boot verdict is unchanged, and authChecked
+  // always arrives.
+  const landLocked = (
+    fields: Partial<AuthState> & { isLocked: true; isAuthenticated: false }
+  ) => {
+    runLockTeardown();
+    setAuthState((prev) => ({ ...prev, ...fields }));
+  };
+
   const checkInitialAuthState = async () => {
     try {
       // ── Interrupted wipe (TASK-469) ────────────────────────────────────────
@@ -365,8 +391,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         authStateRef.current.isAuthenticated && !authStateRef.current.isLocked;
       if (!sessionIsLive) {
         const failClosed = () =>
-          setAuthState((prev) => ({
-            ...prev,
+          landLocked({
             isLocked: true,
             isAuthenticated: false,
             securityUnavailable: true,
@@ -374,7 +399,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             pinSetupResume: false,
             biometricEnabled: false,
             backgroundedAt: null,
-          }));
+          });
         let wipePending: boolean | undefined;
         let wipeReadError: unknown;
         for (
@@ -517,8 +542,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           'Secure storage unavailable at auth init after retries:',
           redactError(lastError)
         );
-        setAuthState((prev) => ({
-          ...prev,
+        landLocked({
           isLocked: true,
           isAuthenticated: false,
           securityUnavailable: true,
@@ -526,7 +550,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           pinSetupResume: false,
           biometricEnabled: false,
           backgroundedAt: null,
-        }));
+        });
         return;
       }
 
@@ -676,8 +700,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // routes the initial route to SecuritySetup (never Main) off
           // pinSetupResume, and Main stays lock-guarded even if it were reached
           // before a PIN is set. hasWallet reflects the on-disk reality (true).
-          setAuthState((prev) => ({
-            ...prev,
+          landLocked({
             isLocked: true,
             isAuthenticated: false,
             securityUnavailable: false,
@@ -687,15 +710,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             hasPin: false,
             biometricEnabled: false,
             backgroundedAt: null,
-          }));
+          });
           return;
         }
         console.error(
           'Key-bearing account present but PIN read resolved absent — treating as a ' +
             'secure-storage read failure and failing closed to recovery.'
         );
-        setAuthState((prev) => ({
-          ...prev,
+        landLocked({
           isLocked: true,
           isAuthenticated: false,
           securityUnavailable: true,
@@ -703,7 +725,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           pinSetupResume: false,
           biometricEnabled: false,
           backgroundedAt: null,
-        }));
+        });
         return;
       }
 
@@ -728,8 +750,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Wallet exists and has a PIN — require authentication (UNCHANGED).
-      setAuthState((prev) => ({
-        ...prev,
+      landLocked({
         isLocked: true,
         isAuthenticated: false,
         securityUnavailable: false,
@@ -740,7 +761,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         backgroundedAt: null,
         timeoutMinutes,
         hasPin,
-      }));
+      });
     } catch (error) {
       // Defensive: any UNEXPECTED failure in the auth-init path fails CLOSED to
       // the recovery state rather than leaving the app indeterminate (possibly
@@ -749,8 +770,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         'Unexpected failure during auth init; failing closed:',
         redactError(error)
       );
-      setAuthState((prev) => ({
-        ...prev,
+      landLocked({
         isLocked: true,
         isAuthenticated: false,
         securityUnavailable: true,
@@ -758,7 +778,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         pinSetupResume: false,
         biometricEnabled: false,
         backgroundedAt: null,
-      }));
+      });
     }
   };
 
@@ -1070,8 +1090,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // and the ~30 min messaging cache (Codex P1-E). Doing this synchronously
       // (not via the effect below) closes the post-lock re-cache race: an
       // in-flight key derivation resolving during teardown sees the locked
-      // signal and refuses to repopulate the messaging cache.
-      enterLockedState();
+      // signal and refuses to repopulate the messaging cache. A throwing
+      // listener is logged and the state update below still runs (TASK-557).
+      runLockTeardown();
     }
 
     setAuthState((prev) => {
