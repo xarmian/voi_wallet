@@ -1,14 +1,10 @@
 /**
  * The ONE way to delete WalletConnect v1 session state (PLAN-260).
  *
- * WHY THIS MODULE EXISTS: a v1 session is spread across three stores — routing
- * metadata in AsyncStorage, the symmetric key in secure storage, and pending
- * requests in the TransactionRequestQueue. Deleting one without the others
- * leaves a specific, known failure:
+ * WHY THIS MODULE EXISTS: a v1 session is spread across two stores — routing
+ * metadata in AsyncStorage and the symmetric key in secure storage. Deleting one
+ * without the other leaves a specific, known failure:
  *
- *   - metadata without the queue -> startup dequeues a request for a topic that
- *     no longer exists, navigates it into a screen with no live session, errors,
- *     and LOSES the request (dequeuing already removed it). This is DR-14.
  *   - metadata without the key -> an orphan in a store that cannot be
  *     enumerated, lingering until some future pairing happens to overwrite it.
  *
@@ -22,7 +18,6 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
 import { WC_V1_SESSION_STORAGE_KEY } from './config';
 import {
   deleteSessionKeyForTopic,
@@ -35,8 +30,8 @@ export function topicFromStorageKey(storageKey: string): string {
 }
 
 /**
- * Delete one v1 session completely: its metadata row, its queued requests, and
- * — only if the secure slot is actually bound to it — its key.
+ * Delete one v1 session completely: its metadata row and — only if the secure
+ * slot is actually bound to it — its key.
  *
  * The key deletion is TOPIC-CONDITIONAL because a session being deleted here may
  * not be the one the single slot belongs to. `connect()` retains the previous
@@ -48,7 +43,6 @@ export async function deleteV1Session(topic: string): Promise<void> {
     () => {}
   );
   await deleteSessionKeyForTopic(topic).catch(() => {});
-  await TransactionRequestQueue.removeByTopic(topic).catch(() => 0);
 }
 
 /**
@@ -60,15 +54,13 @@ export async function deleteV1Session(topic: string): Promise<void> {
  * survives, so there is no key worth protecting, and a topic-conditional delete
  * would strand the slot whenever it happened to be bound to one of the other
  * rows being removed.
- *
- * Returns the number of queued requests dropped, for logging.
  */
 export async function deleteV1Sessions(
   storageKeys: string[],
   options: { dropSlot: boolean }
-): Promise<number> {
+): Promise<void> {
   if (storageKeys.length === 0 && !options.dropSlot) {
-    return 0;
+    return;
   }
 
   if (storageKeys.length > 0) {
@@ -78,13 +70,4 @@ export async function deleteV1Sessions(
   if (options.dropSlot) {
     await deleteSessionKeySlot().catch(() => {});
   }
-
-  const topics = new Set(storageKeys.map(topicFromStorageKey));
-  let dropped = 0;
-  for (const topic of topics) {
-    dropped += await TransactionRequestQueue.removeByTopic(topic).catch(
-      () => 0
-    );
-  }
-  return dropped;
 }

@@ -64,47 +64,55 @@ beforeEach(() => {
 });
 
 describe('account-bound claimable reads (TASK-188)', () => {
-  it('returns the items when they belong to the requested account', () => {
-    const { result } = renderHook(() => useClaimableItemsForAccount(ACCOUNT_A));
+  it('returns the items when they belong to the requested account', async () => {
+    const { result } = await renderHook(() =>
+      useClaimableItemsForAccount(ACCOUNT_A)
+    );
     expect(result.current).toHaveLength(2);
   });
 
-  it('returns nothing for an account the held items do not belong to', () => {
-    const { result } = renderHook(() => useClaimableItemsForAccount(ACCOUNT_B));
+  it('returns nothing for an account the held items do not belong to', async () => {
+    const { result } = await renderHook(() =>
+      useClaimableItemsForAccount(ACCOUNT_B)
+    );
     expect(result.current).toEqual([]);
   });
 
-  it('returns nothing when there is no active account', () => {
-    const { result } = renderHook(() => useClaimableItemsForAccount(undefined));
+  it('returns nothing when there is no active account', async () => {
+    const { result } = await renderHook(() =>
+      useClaimableItemsForAccount(undefined)
+    );
     expect(result.current).toEqual([]);
   });
 
-  it('counts only the requested account, and excludes hidden items', () => {
+  it('counts only the requested account, and excludes hidden items', async () => {
     useClaimableStore.setState({ hiddenApprovals: new Set(['2_A']) });
 
-    const { result } = renderHook(() =>
+    const { result } = await renderHook(() =>
       useVisibleClaimableCountForAccount(ACCOUNT_A)
     );
     expect(result.current).toBe(1);
   });
 
-  it('counts zero for a non-active account rather than the other account total', () => {
-    const { result } = renderHook(() =>
+  it('counts zero for a non-active account rather than the other account total', async () => {
+    const { result } = await renderHook(() =>
       useVisibleClaimableCountForAccount(ACCOUNT_B)
     );
     expect(result.current).toBe(0);
   });
 
-  it('reports the degraded flag only for the account whose fetch was partial', () => {
+  it('reports the degraded flag only for the account whose fetch was partial', async () => {
     useClaimableStore.setState({ hasPartialFailure: true });
 
-    const forA = renderHook(() => useClaimablePartialFailure(ACCOUNT_A));
+    const forA = await renderHook(() => useClaimablePartialFailure(ACCOUNT_A));
     expect(forA.result.current).toBe(true);
 
-    const forB = renderHook(() => useClaimablePartialFailure(ACCOUNT_B));
+    const forB = await renderHook(() => useClaimablePartialFailure(ACCOUNT_B));
     expect(forB.result.current).toBe(false);
 
-    const forNone = renderHook(() => useClaimablePartialFailure(undefined));
+    const forNone = await renderHook(() =>
+      useClaimablePartialFailure(undefined)
+    );
     expect(forNone.result.current).toBe(false);
   });
 });

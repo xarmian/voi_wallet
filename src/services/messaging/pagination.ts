@@ -7,7 +7,7 @@
  * the remaining rows in the range are never fetched again. To avoid this, an
  * incremental fetch must DRAIN the full range — keep paginating while a page
  * comes back full (== limit) — before the durable sync cursor is allowed to
- * advance.
+ * advance (to the greatest id it fetched, see drainByCursor).
  *
  * `drainByCursor` is pure (no network / crypto): it takes a `fetchPage`
  * callback and orchestrates the drain, so it can be unit-tested in isolation.
@@ -24,6 +24,9 @@
  */
 export const MAX_DRAIN_PAGES = 1000;
 
+/** Why a drain stopped; see drainByCursor. */
+export type DrainStop = 'complete' | 'page-cap' | 'stalled-cursor';
+
 /**
  * Drain a keyset-paginated source ordered by a strictly-increasing, unique
  * cursor (e.g. a primary-key id), oldest first.
@@ -34,15 +37,23 @@ export const MAX_DRAIN_PAGES = 1000;
  * across a page boundary, so no dedup or overlap is needed and the drain is
  * complete.
  *
- * Draining oldest-first is what makes this loss-safe: the caller advances its
- * durable sync cursor to the newest row it has actually seen, and every row
- * this stops short of is *newer* than that — so it sits above the durable
- * cursor and is simply picked up by the next poll, never dropped.
+ * Draining oldest-first is what makes this loss-safe. The source is ordered by
+ * a unique id and filtered to one user, so the rows fetched are a contiguous
+ * prefix: EVERY row of that user up to the greatest id seen has been fetched.
+ * Everything the drain did not fetch is *newer* than that, so it sits above a
+ * durable cursor advanced to the greatest id seen and is picked up by the next
+ * poll, never dropped.
  *
- * Returns `complete: true` only when the range was fully exhausted (a short
- * page). Stopping early — the cursor failed to advance (a broken source) or the
- * `maxPages` backstop was hit — returns `complete: false` so the caller knows
- * not to advance a durable cursor past rows it may not have fetched.
+ * The result says WHY the drain stopped, never inferred from row counts:
+ * - 'complete': a short page; the range is exhausted.
+ * - 'page-cap': the `maxPages` backstop was hit. The rows are still a
+ *   contiguous prefix, so the caller may advance its durable cursor to the
+ *   greatest id seen. Refusing to would wedge the sync: with more than
+ *   maxPages x limit rows above the cursor, every poll would refetch the same
+ *   prefix and never reach anything newer.
+ * - 'stalled-cursor': the id did not strictly advance (a broken source).
+ *   Contiguity is not guaranteed, so the caller must NOT advance a durable
+ *   cursor.
  *
  * @param limit - page size; a full page (=== limit) means "there may be more"
  * @param fetchPage - fetches up to `limit` rows with `cursor > afterCursor`
@@ -54,7 +65,7 @@ export async function drainByCursor<T>(
   fetchPage: (afterCursor: number | undefined) => Promise<T[]>,
   getCursor: (row: T) => number,
   maxPages: number = MAX_DRAIN_PAGES
-): Promise<{ rows: T[]; complete: boolean }> {
+): Promise<{ rows: T[]; stop: DrainStop }> {
   const rows: T[] = [];
   let cursor: number | undefined;
 
@@ -63,7 +74,7 @@ export async function drainByCursor<T>(
     rows.push(...batch);
 
     // A short page means we have reached the end of the range.
-    if (batch.length < limit) return { rows, complete: true };
+    if (batch.length < limit) return { rows, stop: 'complete' };
 
     let maxCursor = cursor ?? Number.NEGATIVE_INFINITY;
     for (const row of batch) {
@@ -73,10 +84,10 @@ export async function drainByCursor<T>(
 
     // The cursor must strictly advance; otherwise stop rather than spin.
     if (cursor !== undefined && maxCursor <= cursor) {
-      return { rows, complete: false };
+      return { rows, stop: 'stalled-cursor' };
     }
     cursor = maxCursor;
   }
 
-  return { rows, complete: false };
+  return { rows, stop: 'page-cap' };
 }

@@ -25,11 +25,21 @@
  * exactly, once per session. On any mismatch, load failure or runtime error we
  * fall back to CryptoJS — always correct, just slow.
  *
- * FALLBACK CONTEXTS: jest (no native runtime) and any build without the native
- * module resolve to the CryptoJS path automatically.
+ * FALLBACK CONTEXTS: jest (no native runtime; the module is mocked empty) and any
+ * build without the native module resolve to CryptoJS, as does a native backend
+ * that throws or mismatches during the parity check. A native call that fails
+ * after parity passed degrades to CryptoJS for that call only. Every one of these
+ * paths warns (see LOUD FALLBACK below), so they are expected noise under jest.
  *
  * SECURITY: never logs the password, salt or derived bytes — only the backend
- * name and the parity result.
+ * name, the parity result and, on a native error, a fixed error-class label.
+ *
+ * LOUD FALLBACK (DR-7 / HT-377): every fallback path warns via `console.warn`,
+ * which release bundles keep (babel.config.js strips only console.log), so a
+ * release build that fell back to CryptoJS is distinguishable from a native one.
+ * The warnings carry ONLY the backend name and the error class name.
+ * `backend=` is the backend SELECTED for the session; the per-call warning
+ * (`backend=native: ... CryptoJS for this call`) means that one call fell back.
  */
 import CryptoJS from 'crypto-js';
 import 'crypto-js/pbkdf2';
@@ -117,6 +127,36 @@ function callNative(
   });
 }
 
+/** Standard ECMAScript error classes a fallback warning may name. */
+const KNOWN_ERROR_CLASSES = [
+  'Error',
+  'TypeError',
+  'RangeError',
+  'ReferenceError',
+  'SyntaxError',
+  'EvalError',
+  'URIError',
+  'AggregateError',
+] as const;
+
+/**
+ * The error's class, for the loud-fallback warnings. Deliberately NOT the
+ * message, stack or the error object itself: a native error's text could echo
+ * its inputs. `name` is runtime data too, so it is never passed through: the
+ * result is always one of the constants below, chosen by equality.
+ */
+function errorClass(e: unknown): string {
+  // Total: a hostile error (throwing `name` getter, Proxy traps) must never
+  // stop the fallback from running.
+  try {
+    if (!(e instanceof Error)) return 'non-Error';
+    const name: unknown = e.name;
+    return KNOWN_ERROR_CLASSES.find((k) => k === name) ?? 'Error(custom)';
+  } catch {
+    return 'Error(unreadable)';
+  }
+}
+
 /** The original pure-JS path, kept verbatim as the fallback. */
 function jsPbkdf2(
   password: string,
@@ -142,6 +182,9 @@ async function resolveBackend(): Promise<Pbkdf2Backend> {
   backendResolution = (async (): Promise<Pbkdf2Backend> => {
     const native = loadNativePbkdf2();
     if (!native) {
+      console.warn(
+        '[pbkdf2Kdf] backend=js: native pbkdf2 module unavailable; using CryptoJS fallback'
+      );
       resolvedBackend = 'js';
       return 'js';
     }
@@ -161,15 +204,13 @@ async function resolveBackend(): Promise<Pbkdf2Backend> {
       }
       // Present but WRONG — must never write a PIN hash with it.
       console.warn(
-        '[pbkdf2Kdf] native pbkdf2 failed byte-parity; using CryptoJS fallback'
+        '[pbkdf2Kdf] backend=js: native pbkdf2 failed byte-parity; using CryptoJS fallback'
       );
     } catch (e) {
-      if (__DEV__) {
-        console.log(
-          '[pbkdf2Kdf] native pbkdf2 unavailable; CryptoJS fallback',
-          e
-        );
-      }
+      console.warn(
+        '[pbkdf2Kdf] backend=js: native pbkdf2 threw during parity check; using CryptoJS fallback',
+        errorClass(e)
+      );
     }
     resolvedBackend = 'js';
     return 'js';
@@ -202,12 +243,10 @@ export async function pbkdf2Hex(
     } catch (e) {
       // Passed parity but failed at runtime — degrade to CryptoJS for THIS call
       // (correctness over speed). Never surface an unwrapped native error.
-      if (__DEV__) {
-        console.log(
-          '[pbkdf2Kdf] native call failed; CryptoJS for this call',
-          e
-        );
-      }
+      console.warn(
+        '[pbkdf2Kdf] backend=native: native call failed; CryptoJS for this call',
+        errorClass(e)
+      );
     }
   }
   return jsPbkdf2(password, saltHex, iterations, keyLength);

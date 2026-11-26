@@ -12,9 +12,11 @@ import {
   LedgerUserRejectedError,
   RemoteSignerRequiredError,
 } from '@/types/wallet';
-import { NetworkId } from '@/types/network';
+import { NetworkId, TransactionPendingError } from '@/types/network';
+import type { NetworkService } from '@/services/network';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { SecureKeyManager } from '@/services/secure/keyManager';
+import { assertSignableKeyreg } from '@/utils/keyregSafety';
 import {
   evaluateBatchEntryEligibility,
   type WalletConnectSessionBinding,
@@ -29,6 +31,14 @@ import {
  * Re-exported so existing import paths keep working.
  */
 export { RemoteSignerRequiredError };
+
+/** Hardware routes require a sequential batch even when the reviewed account is rekeyed. */
+export function signsSequentially(request: UnifiedTransactionRequest): boolean {
+  return (
+    request.account.type === AccountType.LEDGER ||
+    request.walletConnectParams?.sequentialSigning === true
+  );
+}
 
 /**
  * Genesis hash (lowercase hex) -> NetworkId, derived from the single source of
@@ -63,6 +73,24 @@ function networkFromGenesisHash(
   }
   const hex = Buffer.from(genesisHash).toString('hex').toLowerCase();
   return GENESIS_HASH_HEX_TO_NETWORK.get(hex) ?? null;
+}
+
+/**
+ * Submit through NetworkService.submitTransaction, so an already-submitted or
+ * ambiguous send is reconciled by txid rather than reported as a failure
+ * (TASK-440 #8). Still pending afterwards throws the same "may still be
+ * committed" TransactionPendingError waitForConfirmation does.
+ */
+async function submitAndConfirm(
+  networkService: NetworkService,
+  signedTxnBlob: Uint8Array
+): Promise<string> {
+  const { txId, confirmed } =
+    await networkService.submitTransaction(signedTxnBlob);
+  if (!confirmed) {
+    throw new TransactionPendingError(txId);
+  }
+  return txId;
 }
 
 /**
@@ -166,6 +194,8 @@ export interface UnifiedTransactionRequest {
    */
   account: AccountMetadata | WalletAccount;
   pin?: string;
+  /** A request-scoped, authenticated WalletConnect signing capability. */
+  reviewGrantKey?: string;
 
   // For standard transfers (VOI/ASA/ARC200)
   transferParams?: TransactionParams;
@@ -235,7 +265,10 @@ export interface UnifiedTransactionRequest {
     voteFirst?: number;
     voteLast?: number;
     voteKeyDilution?: number;
-    nonParticipation?: boolean; // true for going offline
+    // true for going offline. There is deliberately no nonParticipation
+    // field: on Algorand/Voi nonpart=true marks the account permanently
+    // unable to go online again, and this wallet never sets it (TASK-439).
+    goOffline?: boolean;
     fee?: number;
     note?: string;
     networkId?: NetworkId;
@@ -277,13 +310,14 @@ export class UnifiedTransactionSigner {
    */
   async signTransaction(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    options?: { signal?: AbortSignal }
   ): Promise<UnifiedSigningResult> {
     try {
       callbacks?.onAuthStart?.();
 
       // Validate request
-      this.validateRequest(request);
+      await this.validateRequest(request);
 
       callbacks?.onAuthSuccess?.();
       callbacks?.onSigningStart?.();
@@ -306,7 +340,11 @@ export class UnifiedTransactionSigner {
 
         case 'batch_transaction':
         case 'walletconnect_batch':
-          result = await this.signWalletConnectBatch(request, callbacks);
+          result = await this.signWalletConnectBatch(
+            request,
+            callbacks,
+            options?.signal
+          );
           break;
 
         case 'keyreg':
@@ -448,49 +486,19 @@ export class UnifiedTransactionSigner {
    */
   private async signWalletConnectBatch(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
-    if (!request.walletConnectParams) {
-      throw new Error('WalletConnect parameters required for batch signing');
-    }
-
-    const params = request.walletConnectParams;
-
     try {
+      if (!request.walletConnectParams) {
+        throw new Error('WalletConnect parameters required for batch signing');
+      }
+
+      const params = request.walletConnectParams;
       const total = params.transactions.length;
-      const binding = params.sessionBinding;
-
-      // The network the batch is bound to. For a dApp request this is resolved
-      // from the SESSION's chain; for an in-app batch it is the network the
-      // caller built the group on. Threaded into SecureKeyManager so rekey
-      // authority is resolved on the transaction's chain, not the active one.
-      const boundNetworkId = binding?.networkId ?? request.networkId;
-
-      // DR-5/DR-14 fail-closed guard: an absent / disconnected / topic-
-      // mismatched session resolves to an EMPTY approved set. Reject the whole
-      // request rather than silently declining every entry — and never
-      // substitute the wallet's local accounts for the session's.
-      const effectiveBinding = binding
-        ? {
-            ...binding,
-            approvedAccounts: await this.revalidateBinding(binding),
-          }
-        : null;
-
-      // ---------------------------------------------------------------------
-      // PREFLIGHT (DR-2/5/7/8/13/14/16). Runs to completion BEFORE a single key
-      // is touched, so one bad entry fails the WHOLE batch with no partial
-      // signatures and no partially-signed response handed back to a dApp.
-      // ---------------------------------------------------------------------
-      const plans = params.transactions.map((wtxn, index) =>
-        this.planBatchEntry(
-          wtxn,
-          index,
-          params,
-          effectiveBinding,
-          boundNetworkId
-        )
-      );
+      const plans = await this.planBatch(request);
+      const boundNetworkId =
+        params.sessionBinding?.networkId ?? request.networkId;
 
       // Track signing progress for each transaction. `null` = declined (DR-1).
       const signedTxns: (string | null)[] = [];
@@ -500,15 +508,23 @@ export class UnifiedTransactionSigner {
       // reviewed account, so a group whose other signer is rekeyed to a Ledger
       // would otherwise be signed in parallel: the review screen, which has
       // already resolved every signer's route, sets `sequentialSigning`.
-      const signSequentially =
-        request.account.type === AccountType.LEDGER ||
-        params.sequentialSigning === true;
+      const signSequentially = signsSequentially(request);
 
       // For Ledger accounts: sign sequentially (hardware constraint)
       // For standard accounts: sign in parallel for better performance
       if (signSequentially) {
         // Sequential signing for Ledger
         for (let i = 0; i < plans.length; i++) {
+          // After Cancel, no entry starts after the one the loop has entered. After
+          // a lapse the same holds only for a request that holds a review
+          // capability: the controller watches the grant only then, so a request
+          // with no grant is not aborted by a lock or background. The entered entry
+          // can still reach the device; its signature is discarded. After Cancel,
+          // only the device keeps asking. After a lapse, the modal keeps showing the
+          // entered entry until the device resolves.
+          if (signal?.aborted) {
+            return { success: false, error: new Error('Signing cancelled') };
+          }
           callbacks?.onLedgerPrompt?.({ index: i + 1, total });
 
           const plan = plans[i];
@@ -548,6 +564,9 @@ export class UnifiedTransactionSigner {
           }
         }
       } else {
+        if (signal?.aborted) {
+          return { success: false, error: new Error('Signing cancelled') };
+        }
         // Parallel signing for standard accounts (much faster!)
         callbacks?.onLedgerPrompt?.({ index: 1, total });
 
@@ -590,27 +609,70 @@ export class UnifiedTransactionSigner {
       }
 
       // Clear private key cache for security (cache is inside AccountSecureStorage)
-      // Note: Cache auto-expires after 60s, but we clear immediately for security
-      const { AccountSecureStorage } = await import(
-        '@/services/secure/AccountSecureStorage'
-      );
+      // Clear immediately rather than leaving cached keys in memory.
+      const { AccountSecureStorage } =
+        await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();
 
-      // All transactions signed successfully
+      if (signal?.aborted) {
+        return { success: false, error: new Error('Signing cancelled') };
+      }
+
+      // For WalletConnect this means all signatures are ready, not broadcast.
+      // The signed bytes are returned to the dApp; this wallet sends no batch.
       callbacks?.onNetworkSubmit?.();
 
       return {
         success: true,
         signedTransactions: signedTxns,
       };
-    } catch (error) {
-      // Clear private key cache on error too for security
-      const { AccountSecureStorage } = await import(
-        '@/services/secure/AccountSecureStorage'
-      );
+    } finally {
+      // Clear the private key cache on every exit of the signer.
+      // Parallel entries in flight after the first rejection are not awaited.
+      // A straggler that re-caches a key after this clear leaves it in memory until
+      // a 10%-sampled cleanup in getPrivateKey, an explicit clear, or a lock.
+      // The 60 s TTL bounds reuse of a cached key, not how long it stays in memory.
+      const { AccountSecureStorage } =
+        await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();
-      throw error;
     }
+  }
+
+  /** Shared local/remote preflight; never touches keys or submits. */
+  public async planBatch(
+    request: UnifiedTransactionRequest
+  ): Promise<BatchEntryPlan[]> {
+    const params = request.walletConnectParams;
+    if (!params) throw new Error('Batch transactions required');
+    const binding = params.sessionBinding;
+
+    // The network the batch is bound to. For a dApp request this is resolved
+    // from the SESSION's chain; for an in-app batch it is the network the
+    // caller built the group on. Threaded into SecureKeyManager so rekey
+    // authority is resolved on the transaction's chain, not the active one.
+    const boundNetworkId = binding?.networkId ?? request.networkId;
+
+    // DR-5/DR-14 fail-closed guard: an absent / disconnected / topic-
+    // mismatched session resolves to an EMPTY approved set. Reject the whole
+    // request rather than silently declining every entry — and never
+    // substitute the wallet's local accounts for the session's.
+    const effectiveBinding = binding
+      ? {
+          ...binding,
+          approvedAccounts: await this.revalidateBinding(binding),
+        }
+      : null;
+
+    // ---------------------------------------------------------------------
+    // PREFLIGHT (DR-2/5/7/8/13/14/16). Runs to completion BEFORE a single key
+    // is touched, so one bad entry fails the WHOLE batch with no partial
+    // signatures and no partially-signed response handed back to a dApp.
+    // ---------------------------------------------------------------------
+    const plans = params.transactions.map((wtxn, index) =>
+      this.planBatchEntry(wtxn, index, params, effectiveBinding, boundNetworkId)
+    );
+
+    return plans;
   }
 
   /**
@@ -712,6 +774,11 @@ export class UnifiedTransactionSigner {
 
     // DR-7 (absorbs TASK-251): bind the bytes to a chain before anything else.
     this.assertChainBinding(txn, index, binding, boundNetworkId);
+
+    // TASK-439: a dApp-supplied permanent non-participation keyreg refuses
+    // the whole batch here, in preflight, before any key or Ledger is used.
+    // SecureKeyManager.signTransaction re-checks at signing time.
+    assertSignableKeyreg(txn);
 
     const txnSender = algosdk.encodeAddress(txn.sender.publicKey);
 
@@ -912,9 +979,42 @@ export class UnifiedTransactionSigner {
   }
 
   /**
+   * TASK-425: the network each signing path below signs on, so a pre-signing
+   * route check resolves the same route the signer will.
+   */
+  private signingNetworkId(
+    request: UnifiedTransactionRequest
+  ): NetworkId | undefined {
+    switch (request.type) {
+      case 'voi_transfer':
+      case 'asa_transfer':
+      case 'arc200_transfer':
+      case 'arc72_transfer':
+        return request.transferParams?.networkId;
+      case 'rekey':
+      case 'rekey_reverse':
+        return request.rekeyParams?.networkId || request.networkId;
+      case 'batch_transaction':
+      case 'walletconnect_batch':
+        return (
+          request.walletConnectParams?.sessionBinding?.networkId ??
+          request.networkId
+        );
+      case 'keyreg':
+        return request.keyregParams?.networkId || request.networkId;
+      case 'appl':
+        return request.applParams?.networkId || request.networkId;
+      default:
+        return request.networkId;
+    }
+  }
+
+  /**
    * Validate the unified transaction request
    */
-  private validateRequest(request: UnifiedTransactionRequest): void {
+  private async validateRequest(
+    request: UnifiedTransactionRequest
+  ): Promise<void> {
     if (!request.account) {
       throw new Error('Account is required');
     }
@@ -933,9 +1033,18 @@ export class UnifiedTransactionSigner {
       });
     }
 
-    // Check for WATCH accounts - these cannot sign at all
+    // TASK-425: a persisted WATCH account can still sign when it is rekeyed
+    // on chain to a key we hold, so ask the signer's own route resolution for
+    // the network this request signs on, instead of refusing by type. A WATCH
+    // that isn't rekeyed, or whose auth key we don't hold, still stops here.
     if (request.account.type === AccountType.WATCH) {
-      throw new Error('Watch accounts cannot sign transactions');
+      const route = await SecureKeyManager.resolveSigningRoute(
+        request.account.address,
+        this.signingNetworkId(request)
+      );
+      if (route.kind === 'unavailable') {
+        throw new Error(route.reason);
+      }
     }
 
     // Type-specific validation
@@ -974,6 +1083,10 @@ export class UnifiedTransactionSigner {
             'Keyreg parameters required for key registration transactions'
           );
         }
+        // TASK-425: the account checked above is the one that signs.
+        if (request.keyregParams.address !== request.account.address) {
+          throw new Error('Keyreg sender does not match the signing account');
+        }
         break;
 
       case 'appl':
@@ -984,6 +1097,10 @@ export class UnifiedTransactionSigner {
         }
         if (!request.applParams.appId) {
           throw new Error('Application ID required for app call transactions');
+        }
+        // TASK-425: the account checked above is the one that signs.
+        if (request.applParams.senderAddress !== request.account.address) {
+          throw new Error('App call sender does not match the signing account');
         }
         break;
     }
@@ -1041,7 +1158,7 @@ export class UnifiedTransactionSigner {
     const errors: string[] = [];
 
     try {
-      this.validateRequest(request);
+      await this.validateRequest(request);
 
       // Type-specific validation
       switch (request.type) {
@@ -1118,18 +1235,30 @@ export class UnifiedTransactionSigner {
       // Build keyreg transaction
       let txn: algosdk.Transaction;
 
-      if (request.keyregParams.nonParticipation) {
-        // Go offline (non-participation)
+      if (request.keyregParams.goOffline) {
+        // Go offline: a keyreg with no participation fields at all. Never
+        // nonParticipation: true, which is irreversible (TASK-439). Any keys
+        // on the request are dropped, not forwarded.
         txn = algosdk.makeKeyRegistrationTxnWithSuggestedParamsFromObject({
           sender: request.keyregParams.address,
           suggestedParams,
-          nonParticipation: true,
           note: request.keyregParams.note
             ? new Uint8Array(Buffer.from(request.keyregParams.note))
             : undefined,
         });
       } else {
-        // Go online with participation keys
+        // Go online with participation keys. Without them algosdk would
+        // build an offline keyreg, so a request that didn't say goOffline
+        // must not reach the chain as one.
+        if (
+          !request.keyregParams.voteKey ||
+          !request.keyregParams.selectionKey ||
+          !request.keyregParams.stateProofKey
+        ) {
+          throw new Error(
+            'Online key registration requires vote, selection and state proof keys'
+          );
+        }
         txn = algosdk.makeKeyRegistrationTxnWithSuggestedParamsFromObject({
           sender: request.keyregParams.address,
           voteKey: request.keyregParams.voteKey,
@@ -1148,20 +1277,19 @@ export class UnifiedTransactionSigner {
       callbacks?.onLedgerPrompt?.({ index: 1, total: 1 });
 
       // Sign the transaction
+      // TASK-425: resolve the signing route on the network the txn was
+      // built for and is submitted to, not the app's active network.
       const signedTxnBlob = await SecureKeyManager.signTransaction(
         txn,
         request.keyregParams.address,
-        request.pin
+        request.pin,
+        networkId
       );
 
       callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
       callbacks?.onNetworkSubmit?.();
 
-      // Submit to network
-      const txId = await networkService.sendRawTransaction(signedTxnBlob);
-
-      // Wait for confirmation
-      await networkService.waitForConfirmation(txId);
+      const txId = await submitAndConfirm(networkService, signedTxnBlob);
 
       callbacks?.onNetworkConfirmed?.(txId);
 
@@ -1215,20 +1343,19 @@ export class UnifiedTransactionSigner {
       callbacks?.onLedgerPrompt?.({ index: 1, total: 1 });
 
       // Sign the transaction
+      // TASK-425: resolve the signing route on the network the txn was
+      // built for and is submitted to, not the app's active network.
       const signedTxnBlob = await SecureKeyManager.signTransaction(
         txn,
         request.applParams.senderAddress,
-        request.pin
+        request.pin,
+        networkId
       );
 
       callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
       callbacks?.onNetworkSubmit?.();
 
-      // Submit to network
-      const txId = await networkService.sendRawTransaction(signedTxnBlob);
-
-      // Wait for confirmation
-      await networkService.waitForConfirmation(txId);
+      const txId = await submitAndConfirm(networkService, signedTxnBlob);
 
       callbacks?.onNetworkConfirmed?.(txId);
 

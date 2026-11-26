@@ -8,10 +8,8 @@ import {
   StyleSheet,
   Share,
   Alert,
-  SafeAreaView,
-  Platform,
-  StatusBar,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { debugLogger, LogEntry } from '@/services/debug/logger';
 import {
   getOfflineCounters,
@@ -203,7 +201,6 @@ const styles = StyleSheet.create({
   modalWrapper: {
     flex: 1,
     backgroundColor: '#ffffff',
-    paddingTop: Platform.OS === 'ios' ? 0 : StatusBar.currentHeight || 0,
   },
   container: {
     flex: 1,

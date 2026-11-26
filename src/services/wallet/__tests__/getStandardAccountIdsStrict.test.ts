@@ -44,7 +44,9 @@ const WALLET_KEY = 'voi_wallet_metadata';
 const mockStorageGet = storage.getItem as jest.Mock;
 const mockSecureGet = secureStorage.getItem as jest.Mock;
 
-function blob(accounts: { id: string; type: string }[]): string {
+function blob(
+  accounts: { id: string; type: string; address?: string }[]
+): string {
   return JSON.stringify({
     id: 'w1',
     version: '1',
@@ -184,4 +186,87 @@ it('does not write or migrate (pure read)', async () => {
   expect(storage.setItem).not.toHaveBeenCalled();
   // Present primary means the legacy secure-store fallback is never consulted.
   expect(mockSecureGet).not.toHaveBeenCalled();
+});
+
+describe('getBlobAccountIdsStrict (TASK-419)', () => {
+  it('returns STANDARD ids and every account id, REKEYED included', async () => {
+    mockStore[WALLET_KEY] = blob([
+      { id: 's1', type: 'standard', address: 'ADDR' },
+      { id: 'k1', type: 'rekeyed' },
+      { id: 'w1', type: 'watch' },
+    ]);
+    await expect(
+      MultiAccountWalletService.getBlobAccountIdsStrict()
+    ).resolves.toEqual({
+      standardIds: ['s1'],
+      allIds: ['s1', 'k1', 'w1'],
+      standardAccounts: [{ id: 's1', address: 'ADDR', label: '' }],
+    });
+  });
+
+  it('returns empty lists for genuine absence', async () => {
+    await expect(
+      MultiAccountWalletService.getBlobAccountIdsStrict()
+    ).resolves.toEqual({ standardIds: [], allIds: [], standardAccounts: [] });
+  });
+
+  it.each([
+    [
+      'a storage read failure',
+      () =>
+        mockStorageGet.mockRejectedValueOnce(new Error('keychain unavailable')),
+    ],
+    [
+      'an unparseable blob',
+      () => {
+        mockStore[WALLET_KEY] = '{not valid json';
+      },
+    ],
+    [
+      'a present-but-empty blob',
+      () => {
+        mockStore[WALLET_KEY] = '';
+      },
+    ],
+    [
+      'an unrecognized type',
+      () => {
+        mockStore[WALLET_KEY] = blob([{ id: 'x', type: 'bogus' }]);
+      },
+    ],
+    [
+      'a null account entry',
+      () => {
+        mockStore[WALLET_KEY] = JSON.stringify({ accounts: [null] });
+      },
+    ],
+    [
+      'a non-string id',
+      () => {
+        mockStore[WALLET_KEY] = JSON.stringify({
+          accounts: [{ id: 7, type: 'rekeyed' }],
+        });
+      },
+    ],
+    [
+      'a duplicated id across types (TASK-419 bug-hunter)',
+      () => {
+        mockStore[WALLET_KEY] = blob([
+          { id: 'dup', type: 'standard' },
+          { id: 'dup', type: 'watch' },
+        ]);
+      },
+    ],
+    [
+      'accounts not an array',
+      () => {
+        mockStore[WALLET_KEY] = JSON.stringify({ accounts: {} });
+      },
+    ],
+  ])('fails closed on %s', async (_label, arrange) => {
+    arrange();
+    await expect(
+      MultiAccountWalletService.getBlobAccountIdsStrict()
+    ).rejects.toThrow();
+  });
 });

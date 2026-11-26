@@ -24,7 +24,12 @@ import { NetworkId } from '@/types/network';
 import { WalletAccount } from '@/types/wallet';
 import { getNetworkConfig } from '@/services/network/config';
 import { decodeBase64Url } from '@/utils/arc0090Uri';
-import { getUserFacingMessage, toErrorAlert } from '@/utils/errorMapping';
+import {
+  getUserFacingMessage,
+  PENDING_TRANSACTION_ALERT,
+  toErrorAlert,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 import { RootStackParamList } from '@/navigation/AppNavigator';
 
 type KeyregConfirmScreenRouteProp = RouteProp<
@@ -106,7 +111,7 @@ export default function KeyregConfirmScreen() {
         voteFirst: params.votefst,
         voteLast: params.votelst,
         voteKeyDilution: params.votekd,
-        nonParticipation: !params.isOnline,
+        goOffline: !params.isOnline,
         fee: params.fee,
         note: params.note,
         networkId,
@@ -126,7 +131,20 @@ export default function KeyregConfirmScreen() {
     (success: boolean, result?: any) => {
       setShowAuthModal(false);
 
-      if (success && result?.transactionId) {
+      // Submitted but not confirmed is not a failure, nor yet a success
+      // (TASK-447): a remote-signer result says confirmed=false, a local one
+      // throws TransactionPendingError.
+      const unsettled =
+        success && result?.transactionId && result.confirmed === false
+          ? PENDING_TRANSACTION_ALERT
+          : !success && result?.error
+            ? toUnsettledTransactionAlert(result.error)
+            : undefined;
+      if (unsettled) {
+        Alert.alert(unsettled.title, unsettled.message, [
+          { text: 'OK', onPress: () => navigation.goBack() },
+        ]);
+      } else if (success && result?.transactionId) {
         Alert.alert(
           'Success',
           params.isOnline

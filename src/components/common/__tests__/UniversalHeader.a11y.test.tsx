@@ -26,8 +26,8 @@ jest.mock(
 jest.mock('@/components/account/AccountSelector', () => () => null);
 
 describe('UniversalHeader accessibility', () => {
-  it('labels the back button by default', () => {
-    const { getByLabelText } = render(
+  it('labels the back button by default', async () => {
+    const { getByLabelText } = await render(
       <UniversalHeader
         title="Send"
         showBackButton
@@ -41,8 +41,8 @@ describe('UniversalHeader accessibility', () => {
     expect(back.props.accessibilityRole).toBe('button');
   });
 
-  it('lets a screen name the destination and add a hint', () => {
-    const { getByTestId } = render(
+  it('lets a screen name the destination and add a hint', async () => {
+    const { getByTestId } = await render(
       <UniversalHeader
         title="NFT Details"
         showBackButton
@@ -61,16 +61,16 @@ describe('UniversalHeader accessibility', () => {
     );
   });
 
-  it('marks the title as a header landmark', () => {
-    const { getByText } = render(
+  it('marks the title as a header landmark', async () => {
+    const { getByText } = await render(
       <UniversalHeader title="Settings" showAccountSelector={false} />
     );
 
     expect(getByText('Settings').props.accessibilityRole).toBe('header');
   });
 
-  it('forwards a testID to the header container', () => {
-    const { getByTestId } = render(
+  it('forwards a testID to the header container', async () => {
+    const { getByTestId } = await render(
       <UniversalHeader
         title="Settings"
         showAccountSelector={false}
@@ -81,8 +81,8 @@ describe('UniversalHeader accessibility', () => {
     expect(getByTestId('screen-header')).toBeTruthy();
   });
 
-  it('renders no back button when it is not requested', () => {
-    const { queryByLabelText } = render(
+  it('renders no back button when it is not requested', async () => {
+    const { queryByLabelText } = await render(
       <UniversalHeader title="Home" showAccountSelector={false} />
     );
 

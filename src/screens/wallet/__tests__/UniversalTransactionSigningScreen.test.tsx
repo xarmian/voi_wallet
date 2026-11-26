@@ -1,3 +1,7 @@
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+
 /**
  * TASK-259 — what the signing-review screen SHOWS must equal what gets signed.
  *
@@ -20,12 +24,18 @@
  */
 
 import React from 'react';
-import { render, waitFor } from '@testing-library/react-native';
+import { Alert, AppState, type AppStateStatus } from 'react-native';
+import { render, waitFor, fireEvent, act } from '@testing-library/react-native';
 import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
 
 import { makeAccount } from '@/__tests__/fixtures/algorand';
-import { NetworkId } from '@/types/network';
+import {
+  NetworkId,
+  TransactionMaybeSubmittedError,
+  TransactionPendingError,
+} from '@/types/network';
+import { truncateAddress } from '@/services/walletconnect/utils';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 
 const VOI = NetworkId.VOI_MAINNET;
@@ -37,6 +47,36 @@ const ALGO = NetworkId.ALGORAND_MAINNET;
 // ---------------------------------------------------------------------------
 type AssetParamsStub = { decimals: number; name?: string; unitName?: string };
 
+let mockLocked = false;
+let mockModalProps: any;
+let mockRealController: any;
+let mockBiometricEnabled = false;
+jest.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({
+    authState: {
+      isLocked: mockLocked,
+      isAuthenticated: !mockLocked,
+      biometricEnabled: mockBiometricEnabled,
+      hasPin: true,
+    },
+  }),
+}));
+jest.mock('@/services/secure/sessionTeardown', () => ({
+  clearSessionSecurity: jest.fn(() =>
+    require('@/services/secure/SessionKeyVault').SessionKeyVault.clear()
+  ),
+}));
+jest.mock('@/services/secure/AccountSecureStorage', () => ({
+  AccountSecureStorage: {
+    getCredentialSource: jest.fn(async () => 'pin'),
+    verifyPin: jest.fn(async () => true),
+    hasPin: jest.fn(async () => true),
+    getBiometricSecret: jest.fn(),
+    isBiometricEnabled: jest.fn(async () => false),
+    clearPrivateKeyCache: jest.fn(),
+  },
+}));
+
 let mockAssetParams: Record<string, Record<string, AssetParamsStub | null>>;
 let mockAccounts: {
   id: string;
@@ -46,11 +86,25 @@ let mockAccounts: {
 }[];
 let mockRoutes: Record<string, unknown>;
 const mockGetCachedAssetParams = jest.fn();
+const mockGetAssetInfo = jest.fn();
 const mockResolveSigningRoute = jest.fn();
+/** Registry callbacks by id (TASK-257: onDismiss on unmount). */
+let mockRegistry: Record<
+  string,
+  { onDismiss?: () => void; onReject?: () => Promise<void> }
+> = {};
 
 // `@/utils/bigint` re-exports through `@/utils/formatting`, which pulls in the
 // zustand wallet store (and therefore AsyncStorage). Only the locale lookup is
 // involved, so a minimal store stub keeps this a pure display test.
+jest.mock('expo-local-authentication', () => ({
+  hasHardwareAsync: jest.fn(async () => true),
+  isEnrolledAsync: jest.fn(async () => true),
+  supportedAuthenticationTypesAsync: jest.fn(async () => []),
+  authenticateAsync: jest.fn(),
+  AuthenticationType: { FACIAL_RECOGNITION: 2 },
+}));
+
 jest.mock('@/store/walletStore', () => ({
   useWalletStore: { getState: () => ({ wallet: undefined }) },
 }));
@@ -60,6 +114,7 @@ jest.mock('@/services/network', () => ({
     getInstance: (networkId: string) => ({
       getCachedAssetParams: (assetId: number) =>
         mockGetCachedAssetParams(networkId, assetId),
+      getAssetInfo: (assetId: number) => mockGetAssetInfo(networkId, assetId),
     }),
   },
 }));
@@ -70,25 +125,48 @@ jest.mock('@/services/wallet', () => ({
   },
 }));
 
+const mockPreventCapture = jest.fn();
+const mockEnableAppSwitcherProtection = jest.fn(
+  async (_intensity?: number) => {}
+);
+jest.mock('expo-screen-capture', () => ({
+  usePreventScreenCapture: (key?: string) => mockPreventCapture(key),
+  enableAppSwitcherProtectionAsync: (intensity?: number) =>
+    mockEnableAppSwitcherProtection(intensity),
+  disableAppSwitcherProtectionAsync: async () => {},
+}));
+
 jest.mock('@/services/secure/keyManager', () => ({
   SecureKeyManager: {
+    getSigningInfo: jest.fn(async () => ({ signingAddress: 'ADDR' })),
+    getLedgerSigningInfo: jest.fn(async () => null),
     resolveSigningRoute: (address: string, networkId?: string) =>
       mockResolveSigningRoute(address, networkId),
   },
 }));
 
 jest.mock('@/services/auth/transactionAuthController', () => ({
-  useTransactionAuthController: () => ({ cleanup: jest.fn() }),
+  useTransactionAuthController: () =>
+    mockRealController ?? {
+      getState: () => ({ state: 'idle' }),
+      cleanup: jest.fn(),
+      cancel: jest.fn(),
+      clearUserCancellation: jest.fn(),
+      hasEnteredSigner: jest.fn(() => false),
+    },
 }));
 
 jest.mock('@/services/navigation/callbackRegistry', () => ({
-  getNavigationCallbacks: () => undefined,
+  getNavigationCallbacks: (id?: string) => (id ? mockRegistry[id] : undefined),
   clearNavigationCallbacks: jest.fn(),
 }));
 
 jest.mock('@/components/UnifiedTransactionAuthModal', () => ({
   __esModule: true,
-  default: () => null,
+  default: (props: any) => {
+    mockModalProps = props;
+    return null;
+  },
 }));
 
 jest.mock('@/components/common/UniversalHeader', () => ({
@@ -152,13 +230,15 @@ function axfer(
 function pay(
   networkId: NetworkId,
   sender: string,
-  amount: number
+  amount: number,
+  note?: string
 ): algosdk.Transaction {
   return algosdk.makePaymentTxnWithSuggestedParamsFromObject({
     sender,
     receiver: sender,
     amount,
     suggestedParams: paramsFor(networkId),
+    note: note ? Buffer.from(note) : undefined,
   });
 }
 
@@ -168,11 +248,18 @@ const b64 = (txn: algosdk.Transaction): string =>
 const chainIdOf = (networkId: NetworkId): string =>
   NETWORK_CONFIGURATIONS[networkId].chainId;
 
+let mockBeforeRemove: (() => void)[] = [];
 const navigationStub = {
   canGoBack: () => false,
   goBack: jest.fn(),
   navigate: jest.fn(),
   replace: jest.fn(),
+  addListener: (event: string, listener: () => void) => {
+    if (event === 'beforeRemove') mockBeforeRemove.push(listener);
+    return () => {
+      mockBeforeRemove = mockBeforeRemove.filter((l) => l !== listener);
+    };
+  },
 } as never;
 
 function walletAccount(label: string, address: string) {
@@ -196,6 +283,9 @@ function renderScreen(options: {
   reviewedAccount: { address: string; label: string };
   chainIdOverride?: string;
   walletConnect?: boolean;
+  callbackId?: string;
+  routeKey?: string;
+  navigation?: unknown;
 }) {
   const {
     networkId,
@@ -204,6 +294,9 @@ function renderScreen(options: {
     reviewedAccount,
     chainIdOverride,
     walletConnect = true,
+    callbackId,
+    routeKey,
+    navigation = navigationStub,
   } = options;
   const chainId = chainIdOverride ?? chainIdOf(networkId);
 
@@ -213,10 +306,13 @@ function renderScreen(options: {
     networkId,
     chainId,
     title: 'WalletConnect Request',
+    callbackId,
   };
   if (walletConnect) {
     params.walletConnect = {
       transactions: entries,
+      requestKey: 'topic-under-test:437',
+      dapp: { name: 'Example dApp', url: 'https://example.org' },
       binding: {
         topic: 'topic-under-test',
         chainId,
@@ -228,13 +324,18 @@ function renderScreen(options: {
 
   return render(
     <UniversalTransactionSigningScreen
-      navigation={navigationStub}
-      route={{ params } as never}
+      navigation={navigation as never}
+      route={{ key: routeKey, params } as never}
     />
   );
 }
 
 beforeEach(() => {
+  mockLocked = false;
+  mockRealController = undefined;
+  mockBiometricEnabled = false;
+  mockRegistry = {};
+  mockBeforeRemove = [];
   mockAssetParams = {};
   mockAccounts = [];
   mockRoutes = {};
@@ -273,7 +374,7 @@ describe('UniversalTransactionSigningScreen — asset display', () => {
     };
 
     const txn = axfer(ALGO, owner, USDC, 10_000_000n);
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: ALGO,
       entries: [{ txn: b64(txn) }],
       approved: [owner],
@@ -298,7 +399,7 @@ describe('UniversalTransactionSigningScreen — asset display', () => {
     mockRoutes[owner] = { kind: 'software', signingAddress: owner };
     mockAssetParams[VOI] = { '777': { decimals: 2, unitName: 'CENT' } };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(axfer(VOI, owner, 777n, 12_345n)) }],
       approved: [owner],
@@ -317,7 +418,7 @@ describe('UniversalTransactionSigningScreen — asset display', () => {
     mockRoutes[owner] = { kind: 'software', signingAddress: owner };
     // No params registered -> getCachedAssetParams resolves null.
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(axfer(VOI, owner, 4242n, 5_000_000n)) }],
       approved: [owner],
@@ -340,7 +441,7 @@ describe('UniversalTransactionSigningScreen — asset display', () => {
 
     // Well beyond 2^53; a Number() narrowing anywhere would round this.
     const amount = 18446744073709551615n;
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(axfer(VOI, owner, 9001n, amount)) }],
       approved: [owner],
@@ -357,7 +458,7 @@ describe('UniversalTransactionSigningScreen — asset display', () => {
     mockAccounts = [walletAccount('Main', owner)];
     mockRoutes[owner] = { kind: 'software', signingAddress: owner };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: ALGO,
       entries: [{ txn: b64(pay(ALGO, owner, 1_500_000)) }],
       approved: [owner],
@@ -378,7 +479,7 @@ describe('UniversalTransactionSigningScreen — signer list', () => {
     mockRoutes[a] = { kind: 'software', signingAddress: a };
     mockRoutes[b] = { kind: 'software', signingAddress: b };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(pay(VOI, a, 1)) }, { txn: b64(pay(VOI, b, 2)) }],
       approved: [a, b],
@@ -398,7 +499,7 @@ describe('UniversalTransactionSigningScreen — signer list', () => {
     mockAccounts = [walletAccount('Alpha', a)];
     mockRoutes[a] = { kind: 'software', signingAddress: a };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [
         { txn: b64(pay(VOI, a, 1)) },
@@ -422,7 +523,7 @@ describe('UniversalTransactionSigningScreen — signer list', () => {
     mockAccounts = [walletAccount('Alpha', mine)];
     mockRoutes[mine] = { kind: 'software', signingAddress: mine };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [
         { txn: b64(pay(VOI, mine, 1)) },
@@ -449,7 +550,7 @@ describe('UniversalTransactionSigningScreen — signer list', () => {
       rekeyedTo: device,
     };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(pay(VOI, owner, 1)) }],
       approved: [owner],
@@ -466,7 +567,7 @@ describe('UniversalTransactionSigningScreen — signer list', () => {
     const theirs = makeAccount('signer-none').addr;
     mockAccounts = [];
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(pay(VOI, theirs, 1)) }],
       approved: [theirs],
@@ -487,7 +588,7 @@ describe('UniversalTransactionSigningScreen — unknown chain', () => {
     mockAccounts = [walletAccount('Main', owner)];
     mockRoutes[owner] = { kind: 'software', signingAddress: owner };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(pay(VOI, owner, 1)) }],
       approved: [owner],
@@ -510,7 +611,7 @@ describe('UniversalTransactionSigningScreen — unknown chain', () => {
     mockAccounts = [walletAccount('Main', owner)];
     mockRoutes[owner] = { kind: 'software', signingAddress: owner };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: ALGO,
       entries: [{ txn: b64(pay(ALGO, owner, 1)) }],
       approved: [owner],
@@ -522,4 +623,581 @@ describe('UniversalTransactionSigningScreen — unknown chain', () => {
     });
     expect(screen.queryByText('Unrecognized network')).toBeNull();
   });
+});
+
+describe('UniversalTransactionSigningScreen — leaving the screen', () => {
+  it('tells the caller it left the stack through its onDismiss (TASK-257)', async () => {
+    const owner = makeAccount('dismiss').addr;
+    mockAccounts = [walletAccount('Main', owner)];
+    mockRoutes[owner] = { kind: 'software', signingAddress: owner };
+    const onDismiss = jest.fn();
+    mockRegistry['cb-dismiss'] = { onDismiss };
+
+    const screen = await renderScreen({
+      networkId: ALGO,
+      entries: [{ txn: b64(pay(ALGO, owner, 1)) }],
+      approved: [owner],
+      reviewedAccount: { address: owner, label: 'Main' },
+      callbackId: 'cb-dismiss',
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Algorand')).toBeTruthy();
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    // Leaving the stack (OS back, swipe-back) reports it once.
+    mockBeforeRemove.forEach((listener) => listener());
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+});
+
+// TASK-437 negative control: no request data may be mounted before authentication.
+it('shows only the locked request gate and rejects without authentication', async () => {
+  mockLocked = true;
+  const sender = makeAccount('locked-review').addr.toString();
+  mockAccounts = [walletAccount('Private account label', sender)];
+  const onReject = jest.fn(async () => {});
+  mockRegistry.locked = { onReject } as any;
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, sender, 12500000, 'Private note')) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Private account label' },
+    callbackId: 'locked',
+  });
+  expect(view.queryByText(/12.5 VOI/)).toBeNull();
+  expect(view.queryByText('Private account label')).toBeNull();
+  expect(view.queryByText('Private note')).toBeNull();
+  expect(view.queryAllByText(truncateAddress(sender))).toHaveLength(0);
+  expect(view.getByText('Unlock to review')).toBeTruthy();
+  expect(view.getByText('Example dApp')).toBeTruthy();
+  expect(view.getByText('example.org')).toBeTruthy();
+  expect(view.queryByText(/Signing Accounts/)).toBeNull();
+  expect(view.getByText(NETWORK_CONFIGURATIONS[VOI].name)).toBeTruthy();
+  await fireEvent.press(view.getByText('Reject'));
+  expect(onReject).toHaveBeenCalledTimes(1);
+  expect(
+    require('@/services/secure/AccountSecureStorage').AccountSecureStorage
+      .verifyPin
+  ).not.toHaveBeenCalled();
+  expect(
+    require('@/services/secure/AccountSecureStorage').AccountSecureStorage
+      .getBiometricSecret
+  ).not.toHaveBeenCalled();
+  expect(
+    require('expo-local-authentication').authenticateAsync
+  ).not.toHaveBeenCalled();
+});
+
+it.each(['beforeRemove', 'unmount', 'cancel', 'background'])(
+  'clears review keys and hides details on %s (TASK-437)',
+  async (exit) => {
+    const { reviewGrant } = require('@/services/auth/reviewGrant');
+    const { AppLockSignal } = require('@/services/secure/appLockState');
+    const { SessionKeyVault } = require('@/services/secure/SessionKeyVault');
+    const {
+      AccountSecureStorage,
+    } = require('@/services/secure/AccountSecureStorage');
+    AppLockSignal.setUnlocked(false);
+    reviewGrant.revoke();
+    AccountSecureStorage.verifyPin.mockResolvedValue(true);
+    mockLocked = true;
+    const sender = makeAccount('review-lifecycle').addr;
+    mockAccounts = [walletAccount('Private review account', sender)];
+    const appStateListeners: ((state: AppStateStatus) => void)[] = [];
+    const spy = jest
+      .spyOn(AppState, 'addEventListener')
+      .mockImplementation((_event, listener) => {
+        appStateListeners.push((state) => listener(state));
+        return { remove: jest.fn() };
+      });
+    const view = await renderScreen({
+      networkId: VOI,
+      entries: [{ txn: b64(pay(VOI, sender, 12500000)) }],
+      approved: [sender],
+      reviewedAccount: { address: sender, label: 'Private review account' },
+    });
+    await act(async () => {
+      expect(
+        await reviewGrant.unlock('topic-under-test:437', { pin: '123456' })
+      ).toBe(true);
+    });
+    await waitFor(() => expect(view.getByText('12.5 VOI')).toBeTruthy());
+    expect(AccountSecureStorage.verifyPin).toHaveBeenCalledTimes(1);
+    if (exit === 'beforeRemove')
+      await act(() => mockBeforeRemove.forEach((fn) => fn()));
+    if (exit === 'unmount') await view.unmount();
+    if (exit === 'cancel') await act(() => mockModalProps.onCancel());
+    if (exit === 'background')
+      await act(() => appStateListeners.forEach((fn) => fn('background')));
+    expect(SessionKeyVault.isUnlocked()).toBe(false);
+    expect(AppLockSignal.isUnlocked()).toBe(false);
+    if (exit !== 'unmount') expect(view.queryByText('12.5 VOI')).toBeNull();
+    spy.mockRestore();
+  }
+);
+
+// TASK-437 (Luna P2): before review is unlocked nothing about the request is
+// decoded, fetched or logged — no asset metadata lookup (it logs the asset
+// id), no signer-route resolution, no account read.
+it('looks nothing up before review is unlocked', async () => {
+  jest.restoreAllMocks();
+  // jest-expo's AppState.addEventListener returns no subscription; stub it
+  // as the lifecycle tests above do.
+  jest
+    .spyOn(AppState, 'addEventListener')
+    .mockImplementation(() => ({ remove: jest.fn() }) as any);
+  require('@/services/auth/reviewGrant').reviewGrant.revoke();
+  require('@/services/secure/appLockState').AppLockSignal.setUnlocked(false);
+  mockGetCachedAssetParams.mockClear();
+  mockResolveSigningRoute.mockClear();
+  mockPreventCapture.mockClear();
+  mockEnableAppSwitcherProtection.mockClear();
+  mockLocked = true;
+  const sender = makeAccount('locked-lookups').addr.toString();
+  mockAccounts = [walletAccount('Locked lookups', sender)];
+  const wallet = require('@/services/wallet').MultiAccountWalletService;
+  const getAllAccounts = jest.spyOn(wallet, 'getAllAccounts');
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(axfer(VOI, sender, USDC, 10000000n)) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Locked lookups' },
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+
+  expect(view.getByText('Unlock to review')).toBeTruthy();
+  expect(mockGetCachedAssetParams).not.toHaveBeenCalled();
+  expect(mockResolveSigningRoute).not.toHaveBeenCalled();
+  expect(getAllAccounts).not.toHaveBeenCalled();
+});
+
+// TASK-437 (Luna P2): a WalletConnect review is kept out of screenshots and
+// the app-switcher snapshot while mounted; in-app signing is unchanged.
+it('guards a WalletConnect review against screen capture and the app switcher', async () => {
+  jest.restoreAllMocks();
+  // jest-expo's AppState.addEventListener returns no subscription; stub it
+  // as the lifecycle tests above do.
+  jest
+    .spyOn(AppState, 'addEventListener')
+    .mockImplementation(() => ({ remove: jest.fn() }) as any);
+  require('@/services/auth/reviewGrant').reviewGrant.revoke();
+  require('@/services/secure/appLockState').AppLockSignal.setUnlocked(false);
+  mockGetCachedAssetParams.mockClear();
+  mockResolveSigningRoute.mockClear();
+  mockPreventCapture.mockClear();
+  mockEnableAppSwitcherProtection.mockClear();
+  mockLocked = true;
+  const sender = makeAccount('capture-guard').addr.toString();
+  mockAccounts = [walletAccount('Capture guard', sender)];
+  await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, sender, 1000000)) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Capture guard' },
+  });
+
+  expect(mockPreventCapture).toHaveBeenCalled();
+  if (require('react-native').Platform.OS === 'ios') {
+    expect(mockEnableAppSwitcherProtection).toHaveBeenCalledTimes(1);
+  }
+});
+
+// TASK-440 audit #1 (negative control): the old per-kind aggregate kept only
+// the FIRST rekey target, so a second, attacker-chosen rekey in the same batch
+// was signed under a warning that named the first. Every dangerous operation
+// is listed, with its transaction number and full destination.
+it('lists every rekey in a batch, each with its transaction and full target', async () => {
+  const sender = makeAccount('danger-batch').addr.toString();
+  const first = makeAccount('danger-first').addr.toString();
+  const attacker = makeAccount('danger-attacker').addr.toString();
+  mockAccounts = [walletAccount('Danger batch', sender)];
+  const rekeyTo = (to: string, amount: number) =>
+    algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+      sender,
+      receiver: sender,
+      amount,
+      rekeyTo: to,
+      suggestedParams: paramsFor(VOI),
+    });
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [
+      { txn: b64(rekeyTo(first, 1)) },
+      { txn: b64(rekeyTo(attacker, 2)) },
+    ],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Danger batch' },
+  });
+
+  expect(
+    view.getByText(new RegExp(`Transaction 1: REKEYS .*${first}`))
+  ).toBeTruthy();
+  expect(
+    view.getByText(new RegExp(`Transaction 2: REKEYS .*${attacker}`))
+  ).toBeTruthy();
+});
+
+// TASK-440 Luna r1 #3/#4: a reconfiguration restates every authority, so only
+// the roles that differ from the asset's current holders (read on the bound
+// network) are listed, each naming the full affected account. Negative
+// control: at 50993c5 all four roles were listed and no lookup was made.
+describe('asset reconfiguration review', () => {
+  const ASSET = 777n;
+  const holders = {
+    manager: makeAccount('acfg-manager').addr.toString(),
+    reserve: makeAccount('acfg-reserve').addr.toString(),
+    freeze: makeAccount('acfg-freeze').addr.toString(),
+    clawback: makeAccount('acfg-clawback').addr.toString(),
+  };
+  const attacker = makeAccount('acfg-attacker').addr.toString();
+
+  const renderReconfig = () => {
+    const sender = holders.manager;
+    mockAccounts = [walletAccount('Asset manager', sender)];
+    const txn = algosdk.makeAssetConfigTxnWithSuggestedParamsFromObject({
+      sender,
+      assetIndex: ASSET,
+      ...holders,
+      clawback: attacker,
+      strictEmptyAddressChecking: false,
+      suggestedParams: paramsFor(VOI),
+    });
+    return renderScreen({
+      networkId: VOI,
+      entries: [{ txn: b64(txn) }],
+      approved: [sender],
+      reviewedAccount: { address: sender, label: 'Asset manager' },
+    });
+  };
+
+  it('lists only the authority that changes, with the full affected account', async () => {
+    mockGetAssetInfo.mockResolvedValue({ params: { ...holders } });
+    const view = await renderReconfig();
+
+    expect(
+      await view.findByText(
+        new RegExp(
+          `Transaction 1: ${holders.manager} gives the clawback authority of asset #777 to ${attacker}\\.$`
+        )
+      )
+    ).toBeTruthy();
+    expect(view.queryByText(/manager authority/)).toBeNull();
+    expect(view.queryByText(/reserve authority/)).toBeNull();
+    expect(view.queryByText(/freeze authority/)).toBeNull();
+    expect(mockGetAssetInfo).toHaveBeenCalledWith(VOI, 777);
+  });
+
+  // Codex pass on 3c5fee0 (HIGH): a pre-signed entry that moves clawback to
+  // the attacker, followed by an entry that moves it back, compared each
+  // entry to the on-chain snapshot, so the review showed no banner at all.
+  // Two entries on one asset now keep every role of the signed one, unverified.
+  it('counts a pre-signed reconfiguration earlier in the batch', async () => {
+    mockGetAssetInfo.mockResolvedValue({ params: { ...holders } });
+    const managerAccount = makeAccount('acfg-manager');
+    const sender = holders.manager;
+    mockAccounts = [walletAccount('Asset manager', sender)];
+    const config = (clawback: string) =>
+      algosdk.makeAssetConfigTxnWithSuggestedParamsFromObject({
+        sender,
+        assetIndex: ASSET,
+        ...holders,
+        clawback,
+        strictEmptyAddressChecking: false,
+        suggestedParams: paramsFor(VOI),
+      });
+    const presigned = Buffer.from(
+      config(attacker).signTxn(managerAccount.sk)
+    ).toString('base64');
+    const view = await renderScreen({
+      networkId: VOI,
+      entries: [
+        { txn: presigned, signers: [] },
+        { txn: b64(config(holders.clawback)) },
+      ],
+      approved: [sender],
+      reviewedAccount: { address: sender, label: 'Asset manager' },
+    });
+
+    expect(
+      await view.findByText(
+        new RegExp(
+          `Transaction 2: ${sender} gives the clawback authority of asset #777 to ${holders.clawback}\\. .*unverified`
+        )
+      )
+    ).toBeTruthy();
+    expect(view.queryByText(/Transaction 1:/)).toBeNull();
+  });
+
+  it('keeps every role, marked unverified, when the asset cannot be read', async () => {
+    mockGetAssetInfo.mockRejectedValue(new Error('offline'));
+    const view = await renderReconfig();
+
+    await waitFor(() => expect(mockGetAssetInfo).toHaveBeenCalled());
+    for (const role of ['manager', 'reserve', 'freeze', 'clawback']) {
+      expect(
+        await view.findByText(
+          new RegExp(`gives the ${role} authority of asset #777 .*unverified`)
+        )
+      ).toBeTruthy();
+    }
+  });
+});
+
+// TASK-453: the modal reports failure as { error }. The alert must carry that
+// error's mapped reason, not the generic "Failed to sign transactions".
+it('shows the mapped reason when signing fails', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const a = makeAccount('signer-fail').addr;
+  mockAccounts = [walletAccount('Alpha', a)];
+  mockRoutes[a] = { kind: 'software', signingAddress: a };
+  await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, a, 1)) }],
+    approved: [a],
+    reviewedAccount: { address: a, label: 'Alpha' },
+  });
+  await waitFor(() => expect(mockModalProps).toBeTruthy());
+
+  await act(async () => {
+    await mockModalProps.onComplete(false, {
+      error: new Error('TransactionPool.Remember: overspend'),
+    });
+  });
+
+  expect(alert).toHaveBeenLastCalledWith(
+    'Not Enough Balance',
+    expect.stringContaining("doesn't have enough balance")
+  );
+  alert.mockRestore();
+});
+
+// TASK-453 (Codex pass A #2): this screen only signs, but if the modal ever
+// reports a pending or maybe-submitted error, the alert must not call it a
+// failure. The send-side cases live in Arc200Confirmation.test.
+it.each([
+  ['pending', () => new TransactionPendingError('TXID'), 'Not Confirmed Yet'],
+  [
+    'maybe submitted',
+    () => new TransactionMaybeSubmittedError(),
+    'May Have Been Sent',
+  ],
+])('shows a %s send as unsettled, not failed', async (_label, make, title) => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const a = makeAccount('signer-unsettled').addr;
+  mockAccounts = [walletAccount('Alpha', a)];
+  mockRoutes[a] = { kind: 'software', signingAddress: a };
+  await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, a, 1)) }],
+    approved: [a],
+    reviewedAccount: { address: a, label: 'Alpha' },
+  });
+  await waitFor(() => expect(mockModalProps).toBeTruthy());
+
+  await act(async () => {
+    await mockModalProps.onComplete(false, { error: make() });
+  });
+
+  const [shownTitle, shownMessage] = alert.mock.calls.at(-1)!;
+  expect(shownTitle).toBe(title);
+  expect(String(shownMessage)).not.toMatch(/fail/i);
+  alert.mockRestore();
+});
+
+// Real controller at the modal seam: review bytes come from the rendered screen.
+jest.mock('@/services/transactions/unifiedSigner', () => ({
+  signsSequentially: (request: unknown) =>
+    jest
+      .requireActual('@/services/transactions/unifiedSigner')
+      .signsSequentially(request),
+  UnifiedTransactionSigner: {
+    getInstance: () => ({
+      signTransaction: jest.fn(async (_req, callbacks) =>
+        callbacks.onComplete({
+          success: true,
+          signedTransactions: ['signature'],
+        })
+      ),
+    }),
+  },
+}));
+jest.mock('@/services/ledger/transport', () => ({
+  ledgerTransportService: {
+    stopDiscovery: jest.fn(),
+    cancelConnect: jest.fn(),
+    on: jest.fn(),
+    off: jest.fn(),
+  },
+}));
+jest.mock('@/services/ledger/algorand', () => ({
+  ledgerAlgorandService: {},
+  LedgerAlgorandService: {},
+}));
+import { reviewGrant, reviewBindingDigest } from '@/services/auth/reviewGrant';
+import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
+import { AppLockSignal } from '@/services/secure/appLockState';
+
+async function renderCapabilityScreen(mint: boolean) {
+  AppLockSignal.setUnlocked(true);
+  SessionKeyVault.set('fixture', 'pin');
+  if (mint) reviewGrant.mintForWaiting(['topic-under-test:437']);
+  const a = makeAccount('capability-screen').addr;
+  mockAccounts = [walletAccount('Alpha', a)];
+  mockRoutes[a] = { kind: 'software', signingAddress: a };
+  return renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, a, 1)) }],
+    approved: [a],
+    reviewedAccount: { address: a, label: 'Alpha' },
+  });
+}
+afterEach(() => {
+  reviewGrant.revoke(false);
+  SessionKeyVault.clear();
+  AppLockSignal.setUnlocked(false);
+});
+// DEFECT R1
+it.each([false, true])(
+  'approveLabelReflectsUnspentCapabilityWithBiometric%s',
+  async (biometric) => {
+    mockBiometricEnabled = biometric;
+    const view = await renderCapabilityScreen(true);
+    await waitFor(() => expect(mockResolveSigningRoute).toHaveBeenCalled());
+    expect(view.getByText('Sign')).toBeTruthy();
+    await act(async () => {
+      reviewGrant.leave('topic-under-test:437');
+    });
+    expect(
+      view.getByText(biometric ? 'Sign with Touch ID' : 'Sign with PIN')
+    ).toBeTruthy();
+  }
+);
+// DEFECT E8: a consumed but still live grant must not be attached again.
+it('spentCapabilityNextApproveUsesFreshAuthentication', async () => {
+  const view = await renderCapabilityScreen(true);
+  await waitFor(() => expect(mockModalProps).toBeTruthy());
+  await fireEvent.press(view.getByText(/^Sign(?: with .+)?$/));
+  const req = mockModalProps.request;
+  const digest = reviewBindingDigest({
+    networkId: req.networkId,
+    txnBytesBase64: req.walletConnectParams.transactions.map(
+      (t: { txn: string }) => t.txn
+    ),
+    signerAddresses: req.walletConnectParams.reviewedSigners,
+  });
+  expect(digest).not.toBeNull();
+  await act(async () => {
+    expect(reviewGrant.consume('topic-under-test:437', digest!)).toBe(true);
+  });
+  await fireEvent.press(view.getByText(/^Sign(?: with .+)?$/));
+  expect(mockModalProps.request.reviewGrantKey).toBeUndefined();
+});
+// REGRESSION R3 screen side with a non-null matching session binding.
+it.each([true, false])(
+  'screenBindToConsumeWithMintedCapability%s',
+  async (mint) => {
+    const { TransactionAuthController } = jest.requireActual(
+      '@/services/auth/transactionAuthController'
+    );
+    mockRealController = new TransactionAuthController();
+    const view = await renderCapabilityScreen(mint);
+    await waitFor(() => expect(mockResolveSigningRoute).toHaveBeenCalled());
+    await fireEvent.press(view.getByText(/^Sign(?: with .+)?$/));
+    const req = mockModalProps.request;
+    expect(req.walletConnectParams.sessionBinding).not.toBeNull();
+    await mockRealController.initializeSigningFlow(req);
+    if (mint) {
+      const digest = reviewBindingDigest({
+        networkId: req.networkId,
+        txnBytesBase64: req.walletConnectParams.transactions.map(
+          (t: { txn: string }) => t.txn
+        ),
+        signerAddresses: req.walletConnectParams.reviewedSigners,
+      });
+      expect(digest).toBe(mockRealController.getReviewDigest());
+      expect(
+        await mockModalProps.controller.authenticateWithReviewGrant(
+          req.reviewGrantKey
+        )
+      ).toBe(true);
+    } else {
+      expect(req.reviewGrantKey).toBeUndefined();
+      expect(mockRealController.getState().requiresPin).toBe(true);
+      expect(await mockRealController.authenticateWithPin('123456')).toBe(true);
+    }
+    expect(mockRealController.getState().state).toBe('completed');
+  }
+);
+// DEFECT for authenticating; REGRESSION for signing and processing.
+// Unlocked lapsed review closes its modal unless the signer is in flight.
+it.each(['authenticating', 'signing', 'processing'])(
+  'unlockedLapseRescuesModalWhile%s',
+  async (state) => {
+    const { TransactionAuthController } = jest.requireActual(
+      '@/services/auth/transactionAuthController'
+    );
+    mockRealController = new TransactionAuthController();
+    const cancel = jest.spyOn(mockRealController, 'cancel');
+    const view = await renderCapabilityScreen(true);
+    await waitFor(() => expect(mockResolveSigningRoute).toHaveBeenCalled());
+    await fireEvent.press(view.getByText(/^Sign(?: with .+)?$/));
+    await mockRealController.initializeSigningFlow(mockModalProps.request);
+    mockRealController.updateState({ state });
+    await act(async () => {
+      reviewGrant.leave('topic-under-test:437');
+    });
+    expect(cancel).toHaveBeenCalledTimes(state === 'authenticating' ? 1 : 0);
+    expect(mockModalProps.visible).toBe(state !== 'authenticating');
+  }
+);
+
+// The in-app review (no walletConnect, no caller callback) falls back to the
+// presenting surface's own navigation when rejected.
+it('rejects an in-app review through the presenting navigation', async () => {
+  const sender = makeAccount('in-app-reject').addr.toString();
+  mockAccounts = [walletAccount('In-app account', sender)];
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, sender, 1000000, 'In-app')) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'In-app account' },
+    walletConnect: false,
+  });
+  await fireEvent.press(view.getByText('Reject'));
+  expect(
+    (navigationStub as unknown as { navigate: jest.Mock }).navigate
+  ).toHaveBeenCalledWith('Main', { screen: 'Home' });
+});
+
+// The route screen scopes the callback navigation to its own route: once that
+// route is gone, a scoped back reports it and dispatches nothing.
+it('scopes the callback navigation to the screen route key', async () => {
+  const sender = makeAccount('scoped-key').addr.toString();
+  mockAccounts = [walletAccount('Scoped account', sender)];
+  let received: { goBack(): boolean } | undefined;
+  mockRegistry.scoped = {
+    onReject: async (nav: { goBack(): boolean }) => {
+      received = nav;
+    },
+  } as any;
+  const dispatch = jest.fn();
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, sender, 1000000, 'Scoped')) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Scoped account' },
+    callbackId: 'scoped',
+    routeKey: 'sign-route',
+    navigation: {
+      ...(navigationStub as object),
+      getState: () => ({ key: 'stack', routes: [] }),
+      dispatch,
+    },
+  });
+  await fireEvent.press(view.getByText('Reject'));
+  expect(received?.goBack()).toBe(false);
+  expect(dispatch).not.toHaveBeenCalled();
 });

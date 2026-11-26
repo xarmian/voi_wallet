@@ -64,6 +64,12 @@ jest.mock('@/platform', () => {
   };
 });
 
+jest.mock('@/services/messaging/keyDerivation', () => ({
+  clearMessagingKeyCache: jest.fn(),
+}));
+
+import { reviewGrant } from '@/services/auth/reviewGrant';
+import { AppLockSignal } from '../appLockState';
 import 'crypto-js/pbkdf2';
 import * as platform from '@/platform';
 import { AccountSecureStorage } from '../AccountSecureStorage';
@@ -436,4 +442,17 @@ describe('PIN throttle fails closed (Codex P1)', () => {
     // And a correct PIN still verifies normally.
     expect(await AccountSecureStorage.verifyPin(CORRECT_PIN)).toBe(true);
   });
+});
+
+it('shares the persistent throttle with locked WalletConnect review across request keys (TASK-437)', async () => {
+  AppLockSignal.setUnlocked(false);
+  reviewGrant.revoke();
+  for (let i = 0; i < PIN_ATTEMPT_LIMIT - 1; i++) await failOnce();
+  expect(await reviewGrant.unlock('first:1', { pin: WRONG_PIN })).toBe(false);
+  expect((await getState()).lockedUntil).toBe(mockNow + PIN_LOCKOUT_DURATION);
+  reviewGrant.revoke();
+  expect(await reviewGrant.unlock('other:2', { pin: CORRECT_PIN })).toBe(false);
+  mockNow += PIN_LOCKOUT_DURATION + 1;
+  expect(await reviewGrant.unlock('other:2', { pin: CORRECT_PIN })).toBe(true);
+  reviewGrant.revoke();
 });

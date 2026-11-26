@@ -1,4 +1,5 @@
 import { shouldSkipForOffline } from '@/services/network/offline';
+import { fetchBuffered, BufferedResponse } from '@/utils/fetchBuffered';
 
 export interface VoiMarketData {
   trading_pair_id: number;
@@ -206,7 +207,7 @@ export class VoiPriceService {
     }
   }
 
-  private async fetchWithRetry(url: string): Promise<Response> {
+  private async fetchWithRetry(url: string): Promise<BufferedResponse> {
     // TASK-191: offline → skip the ladder instead of burning every attempt and
     // its backoff. Same error shape the exhausted ladder throws, so the
     // existing fallback (cached-but-stale price, else 0) applies unchanged.
@@ -222,22 +223,17 @@ export class VoiPriceService {
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(
-          () => controller.abort(),
+        // TASK-440 #9: the deadline covers the body read too.
+        return await fetchBuffered(
+          url,
+          {
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+            },
+          },
           this.config.timeout
         );
-
-        const response = await fetch(url, {
-          signal: controller.signal,
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-        });
-
-        clearTimeout(timeoutId);
-        return response;
       } catch (error) {
         lastError =
           error instanceof Error ? error : new Error('Unknown fetch error');

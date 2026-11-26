@@ -72,6 +72,15 @@ class SessionKeyVaultImpl {
   /** Monotonic epoch; bumped on every set / rotate / clear (Codex P1-D). */
   private epoch = 0;
 
+  private readonly listeners = new Set<() => void>();
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
   /** True while a session secret is held. */
   isUnlocked(): boolean {
     return this.secret !== null;
@@ -105,6 +114,7 @@ class SessionKeyVaultImpl {
     this.secret = secret;
     this.secretSource = source;
     this.epoch++;
+    this.listeners.forEach((listener) => listener());
   }
 
   /**
@@ -120,6 +130,7 @@ class SessionKeyVaultImpl {
       this.secretSource = newSource;
     }
     this.epoch++;
+    this.listeners.forEach((listener) => listener());
   }
 
   /**
@@ -207,6 +218,7 @@ class SessionKeyVaultImpl {
     this.zeroWrapKeys();
     this.secret = null;
     this.epoch++;
+    this.listeners.forEach((listener) => listener());
   }
 
   /** Composite memo key for the (accountId, salt) pair. The salt is a fixed-

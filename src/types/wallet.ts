@@ -25,11 +25,8 @@ export interface BaseAccountMetadata {
   avatarUpdatedAt?: string; // Last time avatarUrl was refreshed
 }
 
-// Standard Account (with private key)
-export interface StandardAccountMetadata extends BaseAccountMetadata {
-  type: AccountType.STANDARD;
-  mnemonic: string; // 25-word recovery phrase
-  derivationPath?: string; // HD derivation path if applicable
+/** Per-account backup metadata shared by STANDARD and REKEYED records. */
+export interface BackupMetadata {
   /**
    * LEGACY. Despite the historical name this means "a mnemonic was supplied for
    * this account", NOT "the user proved they have it" — `importStandardAccount`
@@ -37,13 +34,18 @@ export interface StandardAccountMetadata extends BaseAccountMetadata {
    * (DR-10); nothing in the app reads it today. Use `backupVerified` for any
    * "is this account safely backed up?" decision.
    */
-  hasBackup: boolean;
+  hasBackup?: boolean;
   /**
-   * TASK-45 / DR-10 / DR-11 — whether the user has demonstrably confirmed this
-   * account's recovery phrase by completing the word-verification quiz.
+   * TASK-45 / DR-10 / DR-11, amended by TASK-556 — whether the user has
+   * demonstrably shown they hold this account's recovery phrase.
    *
-   * - `true` ONLY on quiz success. Plain creation, import, rekey conversion,
-   *   restore-from-backup, and the "Skip for now" escape all leave it `false`.
+   * - `true` on quiz success or for a phrase typed in on this device (they
+   *   could only type it by holding it). A pasted or autofilled phrase, a QR
+   *   scan, a private key, a restore-from-backup, and creation without the
+   *   quiz (including the "Skip for now" escape) all leave it `false`. Import
+   *   flows that set it derive it with `backupVerifiedAtImport()`; flows that
+   *   never verify write `false` or omit it. After import, only passing the
+   *   verification quiz (VerifyBackup) sets it true.
    * - Pre-existing accounts (persisted before this field existed) migrate to
    *   `false`; it is NOT derived from `hasBackup`, which means something else.
    * - Deliberately EXCLUDED from the encrypted backup format: verification is a
@@ -51,9 +53,18 @@ export interface StandardAccountMetadata extends BaseAccountMetadata {
    *
    * Read it through `isBackupVerified()` so a legacy record that has not yet
    * been through the read-time migration can never be treated as verified.
+   * Each account owns these fields; an auth account grants no verification.
    */
-  backupVerified: boolean;
+  backupVerified?: boolean;
   backupCreatedAt?: string; // Backup creation timestamp
+}
+
+// Standard Account (with private key)
+export interface StandardAccountMetadata
+  extends BaseAccountMetadata, BackupMetadata {
+  type: AccountType.STANDARD;
+  mnemonic: string; // 25-word recovery phrase
+  derivationPath?: string; // HD derivation path if applicable
 }
 
 // Watch Account (read-only)
@@ -64,7 +75,8 @@ export interface WatchAccountMetadata extends BaseAccountMetadata {
 }
 
 // Rekeyed Account (delegated signing)
-export interface RekeyedAccountMetadata extends BaseAccountMetadata {
+export interface RekeyedAccountMetadata
+  extends BaseAccountMetadata, BackupMetadata {
   type: AccountType.REKEYED;
   authAddress: string; // Address that has signing authority
   rekeyedAt?: string; // When the account was rekeyed
@@ -122,32 +134,103 @@ export interface RemoteSignerAccountMetadata extends BaseAccountMetadata {
   authLevel?: RemoteSignerAuthLevel;
 }
 
+/** Local custody evidence; pending/failed strict probes remain unresolved. */
+export type KeyHolding = 'present' | 'absent' | 'unresolved';
+type BackupAccount = Pick<AccountMetadata, 'type'> &
+  BackupMetadata & { originalOwner?: boolean };
+
 /**
- * TASK-45 — the ONLY sanctioned read of `backupVerified`.
- *
- * Fails closed in every ambiguous case: non-standard accounts (no phrase to
- * back up), and legacy standard records persisted before the field existed
- * (`undefined` at runtime even though the type declares it required, until the
- * read-time migration in MultiAccountWalletService rewrites them). Anything but
- * a literal `true` means "not verified", so the Home warning banner can never
- * be wrongly suppressed.
+ * Shared per-account classifier. Signer capability and auth membership grant nothing.
+ * PROTECTIVE only: originalOwner counts as present without a read (TASK-419,
+ * a keystore failure can read a present secret as null), but it can outlive
+ * the key, so a gate that uses the key must probe instead (TASK-425 U4).
  */
+export function classifyKeyHolding(
+  account: BackupAccount | null | undefined,
+  secretPresence: KeyHolding = 'unresolved'
+): KeyHolding {
+  if (!account) return 'absent';
+  if (account.type === AccountType.STANDARD) return 'present';
+  if (account.type !== AccountType.REKEYED) return 'absent';
+  return account.originalOwner === true ? 'present' : secretPresence;
+}
+
+/** Only a literal true on this account establishes backup verification. */
 export function isBackupVerified(
-  account: Pick<AccountMetadata, 'type'> | null | undefined
+  account: BackupAccount | null | undefined
 ): boolean {
-  if (!account || account.type !== AccountType.STANDARD) return false;
-  return (account as Partial<StandardAccountMetadata>).backupVerified === true;
+  if (
+    !account ||
+    (account.type !== AccountType.STANDARD &&
+      account.type !== AccountType.REKEYED)
+  )
+    return false;
+  return account.backupVerified === true;
 }
 
 /**
- * True when an account still needs its recovery phrase confirmed — i.e. it is a
- * key-bearing STANDARD account whose phrase the user has not proven they hold.
+ * How an account's phrase reached this device at import time (TASK-556).
+ * - 'quiz': the app generated the phrase and offered the verification quiz.
+ * - 'entered-phrase': the user typed the 25-word phrase in on this device
+ *   (one keystroke per change, including a typed space then the next word in
+ *   one field; a suggestion-chip tap counts as typing). Known limit: any paste
+ *   that arrives as a single token with no whitespace (one word per field, or
+ *   a comma-joined phrase that typed spaces then split) is indistinguishable
+ *   from a keyboard suggestion and counts as typed.
+ * - 'pasted': some change inserted more than one character at once and left a
+ *   field holding several words (a clipboard paste or autofill); the phrase may
+ *   only ever have lived in the clipboard.
+ * - 'qr': a scanned secret (phrase or key); the user never typed it.
+ * - 'private-key': a raw key; the user never saw a phrase.
+ * - 'restore': restored from an encrypted backup.
  */
-export function needsBackupVerification(
-  account: Pick<AccountMetadata, 'type'> | null | undefined
+export type ImportVerificationSource =
+  'quiz' | 'entered-phrase' | 'pasted' | 'qr' | 'private-key' | 'restore';
+
+/**
+ * TASK-556: the single import-time decision for `backupVerified`. The import
+ * flows that can set the flag true (quiz creation and phrase entry) derive it
+ * with this helper; flows that never verify (restore, QR, private key, plain
+ * creation) write false or omit it. A generated phrase counts only once the
+ * quiz is passed (literal `true`); a phrase typed in on this device counts
+ * because the user holds it; everything else, a pasted phrase included, stays
+ * false. The switch is exhaustive: a new source fails to compile, and an
+ * unknown value at runtime returns false. The service still refuses
+ * verification when no mnemonic was supplied.
+ */
+export function backupVerifiedAtImport(
+  source: ImportVerificationSource,
+  quizPassed?: boolean
 ): boolean {
-  if (!account || account.type !== AccountType.STANDARD) return false;
-  return !isBackupVerified(account);
+  switch (source) {
+    case 'quiz':
+      return quizPassed === true;
+    case 'entered-phrase':
+      return true;
+    case 'pasted':
+    case 'qr':
+    case 'private-key':
+    case 'restore':
+      return false;
+    default: {
+      const unhandled: never = source;
+      void unhandled;
+      return false;
+    }
+  }
+}
+
+/** Home policy: unresolved custody reminds; only confirmed delegation suppresses. */
+export function needsBackupVerification(
+  account: BackupAccount | null | undefined,
+  keyHolding = classifyKeyHolding(account),
+  delegatedEverywhere = false
+): boolean {
+  return (
+    keyHolding !== 'absent' &&
+    !isBackupVerified(account) &&
+    !delegatedEverywhere
+  );
 }
 
 // Union type for all account metadata types
@@ -216,6 +299,8 @@ export interface AccountBalance {
     isRekeyed: boolean;
     authAddress?: string;
     rekeyedAt?: number;
+    /** The rekey lookup failed; isRekeyed:false is only a display fallback. */
+    unavailable?: boolean;
   };
 }
 
@@ -280,9 +365,13 @@ export interface ImportAccountRequest {
   color?: string;
   /**
    * TASK-45 / DR-11 — carrier for the add-account flow, which imports directly
-   * instead of routing through SecuritySetup. Set true ONLY when the caller
-   * observed the user complete the verification quiz for THIS phrase. Absent or
-   * false persists the account as un-backed-up (the safe default).
+   * instead of routing through SecuritySetup. True on quiz success for THIS
+   * phrase or (TASK-556) when the user typed THIS phrase in on this device. A
+   * pasted or autofilled phrase, a QR scan, a private key, a restore, and
+   * creation without the quiz all stay false. Flows that set it derive it with
+   * `backupVerifiedAtImport()`; flows that never verify write false or omit
+   * it. Absent or false persists the account as un-backed-up (the safe
+   * default).
    */
   backupVerified?: boolean;
 }
@@ -415,6 +504,42 @@ export class AccountStorageError extends AccountError {
   constructor(message: string = 'Account storage error') {
     super(message, 'ACCOUNT_STORAGE_ERROR');
   }
+}
+
+export class WipeIncompleteError extends AccountStorageError {
+  /** Storage key NAMES (and opaque account ids inside them) that are unresolved. Never values. */
+  readonly keys: string[];
+
+  constructor(keys: string[], message?: string) {
+    const uniqueKeys = [...new Set(keys)].sort();
+    super(
+      message ??
+        `Wipe incomplete: ${uniqueKeys.length} item(s) unresolved. Restart and try again.`
+    );
+    this.name = 'WipeIncompleteError';
+    this.keys = uniqueKeys;
+  }
+}
+
+/**
+ * TASK-424: a deletion's caller-stated expectation (identity, type, or no own
+ * key) no longer holds for the stored account, so nothing was deleted.
+ */
+export class AccountDeletionPreconditionError extends AccountError {
+  constructor(
+    message: string = 'This account changed before it could be deleted. Please start again.'
+  ) {
+    super(message, 'ACCOUNT_DELETION_PRECONDITION');
+    this.name = 'AccountDeletionPreconditionError';
+  }
+}
+
+/** TASK-424: what a caller checked before asking to delete an account. */
+export interface AccountDeletionExpectation {
+  address: string;
+  type: AccountType;
+  /** True when the caller confirmed the deletion as an account with no key. */
+  keyless: boolean;
 }
 
 export class AccountRetrievalError extends AccountError {

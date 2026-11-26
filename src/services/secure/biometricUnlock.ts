@@ -1,10 +1,13 @@
 /**
  * Biometric-unlock orchestration (Wave-2, DOC-137 §3.3/§3.4, PR6)
  *
- * The single, React-free place that turns a biometric prompt into a populated
- * SessionKeyVault. AuthContext.unlockWithBiometrics calls this and then handles
- * the React state + AppLockSignal; keeping the security-critical work here makes
- * it unit-testable without a React harness.
+ * The React-free place where the lock-screen biometric unlock turns a biometric
+ * prompt into a populated SessionKeyVault. AuthContext.unlockWithBiometrics
+ * calls this and then handles the React state + AppLockSignal; keeping the
+ * security-critical work here makes it unit-testable without a React harness.
+ * (The onboarding old-PIN step, TASK-509, does not use this: it passes the
+ * saved secret to unlockForRestore, which verifies it like a typed PIN before
+ * filling the vault, and it clears nothing.)
  *
  * THE FLOW (§3.3): read the biometric-convenience secret behind the OS biometric
  * gate (the `getItemWithAuth` read IS the prompt) → on success, feed the raw

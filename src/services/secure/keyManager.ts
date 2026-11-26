@@ -2,19 +2,27 @@ import { AccountSecureStorage } from './AccountSecureStorage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import {
   AccountType,
-  RekeyedAccountMetadata,
   LedgerAccountMetadata,
   LedgerSigningInfo,
   LedgerDeviceNotConnectedError,
   LedgerAccountError,
   AuthenticationRequiredError,
 } from '@/types/wallet';
-import RekeyManager from '@/services/wallet/rekeyManager';
+import { getRekeyStateStrict } from '@/store/walletStore';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import type { LedgerDeviceInfo } from '@/services/ledger/transport';
 import algosdk, { Transaction } from 'algosdk';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import { NetworkService } from '@/services/network';
+import { findOwnKeySigner } from '@/services/wallet/ownKeyCustody';
+import { redactError } from '@/utils/logRedaction';
+import { assertSignableKeyreg } from '@/utils/keyregSafety';
+import {
+  consumeFreshAuth,
+  FreshAuthCapability,
+  FreshAuthReason,
+} from './freshAuth';
 
 /**
  * Secure Key Manager - Simplified version using AccountSecureStorage
@@ -132,12 +140,14 @@ export class SecureKeyManager {
     if (rekeyInfo.isRekeyed && rekeyInfo.authAddress) {
       signingAddress = rekeyInfo.authAddress;
 
-      // Find the signing account in our wallet
-      const signingAccount = wallet.accounts.find(
-        (acc) =>
-          acc.address.toUpperCase() === signingAddress.toUpperCase() &&
-          (acc.type === AccountType.STANDARD || acc.type === AccountType.LEDGER)
-      );
+      // Find the signing account in our wallet: a Ledger, or a record whose own
+      // key we hold, a retained REKEYED key included (TASK-425 U3).
+      const signingAccount =
+        wallet.accounts.find(
+          (acc) =>
+            acc.address.toUpperCase() === signingAddress.toUpperCase() &&
+            acc.type === AccountType.LEDGER
+        ) ?? (await findOwnKeySigner(signingAddress, wallet.accounts));
 
       if (!signingAccount) {
         return {
@@ -215,6 +225,13 @@ export class SecureKeyManager {
     let privateKey: Uint8Array | null = null;
 
     try {
+      // TASK-439: never sign a permanent non-participation keyreg, whoever
+      // built it (WalletConnect, a remote-signer request, any caller). Checked
+      // before the route so no key is loaded and no Ledger is prompted.
+      if (transaction) {
+        assertSignableKeyreg(transaction);
+      }
+
       const route = await this.resolveSigningRoute(address, networkId);
 
       if (route.kind === 'unavailable') {
@@ -255,7 +272,7 @@ export class SecureKeyManager {
 
           return result.signedTransaction;
         } catch (error) {
-          console.error('Ledger Signing Error:', error);
+          console.error('Ledger Signing Error:', redactError(error));
 
           // Normalize to LedgerAccountError for unexpected issues; known types propagate
           if (error instanceof LedgerDeviceNotConnectedError) {
@@ -298,12 +315,11 @@ export class SecureKeyManager {
    * Get signing information for an account
    * Returns the actual address that will be used for signing and whether signing is possible
    * @param address - The account address to check
-   * @param networkId - Optional network ID to check network-specific rekey status
-   * WARNING: For transaction signing, ALWAYS provide networkId to avoid using wrong network's rekey state
+   * @param networkId - The request network used to resolve signing authority
    */
   static async getSigningInfo(
     address: string,
-    networkId?: import('@/types/network').NetworkId
+    networkId: import('@/types/network').NetworkId
   ): Promise<{
     canSign: boolean;
     signingAddress: string;
@@ -311,6 +327,7 @@ export class SecureKeyManager {
     isRekeyed: boolean;
     authAddress?: string;
   }> {
+    const rekey = await getRekeyStateStrict(address, networkId);
     try {
       const wallet = await MultiAccountWalletService.getCurrentWallet();
       if (!wallet) {
@@ -330,7 +347,7 @@ export class SecureKeyManager {
         };
       }
 
-      if (account.type === AccountType.STANDARD) {
+      if (!rekey.isRekeyed && account.type === AccountType.STANDARD) {
         return {
           canSign: true,
           signingAddress: address,
@@ -339,7 +356,7 @@ export class SecureKeyManager {
         };
       }
 
-      if (account.type === AccountType.LEDGER) {
+      if (!rekey.isRekeyed && account.type === AccountType.LEDGER) {
         // User can sign with Ledger accounts regardless of current connection state.
         // Connection will be handled just-in-time during signing.
         return {
@@ -350,76 +367,40 @@ export class SecureKeyManager {
         };
       }
 
-      if (account.type === AccountType.REKEYED) {
-        const rekeyedAccount = account as RekeyedAccountMetadata;
-        const signingAccount = RekeyManager.findSigningAccount(
-          rekeyedAccount,
-          wallet
-        );
-
+      // A REKEYED record can come from ANOTHER network's rekey (the persisted
+      // type is network-agnostic), and its original key is retained (TASK-419).
+      // When the request network reports no rekey, that key signs, exactly as
+      // resolveSigningRoute does.
+      if (
+        !rekey.isRekeyed &&
+        account.type === AccountType.REKEYED &&
+        (await AccountSecureStorage.probeSecretPresenceStrict(account.id))
+      ) {
         return {
-          canSign: rekeyedAccount.canSign,
-          signingAddress: rekeyedAccount.authAddress,
-          signingAccountId: signingAccount?.id,
-          isRekeyed: true,
-          authAddress: rekeyedAccount.authAddress,
+          canSign: true,
+          signingAddress: address,
+          signingAccountId: account.id,
+          isRekeyed: false,
         };
       }
-      // WATCH accounts: detect if rekeyed to an account we control (standard or Ledger)
-      // If rekeyed to a standard account in our wallet, report canSign true
-      // If rekeyed to a Ledger account in our wallet, report canSign false but include signer identifiers
-      try {
-        // Use network-specific service to check rekey status
-        const networkService = NetworkService.getInstance(networkId);
-        const rekeyInfo = await networkService.getAccountRekeyInfo(address);
-        if (rekeyInfo.isRekeyed && rekeyInfo.authAddress) {
-          const signer = wallet.accounts.find(
-            (acc) => acc.address === rekeyInfo.authAddress
-          );
 
-          if (signer?.type === AccountType.STANDARD) {
-            return {
-              canSign: true,
-              signingAddress: rekeyInfo.authAddress,
-              signingAccountId: signer.id,
-              isRekeyed: true,
-              authAddress: rekeyInfo.authAddress,
-            };
-          }
-
-          if (signer?.type === AccountType.LEDGER) {
-            return {
-              canSign: false,
-              signingAddress: rekeyInfo.authAddress,
-              signingAccountId: signer.id,
-              isRekeyed: true,
-              authAddress: rekeyInfo.authAddress,
-            };
-          }
-
-          // Rekeyed but signer not in wallet
-          return {
-            canSign: false,
-            signingAddress: rekeyInfo.authAddress,
-            isRekeyed: true,
-            authAddress: rekeyInfo.authAddress,
-          };
-        }
-      } catch {}
-
-      // Not rekeyed or unable to detect signer for watch account
+      const signingAddress = rekey.authAddress ?? address;
+      const signer =
+        wallet.accounts.find(
+          (acc) =>
+            acc.address === signingAddress &&
+            [AccountType.LEDGER, AccountType.REMOTE_SIGNER].includes(acc.type)
+        ) ?? (await findOwnKeySigner(signingAddress, wallet.accounts));
       return {
-        canSign: false,
-        signingAddress: address,
-        isRekeyed: false,
+        canSign: rekey.canSign,
+        signingAddress,
+        signingAccountId: signer?.id,
+        isRekeyed: rekey.isRekeyed,
+        authAddress: rekey.authAddress,
       };
     } catch (error) {
-      console.error('Failed to get signing info:', error);
-      return {
-        canSign: false,
-        signingAddress: address,
-        isRekeyed: false,
-      };
+      console.error('Failed to get signing info:', redactError(error));
+      throw error;
     }
   }
 
@@ -611,7 +592,52 @@ export class SecureKeyManager {
    * Get mnemonic for specific address from account metadata (when wallet is unlocked)
    * This is much simpler than going through private key decryption
    */
-  static async getMnemonic(address: string): Promise<string> {
+  static async revealMnemonic(
+    address: string,
+    cap: FreshAuthCapability,
+    reason: FreshAuthReason = 'reveal_recovery_phrase'
+  ): Promise<string> {
+    consumeFreshAuth(cap, reason);
+    return this.readMnemonicUnchecked(address);
+  }
+
+  /**
+   * TASK-504: the recovery phrase for ONE wallet record, read from the secret
+   * under that record's own id. revealMnemonic re-resolves the FIRST record with
+   * an address, so with duplicate entries (TASK-423) it can read another
+   * record's key; a backup that probed one record must export that record's.
+   * The fresh-auth capability is consumed first and its failure propagates as
+   * is (it is a session state, never a key problem); every read failure after
+   * that throws.
+   */
+  static async revealMnemonicForRecord(
+    account: { id: string; address: string },
+    cap: FreshAuthCapability,
+    reason: FreshAuthReason = 'export_backup'
+  ): Promise<string> {
+    consumeFreshAuth(cap, reason);
+    let privateKey: Uint8Array | null = null;
+    try {
+      privateKey = await AccountSecureStorage.getPrivateKey(account.id);
+      // Never export a phrase for a key that isn't this record's own.
+      if (!keyBelongsToAddress(privateKey, account.address)) {
+        throw new Error('The stored key does not match this account');
+      }
+      return algosdk.secretKeyToMnemonic(privateKey);
+    } finally {
+      if (privateKey) privateKey.fill(0);
+    }
+  }
+
+  static async revealPrivateKey(
+    accountId: string,
+    cap: FreshAuthCapability
+  ): Promise<Uint8Array> {
+    consumeFreshAuth(cap, 'export_private_key');
+    return AccountSecureStorage.getPrivateKey(accountId);
+  }
+
+  private static async readMnemonicUnchecked(address: string): Promise<string> {
     try {
       // Find the account by address
       const wallet = await MultiAccountWalletService.getCurrentWallet();
@@ -624,9 +650,12 @@ export class SecureKeyManager {
         throw new Error('Account not found');
       }
 
-      // Check if it's a standard account with mnemonic
-      // TEMPORARY: Allow any account type to check if private key exists
-      if (account.type !== 'standard' && account.type !== 'watch') {
+      // Retrieval, rather than ownership metadata, proves a REKEYED key exists.
+      if (
+        account.type !== 'standard' &&
+        account.type !== 'watch' &&
+        account.type !== 'rekeyed'
+      ) {
         throw new Error('This account type does not have a recovery phrase');
       }
 
@@ -634,15 +663,18 @@ export class SecureKeyManager {
         account as import('@/types/wallet').StandardAccountMetadata;
 
       const storedMnemonic = standardAccount.mnemonic?.trim();
-      if (storedMnemonic) {
+      if (account.type !== 'rekeyed' && storedMnemonic) {
         return storedMnemonic;
       }
 
       let privateKey: Uint8Array | null = null;
       try {
-        privateKey = await AccountSecureStorage.getPrivateKey(
-          standardAccount.id
-        );
+        privateKey = await AccountSecureStorage.getPrivateKey(account.id);
+        // Never show a phrase for a key that isn't this account's own: a
+        // mismatched key would display a plausible but WRONG recovery phrase.
+        if (!keyBelongsToAddress(privateKey, account.address)) {
+          throw new Error('The stored key does not match this account');
+        }
         const derivedMnemonic = algosdk.secretKeyToMnemonic(privateKey);
         return derivedMnemonic;
       } catch (privateKeyError) {
@@ -666,7 +698,8 @@ export class SecureKeyManager {
     try {
       await AccountSecureStorage.clearAll();
     } catch (error) {
-      console.error('Failed to clear secure storage:', error);
+      console.error('Failed to clear secure storage:', redactError(error));
+      throw error;
     }
   }
 }

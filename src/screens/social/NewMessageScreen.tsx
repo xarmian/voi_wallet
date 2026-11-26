@@ -22,8 +22,9 @@ import { Theme } from '@/constants/themes';
 import EnvoiService from '@/services/envoi';
 import { useFriendsStore } from '@/store/friendsStore';
 import { useMessagesStore } from '@/store/messagesStore';
-import { useActiveAccount, useAccounts } from '@/store/walletStore';
-import { AccountType, RekeyedAccountMetadata } from '@/types/wallet';
+import { useActiveAccount } from '@/store/walletStore';
+import { useMessagingSigner } from './useMessagingSigner';
+import { MessagingSignerNotice } from './MessagingSignerNotice';
 import { formatAddress } from '@/utils/address';
 import AccountAvatar from '@/components/account/AccountAvatar';
 import type { FriendsStackParamList } from '@/navigation/AppNavigator';
@@ -61,40 +62,18 @@ export default function NewMessageScreen() {
   }, [isMessagingEnabled, navigation]);
 
   const activeAccount = useActiveAccount();
-  const allAccounts = useAccounts();
+  const signer = useMessagingSigner(activeAccount);
+  const { ready: signerReady, isLedgerBacked, canUseMessaging } = signer;
   const { checkKeyRegistration } = useMessagesStore();
   const friends = useFriendsStore((state) => state.friends);
   const friendsInitialize = useFriendsStore((state) => state.initialize);
   const friendsIsInitialized = useFriendsStore((state) => state.isInitialized);
 
-  // Check if current account is backed by a Ledger (either directly or via rekey)
-  const isLedgerBacked = (() => {
-    if (!activeAccount) return false;
-
-    // Direct Ledger account
-    if (activeAccount.type === AccountType.LEDGER) {
-      return true;
-    }
-
-    // Rekeyed account - check if auth address belongs to a Ledger account
-    if (activeAccount.type === AccountType.REKEYED) {
-      const rekeyedAccount = activeAccount as RekeyedAccountMetadata;
-      const authAccount = allAccounts.find(
-        (acc) => acc.address === rekeyedAccount.authAddress
-      );
-      if (authAccount?.type === AccountType.LEDGER) {
-        return true;
-      }
-    }
-
-    return false;
-  })();
-
   // Check key registration on focus - redirect if not registered or Ledger
   useFocusEffect(
     useCallback(() => {
       const checkRegistration = async () => {
-        if (activeAccount?.address) {
+        if (activeAccount?.address && signerReady) {
           // Ledger-backed accounts can't use messaging
           if (isLedgerBacked) {
             Alert.alert(
@@ -129,6 +108,7 @@ export default function NewMessageScreen() {
     }, [
       activeAccount?.address,
       isLedgerBacked,
+      signerReady,
       checkKeyRegistration,
       navigation,
     ])
@@ -267,16 +247,18 @@ export default function NewMessageScreen() {
   // Handle selecting a recipient
   const handleSelectRecipient = useCallback(
     (recipient: RecipientOption) => {
+      if (!canUseMessaging) return;
       navigation.replace('Chat', {
         friendAddress: recipient.address,
         friendEnvoiName: recipient.name,
       });
     },
-    [navigation]
+    [navigation, canUseMessaging]
   );
 
   // Handle starting chat with address
   const handleStartChatWithAddress = useCallback(() => {
+    if (!canUseMessaging) return;
     const trimmedQuery = searchQuery.trim();
     if (algosdk.isValidAddress(trimmedQuery)) {
       const friend = friends.find((f) => f.address === trimmedQuery);
@@ -285,7 +267,7 @@ export default function NewMessageScreen() {
         friendEnvoiName: friend?.envoiName,
       });
     }
-  }, [searchQuery, friends, navigation]);
+  }, [searchQuery, friends, navigation, canUseMessaging]);
 
   // Render recipient option
   const renderRecipientOption = (recipient: RecipientOption) => (
@@ -296,6 +278,7 @@ export default function NewMessageScreen() {
     >
       <TouchableOpacity
         style={styles.recipientTouchable}
+        disabled={!canUseMessaging}
         onPress={() => handleSelectRecipient(recipient)}
         activeOpacity={0.7}
       >
@@ -366,6 +349,8 @@ export default function NewMessageScreen() {
           onAccountSelectorPress={() => {}}
         />
 
+        <MessagingSignerNotice signer={signer} />
+
         <KeyboardAvoidingView
           style={styles.content}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -403,6 +388,7 @@ export default function NewMessageScreen() {
             <BlurredContainer style={styles.addressAction} borderRadius={0}>
               <TouchableOpacity
                 style={styles.addressActionTouchable}
+                disabled={!canUseMessaging}
                 onPress={handleStartChatWithAddress}
               >
                 <Ionicons

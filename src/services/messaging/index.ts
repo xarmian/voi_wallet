@@ -17,6 +17,7 @@ import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { getSupabaseClient } from '@/services/supabase';
 import { NetworkId } from '@/types/network';
+import { withMessagingDeadline } from './requestDeadline';
 import { WalletAccount } from '@/types/wallet';
 import {
   Message,
@@ -46,7 +47,7 @@ import {
   isMessagingKeyRegistered,
   getMessagingPublicKey,
 } from './keyRegistry';
-import { drainByCursor } from './pagination';
+import { drainByCursor, type DrainStop } from './pagination';
 
 /**
  * MIMIR messages table row structure
@@ -293,7 +294,10 @@ export class MessagingService {
       query = query.lt('round', beforeRound);
     }
 
-    const { data, error } = await query;
+    const { data, error } = await withMessagingDeadline(
+      query,
+      'messages (Mimir)'
+    );
 
     if (error) {
       throw new Error(`MIMIR query failed: ${error.message}`);
@@ -390,7 +394,10 @@ export class MessagingService {
       query = query.maxRound(beforeRound - 1);
     }
 
-    const response = await query.do();
+    const response = await withMessagingDeadline(
+      query.do(),
+      'messages (indexer)'
+    );
 
     // Filter for transactions between user and friend
     const allTxns = (response.transactions || []).filter((txn) => {
@@ -472,11 +479,12 @@ export class MessagingService {
    * @param limit - Maximum number of messages to fetch
    * @param afterId - MIMIR ingestion id to sync after (incremental). Undefined
    *   bootstraps from the newest window.
-   * @returns `conversations` (friend address -> messages); `complete`, which is
-   *   false when an incremental drain was truncated (safety cap reached) so the
-   *   caller must not advance its durable cursor past the fetched rows; and
-   *   `maxId`, the greatest MIMIR ingestion id fetched (null when the source has
-   *   no ingestion id, e.g. the indexer fallback, so the cursor isn't advanced).
+   * @returns `conversations` (friend address -> messages); `stop`, why the
+   *   drain ended ('complete', 'page-cap', or 'stalled-cursor'; see
+   *   drainByCursor), where only a stalled drain forbids advancing the durable
+   *   cursor; and `maxId`, the greatest MIMIR ingestion id fetched (null when the
+   *   source has no ingestion id, e.g. the indexer fallback, so the cursor isn't
+   *   advanced).
    */
   async fetchAllConversations(
     userAddress: string,
@@ -485,7 +493,7 @@ export class MessagingService {
     afterId?: number
   ): Promise<{
     conversations: Map<string, Message[]>;
-    complete: boolean;
+    stop: DrainStop;
     maxId: number | null;
   }> {
     const supabase = getSupabaseClient();
@@ -493,7 +501,7 @@ export class MessagingService {
     // Try MIMIR first if Supabase is configured
     if (supabase) {
       try {
-        const { messages, complete, maxId } =
+        const { messages, stop, maxId } =
           await this.fetchAllConversationsFromMimir(
             userAddress,
             limit,
@@ -506,7 +514,7 @@ export class MessagingService {
             userAddress,
             messagingKeyPair
           ),
-          complete,
+          stop,
           maxId,
         };
       } catch (error) {
@@ -531,7 +539,7 @@ export class MessagingService {
     afterId?: number
   ): Promise<{
     messages: MimirMessage[];
-    complete: boolean;
+    stop: DrainStop;
     maxId: number | null;
   }> {
     const supabase = getSupabaseClient();
@@ -543,18 +551,21 @@ export class MessagingService {
     // before. We commit the greatest ingestion id fetched as the durable
     // cursor; older history is loaded on demand via pagination.
     if (afterId === undefined) {
-      const { data, error } = await supabase
-        .schema('voiwallet')
-        .from('messages')
-        .select('*')
-        .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
-        .order('round', { ascending: false })
-        .limit(limit);
+      const { data, error } = await withMessagingDeadline(
+        supabase
+          .schema('voiwallet')
+          .from('messages')
+          .select('*')
+          .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
+          .order('round', { ascending: false })
+          .limit(limit),
+        'conversations bootstrap (Mimir)'
+      );
       if (error) {
         throw new Error(`MIMIR query failed: ${error.message}`);
       }
       const messages = (data as MimirMessage[]) || [];
-      return { messages, complete: true, maxId: maxRowId(messages) };
+      return { messages, stop: 'complete', maxId: maxRowId(messages) };
     }
 
     // Incremental sync: page forward by the BIGSERIAL ingestion id
@@ -573,21 +584,24 @@ export class MessagingService {
     const fetchPage = async (
       cursor: number | undefined
     ): Promise<MimirMessage[]> => {
-      const { data, error } = await supabase
-        .schema('voiwallet')
-        .from('messages')
-        .select('*')
-        .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
-        .gt('id', cursor ?? afterId)
-        .order('id', { ascending: true })
-        .limit(limit);
+      const { data, error } = await withMessagingDeadline(
+        supabase
+          .schema('voiwallet')
+          .from('messages')
+          .select('*')
+          .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
+          .gt('id', cursor ?? afterId)
+          .order('id', { ascending: true })
+          .limit(limit),
+        'conversations page (Mimir)'
+      );
       if (error) {
         throw new Error(`MIMIR query failed: ${error.message}`);
       }
       return (data as MimirMessage[]) || [];
     };
 
-    const { rows, complete } = await drainByCursor(
+    const { rows, stop } = await drainByCursor(
       limit,
       fetchPage,
       (row) => row.id
@@ -595,7 +609,7 @@ export class MessagingService {
     // Advance only through what we actually fetched; if nothing new, keep the
     // caller's cursor (afterId).
     const maxId = rows.length > 0 ? maxRowId(rows) : afterId;
-    return { messages: rows, complete, maxId };
+    return { messages: rows, stop, maxId };
   }
 
   /**
@@ -671,7 +685,7 @@ export class MessagingService {
     limit: number
   ): Promise<{
     conversations: Map<string, Message[]>;
-    complete: boolean;
+    stop: DrainStop;
     maxId: number | null;
   }> {
     const networkService = NetworkService.getInstance(NetworkId.VOI_MAINNET);
@@ -684,13 +698,15 @@ export class MessagingService {
     // when MIMIR recovers it resumes from where it left off. Residual: a message
     // indexed late AND older than the window isn't picked up on this fallback
     // path (documented, fallback-only).
-    const response = await indexer
-      .lookupAccountTransactions(userAddress)
-      .txType('pay')
-      .limit(limit)
-      .do();
+    const response = await withMessagingDeadline(
+      indexer
+        .lookupAccountTransactions(userAddress)
+        .txType('pay')
+        .limit(limit)
+        .do(),
+      'conversations (indexer)'
+    );
     const txns = response.transactions || [];
-    const complete = true;
 
     const conversationMap = new Map<string, Message[]>();
 
@@ -761,7 +777,7 @@ export class MessagingService {
       );
     }
 
-    return { conversations: conversationMap, complete, maxId: null };
+    return { conversations: conversationMap, stop: 'complete', maxId: null };
   }
 
   /**

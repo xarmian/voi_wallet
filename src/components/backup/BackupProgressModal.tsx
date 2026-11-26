@@ -22,7 +22,7 @@ export default function BackupProgressModal({
   const steps =
     mode === 'backup'
       ? ['collecting', 'encrypting', 'saving']
-      : ['reading', 'decrypting', 'validating', 'clearing', 'restoring'];
+      : ['reading', 'decrypting', 'validating', 'restoring'];
 
   const stepLabels =
     mode === 'backup'
@@ -35,7 +35,6 @@ export default function BackupProgressModal({
           reading: 'Reading file',
           decrypting: 'Decrypting',
           validating: 'Validating',
-          clearing: 'Clearing data',
           restoring: 'Restoring',
         };
 

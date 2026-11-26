@@ -9,6 +9,7 @@
 
 import {
   AccountType,
+  backupVerifiedAtImport,
   isBackupVerified,
   needsBackupVerification,
   type StandardAccountMetadata,
@@ -89,11 +90,68 @@ describe('needsBackupVerification', () => {
     expect(needsBackupVerification({ type: AccountType.REMOTE_SIGNER })).toBe(
       false
     );
-    expect(needsBackupVerification({ type: AccountType.REKEYED })).toBe(false);
+    expect(needsBackupVerification({ type: AccountType.REKEYED })).toBe(true);
   });
 
   it('is false when there is no active account', () => {
     expect(needsBackupVerification(null)).toBe(false);
     expect(needsBackupVerification(undefined)).toBe(false);
+  });
+});
+
+// Both metadata-bearing types use literal verification; unresolved custody reminds.
+describe('shared reminder policy', () => {
+  it.each(Object.values(AccountType))(
+    'keeps %s results for every flag combination',
+    (type) => {
+      for (const hasBackup of [undefined, false, true]) {
+        for (const backupVerified of [undefined, false, true, 'yes', 1, null]) {
+          const account = {
+            type,
+            hasBackup,
+            backupVerified,
+          } as unknown as Parameters<typeof isBackupVerified>[0];
+          const verified =
+            (type === AccountType.STANDARD || type === AccountType.REKEYED) &&
+            backupVerified === true;
+          expect(isBackupVerified(account)).toBe(verified);
+          expect(needsBackupVerification(account)).toBe(
+            (type === AccountType.STANDARD || type === AccountType.REKEYED) &&
+              !verified
+          );
+        }
+      }
+    }
+  );
+});
+
+// TASK-556: the single import-time decision. Typing a phrase in proves the user
+// holds it; pasting one does not, and generating one does not until the quiz is
+// passed.
+describe('backupVerifiedAtImport', () => {
+  it('quiz counts only when the quiz was passed', () => {
+    expect(backupVerifiedAtImport('quiz', true)).toBe(true);
+    expect(backupVerifiedAtImport('quiz', false)).toBe(false);
+    expect(backupVerifiedAtImport('quiz')).toBe(false);
+    expect(backupVerifiedAtImport('quiz', 'true' as unknown as boolean)).toBe(
+      false
+    );
+  });
+
+  it('an entered phrase counts as backed up', () => {
+    expect(backupVerifiedAtImport('entered-phrase')).toBe(true);
+  });
+
+  it.each(['pasted', 'qr', 'private-key', 'restore'] as const)(
+    '%s never counts, even with quizPassed',
+    (source) => {
+      expect(backupVerifiedAtImport(source)).toBe(false);
+      expect(backupVerifiedAtImport(source, true)).toBe(false);
+    }
+  );
+
+  it('an unknown source at runtime fails closed to boolean false', () => {
+    expect(backupVerifiedAtImport('typed-ish' as never)).toBe(false);
+    expect(backupVerifiedAtImport('typed-ish' as never, true)).toBe(false);
   });
 });

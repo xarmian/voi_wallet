@@ -63,8 +63,8 @@ beforeEach(() => {
 });
 
 describe('ClaimableTokenItem unknown balance (TASK-188)', () => {
-  it('renders "Unavailable" and never "Insufficient" when the balance is unknown', () => {
-    const { queryByText } = render(
+  it('renders "Unavailable" and never "Insufficient" when the balance is unknown', async () => {
+    const { queryByText } = await render(
       <ClaimableTokenItem
         item={{ ...baseItem, ownerBalanceUnknown: true }}
         onPress={jest.fn()}
@@ -75,8 +75,8 @@ describe('ClaimableTokenItem unknown balance (TASK-188)', () => {
     expect(queryByText('Insufficient')).toBeNull();
   });
 
-  it('still renders "Insufficient" for a genuinely insufficient balance', () => {
-    const { queryByText } = render(
+  it('still renders "Insufficient" for a genuinely insufficient balance', async () => {
+    const { queryByText } = await render(
       <ClaimableTokenItem
         item={{ ...baseItem, ownerBalanceUnknown: false }}
         onPress={jest.fn()}
@@ -87,12 +87,12 @@ describe('ClaimableTokenItem unknown balance (TASK-188)', () => {
     expect(queryByText('Unavailable')).toBeNull();
   });
 
-  it('gives the unknown badge a valid background in the DARK theme too', () => {
+  it('gives the unknown badge a valid background in the DARK theme too', async () => {
     // Regression guard for `theme.colors.textMuted + '20'`: `textMuted` is
     // `rgba(...)` in the dark theme, so an appended alpha suffix produces an
     // invalid color string and the badge silently loses its background.
     mockUseDarkTheme = true;
-    const { getByTestId } = render(
+    const { getByTestId } = await render(
       <ClaimableTokenItem
         item={{ ...baseItem, ownerBalanceUnknown: true }}
         onPress={jest.fn()}
@@ -107,8 +107,8 @@ describe('ClaimableTokenItem unknown balance (TASK-188)', () => {
     expect(darkTheme.colors.surfaceAlt).toBe(style.backgroundColor);
   });
 
-  it('renders no badge at all for a claimable item', () => {
-    const { queryByText } = render(
+  it('renders no badge at all for a claimable item', async () => {
+    const { queryByText } = await render(
       <ClaimableTokenItem
         item={{ ...baseItem, ownerBalance: 500n, isClaimable: true }}
         onPress={jest.fn()}

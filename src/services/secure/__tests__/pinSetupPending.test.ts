@@ -31,6 +31,7 @@ import {
   markPinSetupPending,
   clearPinSetupPending,
   isPinSetupPending,
+  isSetupResumeState,
 } from '../pinSetupPending';
 
 beforeEach(() => {
@@ -97,4 +98,22 @@ describe('pinSetupPending breadcrumb (TASK-213)', () => {
     await expect(clearPinSetupPending()).resolves.toBe(false);
     warnSpy.mockRestore();
   });
+});
+
+describe('isSetupResumeState (the S2 predicate)', () => {
+  it.each([
+    [true, true, false, true],
+    [false, true, false, false],
+    [true, false, false, false],
+    [true, true, true, false],
+    [true, false, true, false],
+    [false, false, false, false],
+  ])(
+    'pending=%s keyBearing=%s hasPin=%s -> %s',
+    (pending, hasKeyBearingAccount, hasPin, expected) => {
+      expect(
+        isSetupResumeState({ pending, hasKeyBearingAccount, hasPin })
+      ).toBe(expected);
+    }
+  );
 });

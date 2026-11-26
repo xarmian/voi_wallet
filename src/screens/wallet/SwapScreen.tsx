@@ -3,7 +3,7 @@
  * Allows users to swap tokens on Voi Network using Snowball DEX aggregator
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -45,8 +45,14 @@ import { SwapService, SwapToken, UnifiedSwapQuote } from '@/services/swap';
 import { NetworkId } from '@/types/network';
 import tokenMappingService from '@/services/token-mapping';
 import { NetworkService } from '@/services/network';
+import { useSwapNetworkBalance } from '@/hooks/useSwapNetworkBalance';
 import { getTokenImageSource } from '@/utils/tokenImages';
-import { getUserFacingMessage, toErrorAlert } from '@/utils/errorMapping';
+import {
+  getUserFacingMessage,
+  PENDING_TRANSACTION_ALERT,
+  toErrorAlert,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 import {
   parseAmountToBaseUnits,
   sanitizeAmountInput,
@@ -59,6 +65,7 @@ import NetworkSelector from '@/components/network/NetworkSelector';
 import { useIsSwapEnabled } from '@/store/experimentalStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
+import { redactError } from '@/utils/logRedaction';
 
 interface SwapScreenRouteParams {
   assetName?: string;
@@ -100,117 +107,15 @@ export default function SwapScreen() {
   const accounts = useWalletStore((state) => state.wallet?.accounts);
   const currentAccount = accounts?.find((acc) => acc.id === accountId);
 
-  // Get account balance from store (for VOI network)
-  const singleNetworkBalance = useWalletStore((state) =>
-    accountId ? state.accountStates[accountId]?.balance : undefined
-  );
-
-  // Network-specific balance state
-  const [networkBalance, setNetworkBalance] = useState<AccountBalance | null>(
-    null
-  );
-  // Failure of the network-specific fetch below. It served a non-VOI selection
-  // entirely on its own and reported nothing but a console.error, so an
-  // Algorand balance failure left the same dead end the store path used to.
-  const [networkBalanceError, setNetworkBalanceError] = useState<string | null>(
-    null
-  );
-  // Bumped by Retry to re-run the network-specific effect, which has no other
-  // trigger once its inputs have settled.
-  const [networkBalanceReloadToken, setNetworkBalanceReloadToken] = useState(0);
-
-  // Load balance if not available
-  const loadAccountBalance = useWalletStore(
-    (state) => state.loadAccountBalance
-  );
-
-  // Failure of the STORE-backed load. This describes `loadAccountBalance`, which
-  // fetches on the app's current network — the same source `accountBalance`
-  // below falls back to, and only for VOI. Scoping matters: see
-  // `balanceErrorForSelectedNetwork`.
-  const storeBalanceError = useWalletStore((state) =>
-    accountId ? state.accountStates[accountId]?.balanceError : undefined
-  );
-
-  useEffect(() => {
-    if (accountId && !singleNetworkBalance) {
-      loadAccountBalance(accountId);
-    }
-  }, [accountId, singleNetworkBalance, loadAccountBalance]);
-
-  // Load network-specific balance when network or account changes
-  useEffect(() => {
-    let isCancelled = false;
-
-    const loadNetworkSpecificBalance = async () => {
-      const address = currentAccount?.address;
-      if (!address || !selectedNetwork) return;
-
-      try {
-        // For non-VOI networks, fetch directly from NetworkService
-        if (selectedNetwork !== NetworkId.VOI_MAINNET) {
-          const networkService = NetworkService.getInstance(selectedNetwork);
-          const balance = await networkService.getAccountBalance(address);
-          if (!isCancelled) {
-            setNetworkBalance(balance);
-            setNetworkBalanceError(null);
-          }
-        } else {
-          // For VOI network, use the store balance
-          if (!isCancelled) {
-            setNetworkBalance(singleNetworkBalance || null);
-            setNetworkBalanceError(null);
-          }
-        }
-      } catch (error) {
-        if (!isCancelled) {
-          console.error('Error loading network balance:', error);
-          setNetworkBalanceError(
-            error instanceof Error ? error.message : 'Failed to load balance'
-          );
-        }
-      }
-    };
-
-    loadNetworkSpecificBalance();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [
-    currentAccount,
-    selectedNetwork,
-    singleNetworkBalance,
-    networkBalanceReloadToken,
-  ]);
-
-  // Use network-specific balance - only fall back to store balance for VOI
-  const accountBalance =
-    selectedNetwork === NetworkId.VOI_MAINNET
-      ? networkBalance || singleNetworkBalance
-      : networkBalance;
-
-  // Report the failure that belongs to the network being swapped on, not
-  // whichever one the store happens to hold. The store is only consulted for
-  // VOI (see `accountBalance` above), so on an Algorand selection a stale VOI
-  // failure would raise an alarm about a swap that is working fine — and its
-  // Retry would re-run the wrong request. Each branch retries its own loader.
-  const isStoreBackedNetwork = selectedNetwork === NetworkId.VOI_MAINNET;
-  const balanceErrorForSelectedNetwork = isStoreBackedNetwork
-    ? storeBalanceError
-    : networkBalanceError;
-
-  const retryBalanceLoad = useCallback(() => {
-    if (isStoreBackedNetwork) {
-      // Force: the unforced path early-returns on a fresh cache, and a retry
-      // must survive a partially-populated state.
-      if (accountId) {
-        void loadAccountBalance(accountId, true);
-      }
-      return;
-    }
-    setNetworkBalanceReloadToken((token) => token + 1);
-  }, [isStoreBackedNetwork, accountId, loadAccountBalance]);
+  // Balance on the network being swapped on, fetched from that network itself.
+  // The wallet store balance follows the app's current network, so it must not
+  // back a swap on a different one.
+  const {
+    balance: accountBalance,
+    error: balanceErrorForSelectedNetwork,
+    retry: retryBalanceLoad,
+    refresh: refreshSelectedNetworkBalance,
+  } = useSwapNetworkBalance(currentAccount?.address, selectedNetwork);
 
   // Token selection state
   const [inputToken, setInputToken] = useState<SwapToken | null>(null);
@@ -496,7 +401,6 @@ export default function SwapScreen() {
     setSelectedNetwork(networkId);
     setQuote(null);
     setQuoteError(null);
-    setNetworkBalance(null);
 
     // Try to find equivalent tokens on the new network
     const newProvider = SwapService.getProvider(networkId);
@@ -512,7 +416,7 @@ export default function SwapScreen() {
       } catch (error) {
         console.warn(
           '[handleNetworkChange] Failed to fetch new network balance:',
-          error
+          redactError(error)
         );
       }
     }
@@ -749,8 +653,7 @@ export default function SwapScreen() {
   };
 
   const handleSwapSuccess = async (result: any) => {
-    // Check if transaction was already submitted by auth controller (remote signer flow)
-    // or if we have signed transactions to submit (standard flow)
+    // Batch signing returns signatures for this caller to submit.
     if (!result?.transactionId && !result?.signedTransactions) {
       Alert.alert('Error', 'No signed transactions returned');
       return;
@@ -761,12 +664,16 @@ export default function SwapScreen() {
 
     try {
       let txId: string;
+      // False when it was submitted but not confirmed within the wait: it may
+      // still land, so it is announced as pending, not as done (TASK-447).
+      let confirmed = true;
 
       if (result?.transactionId) {
-        // Transaction already submitted by auth controller (remote signer flow)
+        // Preserve support for an already-submitted result.
         txId = result.transactionId;
+        confirmed = result.confirmed !== false;
       } else {
-        // Standard flow - need to submit signed transactions
+        // Local and remote batch signing both submit here.
         const networkService = NetworkService.getInstance(selectedNetwork);
 
         // DR-1: the signer returns ARC-0001 `null` for any entry it DECLINED to
@@ -774,9 +681,7 @@ export default function SwapScreen() {
         // existed, with raw unsigned bytes in that slot) is what produced the
         // `apaa` msgpack decode failure at algod. Fail loudly instead.
         const rawSigned = result.signedTransactions as (
-          | string
-          | Uint8Array
-          | null
+          string | Uint8Array | null
         )[];
         if (rawSigned.some((txn) => txn === null || txn === undefined)) {
           throw new Error(
@@ -795,6 +700,7 @@ export default function SwapScreen() {
         // Submit transaction group
         const submitRes = await networkService.submitTransaction(signedTxns);
         txId = submitRes.txId;
+        confirmed = submitRes.confirmed;
       }
 
       const shortTxId =
@@ -802,13 +708,23 @@ export default function SwapScreen() {
           ? `${txId.slice(0, 6)}...${txId.slice(-6)}`
           : txId;
 
-      Toast.show({
-        type: 'success',
-        text1: 'Swap submitted successfully',
-        text2: `Transaction ${shortTxId}`,
-        visibilityTime: 4500,
-        position: 'top',
-      });
+      Toast.show(
+        confirmed
+          ? {
+              type: 'success',
+              text1: 'Swap submitted successfully',
+              text2: `Transaction ${shortTxId}`,
+              visibilityTime: 4500,
+              position: 'top',
+            }
+          : {
+              type: 'info',
+              text1: PENDING_TRANSACTION_ALERT.title,
+              text2: `Transaction ${shortTxId} may still be committed. Check its status in your transaction history.`,
+              visibilityTime: 6000,
+              position: 'top',
+            }
+      );
 
       // Refresh balances once after a short delay to allow indexer updates
       if (delayedRefreshTimeout.current) {
@@ -820,6 +736,9 @@ export default function SwapScreen() {
           store.loadAccountBalance(accountId, true);
         }
         store.refreshAllBalances();
+        // The screen's own balance is fetched per network, so the store refresh
+        // above does not reach it.
+        refreshSelectedNetworkBalance();
         delayedRefreshTimeout.current = null;
       }, 5000);
 
@@ -873,7 +792,13 @@ export default function SwapScreen() {
         });
       });
     } catch (error) {
-      console.error('Error executing swap:', error);
+      console.error('Error executing swap:', redactError(error));
+      // Submitted but not confirmed is not a failure (TASK-447).
+      const unsettled = toUnsettledTransactionAlert(error);
+      if (unsettled) {
+        Alert.alert(unsettled.title, unsettled.message);
+        return;
+      }
       // TASK-41: keep the "Swap Failed" framing but map the body — a raw
       // algod/aggregator string here is the least actionable message in the app.
       const { message } = toErrorAlert(error, {
@@ -921,7 +846,7 @@ export default function SwapScreen() {
         });
       }
     } catch (error) {
-      console.error('Error getting balance:', error);
+      console.error('Error getting balance:', redactError(error));
     }
 
     return '0';

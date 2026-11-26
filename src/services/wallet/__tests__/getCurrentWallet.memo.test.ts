@@ -3,7 +3,7 @@
 // and key retrieval (keyManager/simplifiedKeyManager) and WalletConnect account
 // enumeration, so the memo must never (a) hand out a shared reference that a
 // caller can mutate into the cache, (b) serve a stale wallet after the stored
-// blob changes or is wiped out-of-band (restore clearAllData removes the key
+// blob changes or is wiped out-of-band (a reset removes the key
 // directly), or (c) retain mnemonic material read from a legacy/unsanitized blob.
 //
 // SECURITY NOTE: no static/committed secret material is used. Every key/mnemonic
@@ -192,13 +192,13 @@ describe('getCurrentWallet() memoization (F-22, TASK-179)', () => {
     expect(firstStandard(w2).label).toBe('Second');
   });
 
-  it('(d) removal of the stored key (clearAllWallets / restore clearAllData) makes the next read return null — no stale wallet', async () => {
+  it('(d) removal of the stored key (clearAllWallets) makes the next read return null — no stale wallet', async () => {
     mockStore[WALLET_KEY] = makeWalletBlob().blob;
     const w1 = await MultiAccountWalletService.getCurrentWallet();
     expect(w1).not.toBeNull();
 
-    // Simulate the out-of-band wipe: backup/restorers.ts clearAllData() and
-    // clearAllWallets() both remove the key directly, bypassing this service.
+    // Simulate the out-of-band wipe: a reset removes the key directly,
+    // bypassing this service.
     delete mockStore[WALLET_KEY];
 
     const w2 = await MultiAccountWalletService.getCurrentWallet();

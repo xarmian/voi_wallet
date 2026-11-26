@@ -1,0 +1,736 @@
+import React from 'react';
+import { Alert, AppState, type AppStateStatus } from 'react-native';
+import { render, waitFor, fireEvent, act } from '@testing-library/react-native';
+import algosdk from 'algosdk';
+import { Buffer } from 'buffer';
+
+import { makeAccount } from '@/__tests__/fixtures/algorand';
+import { NetworkId } from '@/types/network';
+import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
+
+const VOI = NetworkId.VOI_MAINNET;
+
+// ---------------------------------------------------------------------------
+// Mutable per-test state (all `mock`-prefixed so jest.mock factories may close
+// over them; the factories read them lazily at call time).
+// ---------------------------------------------------------------------------
+
+let mockLocked = false;
+const mockBiometricEnabled = false;
+jest.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({
+    authState: {
+      isLocked: mockLocked,
+      isAuthenticated: !mockLocked,
+      biometricEnabled: mockBiometricEnabled,
+      hasPin: true,
+    },
+  }),
+}));
+jest.mock('@/services/secure/sessionTeardown', () => ({
+  clearSessionSecurity: jest.fn(() =>
+    require('@/services/secure/SessionKeyVault').SessionKeyVault.clear()
+  ),
+}));
+jest.mock('@/services/secure/AccountSecureStorage', () => ({
+  AccountSecureStorage: {
+    getCredentialSource: jest.fn(async () => 'pin'),
+    verifyPin: jest.fn(async () => true),
+    hasPin: jest.fn(async () => true),
+    getBiometricSecret: jest.fn(),
+    isBiometricEnabled: jest.fn(async () => false),
+    clearPrivateKeyCache: jest.fn(),
+    getPrivateKey: jest.fn(),
+  },
+}));
+
+let mockAccounts: {
+  id: string;
+  address: string;
+  type: string;
+  label: string;
+}[];
+let mockRoutes: Record<string, unknown>;
+const mockGetCachedAssetParams = jest.fn();
+const mockGetAssetInfo = jest.fn();
+const mockResolveSigningRoute = jest.fn();
+/** Registry callbacks by id (TASK-257: onDismiss on unmount). */
+let mockRegistry: Record<
+  string,
+  { onDismiss?: () => void; onReject?: () => Promise<void> }
+> = {};
+
+// `@/utils/bigint` re-exports through `@/utils/formatting`, which pulls in the
+// zustand wallet store (and therefore AsyncStorage). Only the locale lookup is
+// involved, so a minimal store stub keeps this a pure display test.
+jest.mock('expo-local-authentication', () => ({
+  hasHardwareAsync: jest.fn(async () => true),
+  isEnrolledAsync: jest.fn(async () => true),
+  supportedAuthenticationTypesAsync: jest.fn(async () => []),
+  authenticateAsync: jest.fn(),
+  AuthenticationType: { FACIAL_RECOGNITION: 2 },
+}));
+
+jest.mock('@/store/walletStore', () => ({
+  useWalletStore: { getState: () => ({ wallet: undefined }) },
+  getRekeyStateStrict: jest.fn(async () => ({ authAddress: null })),
+}));
+
+jest.mock('@/services/network', () => ({
+  NetworkService: {
+    getInstance: (networkId: string) => ({
+      getCachedAssetParams: (assetId: number) =>
+        mockGetCachedAssetParams(networkId, assetId),
+      getAssetInfo: (assetId: number) => mockGetAssetInfo(networkId, assetId),
+      getSuggestedParams: async () => ({
+        fee: 1000,
+        firstValid: 1,
+        lastValid: 1001,
+        flatFee: true,
+        minFee: 1000,
+        genesisID: require('@/services/network/config').NETWORK_CONFIGURATIONS[
+          require('@/types/network').NetworkId.VOI_MAINNET
+        ].genesisId,
+        genesisHash: new Uint8Array(
+          require('buffer').Buffer.from(
+            require('@/services/network/config').NETWORK_CONFIGURATIONS[
+              require('@/types/network').NetworkId.VOI_MAINNET
+            ].genesisHash,
+            'base64'
+          )
+        ),
+      }),
+      submitTransaction: (...args: unknown[]) => mockSubmit(...args),
+    }),
+  },
+}));
+
+jest.mock('@/services/wallet', () => ({
+  MultiAccountWalletService: {
+    getAllAccounts: async () => mockAccounts,
+    getCurrentWallet: jest.fn(async () => ({ accounts: mockAccounts })),
+  },
+}));
+
+const mockPreventCapture = jest.fn();
+const mockEnableAppSwitcherProtection = jest.fn(
+  async (_intensity?: number) => {}
+);
+jest.mock('expo-screen-capture', () => ({
+  usePreventScreenCapture: (key?: string) => mockPreventCapture(key),
+  enableAppSwitcherProtectionAsync: (intensity?: number) =>
+    mockEnableAppSwitcherProtection(intensity),
+  disableAppSwitcherProtectionAsync: async () => {},
+}));
+
+jest.mock('@/services/secure/keyManager', () => ({
+  SecureKeyManager: {
+    signTransaction: (...args: unknown[]) => mockDeviceSign(...args),
+    getSigningInfo: jest.fn(async (address: string) => ({
+      signingAddress: address,
+      canSign: true,
+    })),
+    getLedgerSigningInfo: jest.fn(async () =>
+      mockLedger ? { deviceId: 'device', derivationIndex: 0 } : null
+    ),
+    resolveSigningRoute: (address: string, networkId?: string) =>
+      mockResolveSigningRoute(address, networkId),
+  },
+}));
+
+jest.mock('@/services/navigation/callbackRegistry', () => ({
+  getNavigationCallbacks: (id?: string) => (id ? mockRegistry[id] : undefined),
+  clearNavigationCallbacks: jest.fn(),
+}));
+
+jest.mock('@/components/common/UniversalHeader', () => ({
+  __esModule: true,
+  default: () => null,
+}));
+
+jest.mock('@/hooks/useThemedStyles', () => ({
+  useThemedStyles: () => new Proxy({}, { get: () => ({}) }),
+  useThemeColors: () => ({}),
+}));
+
+jest.mock('@/contexts/ThemeContext', () => ({
+  useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
+}));
+
+jest.mock('react-native-safe-area-context', () => ({
+  SafeAreaView: ({ children }: { children: React.ReactNode }) => children,
+  initialWindowMetrics: null,
+}));
+
+jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }), {
+  virtual: true,
+});
+
+let mockController: TransactionAuthController;
+let mockObservedModalProps: any;
+let mockModalMounted = false;
+jest.mock('@/services/auth/transactionAuthController', () => {
+  const actual = jest.requireActual(
+    '@/services/auth/transactionAuthController'
+  );
+  return {
+    ...actual,
+    useTransactionAuthController: () => {
+      mockController = actual.useTransactionAuthController();
+      return mockController;
+    },
+  };
+});
+jest.mock('@/components/UnifiedTransactionAuthModal', () => {
+  const Actual = jest.requireActual(
+    '@/components/UnifiedTransactionAuthModal'
+  ).default;
+  return {
+    __esModule: true,
+    default: (props: any) => {
+      mockObservedModalProps = props;
+      require('react').useEffect(() => {
+        mockModalMounted = true;
+        return () => {
+          mockModalMounted = false;
+        };
+      }, []);
+      return Actual(props);
+    },
+  };
+});
+let mockLedger = false;
+const mockSign = jest.fn();
+const mockDeviceSign = jest.fn();
+let mockRealSigner = false;
+const mockSignerRuns: Promise<unknown>[] = [];
+const mockSubmit = jest.fn();
+const mockDeviceListeners = new Map<string, Set<(...args: any[]) => void>>();
+jest.mock('@/services/transactions/unifiedSigner', () => ({
+  signsSequentially: (request: UnifiedTransactionRequest) =>
+    jest
+      .requireActual('@/services/transactions/unifiedSigner')
+      .signsSequentially(request),
+  UnifiedTransactionSigner: {
+    getInstance: () => ({
+      signTransaction: (...args: unknown[]) =>
+        mockRealSigner
+          ? (() => {
+              const run = jest
+                .requireActual('@/services/transactions/unifiedSigner')
+                .UnifiedTransactionSigner.getInstance()
+                .signTransaction(...args);
+              mockSignerRuns.push(run);
+              return run;
+            })()
+          : mockSign(...args),
+      planBatch: async (request: UnifiedTransactionRequest) =>
+        request.walletConnectParams!.transactions.map((entry) => ({
+          action: 'sign',
+          txn: require('algosdk').decodeUnsignedTransaction(
+            require('buffer').Buffer.from(entry.txn, 'base64')
+          ),
+        })),
+    }),
+  },
+}));
+jest.mock('@/services/ledger/transport', () => ({
+  ledgerTransportService: {
+    startDiscovery: jest.fn(),
+    stopDiscovery: jest.fn(),
+    cancelConnect: jest.fn(),
+    getConnectedDevice: () => null,
+    getDevices: () => [],
+    on: (event: string, cb: (...args: any[]) => void) => {
+      if (!mockDeviceListeners.has(event))
+        mockDeviceListeners.set(event, new Set());
+      mockDeviceListeners.get(event)!.add(cb);
+    },
+    off: (event: string, cb: (...args: any[]) => void) =>
+      mockDeviceListeners.get(event)?.delete(cb),
+  },
+}));
+jest.mock('@/services/ledger/algorand', () => ({
+  ledgerAlgorandService: { verifyApp: jest.fn(async () => true) },
+  LedgerAlgorandService: { isCurrentlySigningTransaction: () => false },
+}));
+jest.mock('@/services/messaging/keyDerivation', () => ({
+  clearMessagingKeyCache: jest.fn(),
+}));
+jest.mock('@/services/remoteSigner', () => ({
+  RemoteSignerService: {
+    validateResponse: jest.requireActual('@/services/remoteSigner')
+      .RemoteSignerService.validateResponse,
+    extractSignedTransactions: jest.requireActual('@/services/remoteSigner')
+      .RemoteSignerService.extractSignedTransactions,
+    createSuccessResponse: jest.requireActual('@/services/remoteSigner')
+      .RemoteSignerService.createSuccessResponse,
+    createSigningRequest: jest.fn(async () => ({ id: 'request' })),
+    encodePayload: jest.fn(() => ''),
+  },
+}));
+jest.mock('@/services/walletconnect', () => ({
+  WalletConnectService: {
+    getInstance: () => ({
+      getApprovedAccountsForChain: () =>
+        mockAccounts.map(
+          (a) =>
+            require('@/services/network/config').NETWORK_CONFIGURATIONS[
+              require('@/types/network').NetworkId.VOI_MAINNET
+            ].chainId +
+            ':' +
+            a.address
+        ),
+    }),
+  },
+}));
+jest.mock('@/services/transactions', () =>
+  jest.requireActual('@/services/transactions')
+);
+jest.mock('@/components/remoteSigner', () => ({
+  AnimatedQRCode: () => null,
+  AnimatedQRScanner: () => null,
+}));
+jest.mock('@/utils/haptics', () => ({ hapticNotify: jest.fn() }));
+import UniversalTransactionSigningScreen from '../../UniversalTransactionSigningScreen';
+import { TransactionAuthController } from '@/services/auth/transactionAuthController';
+import { reviewGrant } from '@/services/auth/reviewGrant';
+import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
+import { AppLockSignal } from '@/services/secure/appLockState';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import {
+  UnifiedSigningCallbacks,
+  UnifiedTransactionRequest,
+} from '@/services/transactions/unifiedSigner';
+import { AccountType } from '@/types/wallet';
+
+export const key = 'outcome-request';
+export const result = { success: true, signedTransactions: ['signed fixture'] };
+export const texts = {
+  idle: 'Your approval timed out before signing finished. Start the request again.',
+  lock: 'Your approval ended before signing finished. Start the request again.',
+  batch:
+    'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then try again there if you still need it.',
+  other:
+    "Your approval ended after signing finished, and this wallet can't tell whether the transaction was sent. Check your account or the dApp before you try again.",
+  remote:
+    'This account signs on another device, so your wallet needs to be fully unlocked. Unlock your wallet, then start the request again.',
+  unlock: 'Unlock to review this request again.',
+  noPin:
+    'Wallet setup is not finished. Finish setup, then try the request again.',
+  unreadable: "Couldn't read your wallet security settings. Try again.",
+};
+export type Internals = {
+  currentRequest: UnifiedTransactionRequest | null;
+  updateState(state: Record<string, unknown>): void;
+  maybeStartSigningIfReady(): Promise<void>;
+  startSigning(): Promise<void>;
+  getReviewDigest(): string | null;
+  initializeRemoteSignerFlow(): Promise<void>;
+  isSigningInProgress: boolean;
+  hasStartedSigning: boolean;
+  reviewAuthorized: boolean;
+  reviewSigningStarted: boolean;
+};
+export const currentController = () => mockController;
+export const inside = (c: TransactionAuthController) =>
+  c as unknown as Internals;
+let appListeners: Set<(s: AppStateStatus) => void>;
+export function setupOutcomeHarness() {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockLocked = true;
+    mockLedger = false;
+    mockRealSigner = false;
+    mockSignerRuns.length = 0;
+    mockDeviceSign.mockReset();
+    mockRegistry = {};
+    mockAccounts = [];
+    mockRoutes = {};
+    mockDeviceListeners.clear();
+    mockResolveSigningRoute.mockImplementation(
+      async (address: string) => mockRoutes[address]
+    );
+    mockGetCachedAssetParams.mockResolvedValue(null);
+    mockGetAssetInfo.mockResolvedValue(null);
+    mockSign.mockReset();
+    mockSubmit.mockReset();
+    mockSubmit.mockResolvedValue({ txId: 'fixture-txid', confirmed: true });
+    (AccountSecureStorage.hasPin as jest.Mock).mockResolvedValue(true);
+    Object.defineProperty(AppState, 'currentState', {
+      value: 'active',
+      writable: true,
+      configurable: true,
+    });
+    appListeners = new Set();
+    jest
+      .spyOn(AppState, 'addEventListener')
+      .mockImplementation((_event, cb) => {
+        appListeners.add(cb);
+        return { remove: () => appListeners.delete(cb) };
+      });
+    AppLockSignal.setUnlocked(false);
+    reviewGrant.revoke();
+    SessionKeyVault.clear();
+  });
+  afterEach(() => {
+    reviewGrant.revoke();
+    SessionKeyVault.clear();
+    AppLockSignal.setUnlocked(false);
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+}
+export async function lapse(reason: 'lock' | 'background' | 'rotation') {
+  await act(async () => {
+    if (reason === 'lock') AppLockSignal.setUnlocked(false);
+    if (reason === 'background') {
+      AppState.currentState = 'background';
+      [...appListeners].forEach((cb) => cb('background'));
+    }
+    if (reason === 'rotation') SessionKeyVault.set('rotated fixture', 'pin');
+  });
+}
+export async function normalUnlock(waitingKeys: string[]) {
+  await act(async () => {
+    mockLocked = false;
+    AppState.currentState = 'active';
+    [...appListeners].forEach((cb) => cb('active'));
+    SessionKeyVault.set('normal unlock fixture', 'pin');
+    AppLockSignal.setUnlocked(true);
+    reviewGrant.mintForWaiting(waitingKeys);
+  });
+}
+export async function openOutcome(
+  options: {
+    locked?: boolean;
+    ledger?: boolean;
+    remote?: boolean;
+    sign?: boolean;
+    signerThrows?: boolean;
+    inApp?: boolean;
+    realSigner?: boolean;
+    entries?: number;
+    danger?: boolean;
+    beforeSign?: () => void;
+    waitingKeys?: string[];
+  } = {}
+) {
+  const {
+    locked = true,
+    ledger = false,
+    remote = false,
+    sign = true,
+  } = options;
+  mockLocked = locked;
+  mockLedger = ledger;
+  mockRealSigner = options.realSigner ?? false;
+  AppLockSignal.setUnlocked(!locked);
+  if (locked) await reviewGrant.unlock(key, { pin: '123456' });
+  else {
+    SessionKeyVault.set('fixture', 'pin');
+    if (!options.inApp)
+      reviewGrant.mintForWaiting(options.waitingKeys ?? [key]);
+  }
+  const address = makeAccount('review-outcome').addr;
+  const account = {
+    id: 'account',
+    address,
+    label: 'Alpha',
+    type: remote
+      ? AccountType.REMOTE_SIGNER
+      : ledger
+        ? AccountType.LEDGER
+        : AccountType.STANDARD,
+  };
+  mockAccounts = [account];
+  mockRoutes[address] = ledger
+    ? { kind: 'ledger', signingAddress: address }
+    : { kind: 'software', signingAddress: address };
+  const config = NETWORK_CONFIGURATIONS[VOI];
+  const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+    sender: address,
+    receiver: address,
+    amount: 1,
+    ...(options.danger ? { rekeyTo: makeAccount('rekey-target').addr } : {}),
+    suggestedParams: {
+      fee: 1000,
+      firstValid: 1,
+      lastValid: 1001,
+      genesisID: config.genesisId,
+      genesisHash: new Uint8Array(Buffer.from(config.genesisHash, 'base64')),
+      flatFee: true,
+      minFee: 1000,
+    },
+  });
+  const bytes = Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString(
+    'base64'
+  );
+  let callbacks!: UnifiedSigningCallbacks;
+  let finish!: () => void;
+  let throwCallback!: () => void;
+  mockSign.mockImplementation((_request, cb) => {
+    callbacks = cb;
+    return new Promise<void>((resolve, reject) => {
+      finish = resolve;
+      throwCallback = () => {
+        try {
+          cb.onLedgerPrompt!({
+            get index(): number {
+              throw new Error('transport failed');
+            },
+            total: 1,
+          });
+        } catch (error) {
+          reject(error);
+        }
+      };
+    });
+  });
+  if (options.signerThrows)
+    mockSign.mockImplementationOnce(async (_request, cb) => {
+      cb.onLedgerPrompt!({
+        get index(): number {
+          throw new Error('signing failed');
+        },
+        total: 1,
+      });
+    });
+  const onSuccess = jest.fn(async () => {
+    expect(SessionKeyVault.isUnlocked()).toBe(true);
+  });
+  const onReject = jest.fn(async () => {});
+  const shownWithVault: boolean[] = [];
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {
+    shownWithVault.push(SessionKeyVault.isUnlocked());
+  });
+  let leaveScreen = () => {};
+  const dispatch = jest.fn();
+  const goBack = jest.fn();
+  const navigation = {
+    dispatch,
+    goBack,
+    canGoBack: () => false,
+    navigate: jest.fn(),
+    addListener: (_event: string, cb: () => void) => {
+      leaveScreen = cb;
+      return () => {};
+    },
+  };
+  const view = await render(
+    <UniversalTransactionSigningScreen
+      navigation={navigation as never}
+      route={
+        {
+          params: {
+            transactions: Array(options.entries ?? 1).fill(bytes),
+            account,
+            networkId: VOI,
+            chainId: config.chainId,
+            onSuccess,
+            onReject,
+            walletConnect: options.inApp
+              ? undefined
+              : {
+                  requestKey: key,
+                  transactions: Array.from(
+                    { length: options.entries ?? 1 },
+                    () => ({ txn: bytes })
+                  ),
+                  binding: {
+                    topic: 'topic',
+                    chainId: config.chainId,
+                    networkId: VOI,
+                    approvedAccounts: [config.chainId + ':' + address],
+                  },
+                },
+          },
+        } as never
+      }
+    />
+  );
+  const signButton = () => view.getByText(/^Sign(?: with .+)?$/);
+  await waitFor(() => expect(signButton()).toBeTruthy());
+  if (options.danger) await fireEvent.press(view.getByRole('checkbox'));
+  options.beforeSign?.();
+  if (sign) {
+    await fireEvent.press(signButton());
+    if (options.inApp && !ledger && !remote) {
+      for (const digit of '123456')
+        await fireEvent.press(view.getByText(digit));
+    }
+  }
+  const modal = () => {
+    expect(mockModalMounted).toBe(true);
+    return { props: mockObservedModalProps };
+  };
+  const controller = mockController;
+  await act(async () => {});
+  return {
+    view,
+    dispatch,
+    goBack,
+    leave: async () => act(async () => leaveScreen()),
+    controller,
+    modal,
+    onSuccess,
+    onReject,
+    alert,
+    shownWithVault,
+    signer: mockSign,
+    submit: mockSubmit,
+    deviceSign: mockDeviceSign,
+    signerRuns: mockSignerRuns,
+    signButton,
+    systemBack: async () => {
+      const visit = (node: any): any => {
+        if (node.props?.onRequestClose) return node;
+        for (const child of node.children ?? []) {
+          if (typeof child === 'object') {
+            const found = visit(child);
+            if (found) return found;
+          }
+        }
+      };
+      await act(async () => {
+        visit(view.container).props.onRequestClose();
+      });
+    },
+    freshUnlock: async () => {
+      await act(async () => {
+        await reviewGrant.unlock(key, { pin: '123456' });
+      });
+    },
+    finishSigner: () => finish(),
+    callbacks: () => callbacks,
+    rejectSigner: async () => {
+      await act(async () => {
+        throwCallback();
+      });
+    },
+    complete: async (value = result) => {
+      await act(async () => {
+        callbacks.onComplete!(value);
+        finish();
+      });
+    },
+    ready: async () => {
+      await act(async () => {
+        inside(controller).updateState({ ledgerStatus: 'ready' });
+        void inside(controller).maybeStartSigningIfReady();
+      });
+    },
+  };
+}
+export {
+  reviewGrant,
+  SessionKeyVault,
+  AppLockSignal,
+  AccountSecureStorage,
+  TransactionAuthController,
+  act,
+  fireEvent,
+  render,
+  waitFor,
+};
+
+// Non-batch requests are owned by their caller screens, not the universal batch
+// review screen. Mount the shared real modal and controller on that boundary.
+export async function openNonBatchOutcome(
+  type: 'voi_transfer' | 'rekey' | 'keyreg' | 'appl',
+  ledger: boolean,
+  start = true
+) {
+  const base = await openOutcome({
+    locked: false,
+    ledger,
+    sign: false,
+    inApp: true,
+    realSigner: true,
+  });
+  await base.view.unmount();
+  const account = mockAccounts[0];
+  if (type === 'rekey')
+    mockAccounts.push({
+      ...account,
+      id: 'target',
+      address: makeAccount('cancel-target').addr,
+      type: AccountType.LEDGER,
+    });
+  const controller = new TransactionAuthController();
+  const request: UnifiedTransactionRequest = {
+    type,
+    account: account as UnifiedTransactionRequest['account'],
+    networkId: VOI,
+    transferParams: {
+      from: account.address,
+      to: account.address,
+      amount: 1,
+      networkId: VOI,
+    },
+    rekeyParams: {
+      fromAddress: account.address,
+      rekeyToAddress: mockAccounts.at(-1)!.address,
+      networkId: VOI,
+    },
+    keyregParams: { address: account.address, goOffline: true, networkId: VOI },
+    applParams: { senderAddress: account.address, appId: 1, networkId: VOI },
+  };
+  const onSuccess = jest.fn();
+  const onCancel = jest.fn();
+  function Host() {
+    const [visible, setVisible] = React.useState(true);
+    const Modal = require('@/components/UnifiedTransactionAuthModal').default;
+    return (
+      <Modal
+        visible={visible}
+        controller={controller}
+        request={request}
+        onComplete={(success: boolean, value: unknown) => {
+          onSuccess(success, value);
+          setVisible(false);
+        }}
+        onCancel={() => {
+          onCancel();
+          setVisible(false);
+        }}
+      />
+    );
+  }
+  const view = await render(<Host />);
+  await act(async () => {});
+  const ready = async () =>
+    act(async () => {
+      inside(controller).updateState({ ledgerStatus: 'ready' });
+      void inside(controller).maybeStartSigningIfReady();
+    });
+  const begin = async () => {
+    if (ledger) await ready();
+    else
+      for (const digit of '123456')
+        await fireEvent.press(view.getByText(digit));
+  };
+  if (start) await begin();
+  return {
+    ...base,
+    view,
+    controller,
+    request,
+    ready,
+    begin,
+    onSuccess,
+    onCancel,
+    systemBack: async () => {
+      const visit = (node: any): any => {
+        if (node.props?.onRequestClose) return node;
+        for (const child of node.children ?? []) {
+          if (typeof child === 'object') {
+            const found = visit(child);
+            if (found) return found;
+          }
+        }
+      };
+      await act(async () => visit(view.container).props.onRequestClose());
+    },
+  };
+}

@@ -1,3 +1,4 @@
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
@@ -8,13 +9,18 @@ import {
   Alert,
   ScrollView,
   Share,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { SecureKeyManager } from '@/services/secure/keyManager';
-import { useActiveAccount } from '@/store/walletStore';
+import { FreshAuthError, withFreshAuth } from '@/services/secure/freshAuth';
+import { AccountType } from '@/types/wallet';
+import { useAccounts, useActiveAccount } from '@/store/walletStore';
+import { useFreshRekeyCheck } from '@/store/useFreshRekeyCheck';
+import { useRekeyDisplayDelegatedAnywhere } from '@/store/rekeyDisplayStatus';
 import MnemonicDisplay from '@/components/wallet/MnemonicDisplay';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -30,6 +36,7 @@ interface RouteParams {
 }
 
 export default function ShowRecoveryPhraseScreen() {
+  const covered = useCoverPaused();
   const navigation = useNavigation();
   const route = useRoute();
   const { accountAddress } = (route.params as RouteParams) ?? {};
@@ -41,7 +48,29 @@ export default function ShowRecoveryPhraseScreen() {
   useSecureScreen();
 
   const activeAccount = useActiveAccount();
-  const targetAddress = accountAddress ?? activeAccount?.address;
+  // TASK-458: pinned for the screen's lifetime, so the phrase shown and the
+  // warning decision always describe the same account (a later route or
+  // active-account change can't pair one account's phrase with another's
+  // warning).
+  const [targetAddress] = useState(accountAddress ?? activeAccount?.address);
+  const accounts = useAccounts();
+  const targetAccount = accounts.find(
+    (account) => account.address === targetAddress
+  );
+  // TASK-458: rekey state is per network and comes from chain. A record can
+  // still read STANDARD after a pending rekey lands, so the persisted type
+  // alone would hide this warning for a phrase that no longer controls the
+  // account on some network. Fail toward the warning (director ruling, see
+  // the TASK-458 trail): only fresh reads, issued after this screen opened,
+  // that show the account signing for itself on every configured network
+  // hide it. The last refresh's display status is a one-way hint: it can
+  // show the warning early, never hide it.
+  const { allSelf } = useFreshRekeyCheck(targetAccount?.address);
+  const hintDelegated = useRekeyDisplayDelegatedAnywhere(
+    targetAccount?.address ?? ''
+  );
+  const rekeyedSomewhere =
+    targetAccount?.type === AccountType.REKEYED || hintDelegated || !allSelf;
 
   const [mnemonic, setMnemonic] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
@@ -50,6 +79,10 @@ export default function ShowRecoveryPhraseScreen() {
   const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const clipboardClearRef = useRef<ClipboardClearHandle | null>(null);
   const mountedRef = useRef(true);
+  const loadGenerationRef = useRef(0);
+  // Aborted on unmount and on background: closes an open fresh-auth prompt and
+  // stops a pending reveal from reading the phrase for a gone screen.
+  const loadAbortRef = useRef<AbortController | null>(null);
   // Monotonic per-copy token: only the latest tap's continuation may install/keep
   // a clear handle, so a superseded copy can't leak a timer or wipe newer content.
   const copyGenRef = useRef(0);
@@ -58,6 +91,10 @@ export default function ShowRecoveryPhraseScreen() {
   const clipboardOpLock = useRef<Promise<void>>(Promise.resolve());
 
   const loadMnemonic = useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
+    loadAbortRef.current?.abort();
+    const abort = new AbortController();
+    loadAbortRef.current = abort;
     if (!targetAddress) {
       Alert.alert('Error', 'No account selected');
       navigation.goBack();
@@ -66,16 +103,34 @@ export default function ShowRecoveryPhraseScreen() {
 
     setIsLoading(true);
     try {
-      const recoveredMnemonic =
-        await SecureKeyManager.getMnemonic(targetAddress);
+      const recoveredMnemonic = await withFreshAuth(
+        'reveal_recovery_phrase',
+        (cap) => SecureKeyManager.revealMnemonic(targetAddress, cap),
+        { signal: abort.signal }
+      );
+      if (generation !== loadGenerationRef.current) return;
       setMnemonic(recoveredMnemonic);
     } catch (error) {
-      console.error('Failed to load mnemonic:', error);
+      if (generation !== loadGenerationRef.current) return;
+      setMnemonic('');
+      if (error instanceof FreshAuthError) {
+        // A cancel shows nothing; other auth failures say so without detail.
+        if (['unavailable', 'failed', 'timeout', 'busy'].includes(error.code)) {
+          Alert.alert(
+            'Authentication Error',
+            'Could not authenticate to show the recovery phrase.'
+          );
+        }
+        navigation.goBack();
+        return;
+      }
 
+      // Non-auth failure (e.g. the account has no recovery phrase). Log a fixed
+      // string only: the error object can echo key-store internals.
+      console.error('Failed to load mnemonic');
       let errorMessage =
         'Failed to retrieve recovery phrase. Please try again.';
       const errorStr = error instanceof Error ? error.message : String(error);
-
       if (
         errorStr.includes('not found') ||
         errorStr.includes('Account not found')
@@ -87,12 +142,11 @@ export default function ShowRecoveryPhraseScreen() {
       } else if (errorStr.includes('not have a recovery phrase')) {
         errorMessage = 'This account type does not have a recovery phrase.';
       }
-
       Alert.alert('Error', errorMessage, [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } finally {
-      setIsLoading(false);
+      if (generation === loadGenerationRef.current) setIsLoading(false);
     }
   }, [targetAddress, navigation]);
 
@@ -100,6 +154,28 @@ export default function ShowRecoveryPhraseScreen() {
   useEffect(() => {
     loadMnemonic();
   }, [loadMnemonic]);
+
+  const clearRevealedPhrase = useCallback(() => {
+    loadGenerationRef.current += 1;
+    loadAbortRef.current?.abort();
+    setMnemonic('');
+    setIsBlurred(true);
+    setIsLoading(false);
+    navigation.goBack();
+  }, [navigation]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- A lock must clear revealed secrets and abort pending fresh authentication.
+    if (covered) clearRevealedPhrase();
+  }, [covered, clearRevealedPhrase]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      // Face ID can make iOS inactive; only background aborts its own prompt.
+      if (state === 'background') clearRevealedPhrase();
+    });
+    return () => subscription?.remove?.();
+  }, [clearRevealedPhrase]);
 
   const handleCopy = useCallback(async () => {
     if (!mnemonic) return;
@@ -198,6 +274,10 @@ export default function ShowRecoveryPhraseScreen() {
       // Mark unmounted so an in-flight handleCopy wipes the clipboard itself
       // instead of scheduling a timer that would outlive this component.
       mountedRef.current = false;
+      // Invalidate and cancel any load still waiting on the prompt, so a late
+      // authentication cannot read the phrase into a screen that is gone.
+      loadGenerationRef.current += 1;
+      loadAbortRef.current?.abort();
 
       // Clear sensitive data when component unmounts
       setMnemonic('');
@@ -235,6 +315,16 @@ export default function ShowRecoveryPhraseScreen() {
             it with anyone.
           </Text>
         </View>
+
+        {rekeyedSomewhere && (
+          <View style={styles.warningContainer}>
+            <Text style={styles.warningText}>
+              {
+                "This phrase restores this account's original key. It does not recover the current signing authority on networks where the account is rekeyed."
+              }
+            </Text>
+          </View>
+        )}
 
         {isLoading ? (
           <View style={styles.loadingContainer}>

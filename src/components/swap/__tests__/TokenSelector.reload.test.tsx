@@ -65,7 +65,7 @@ describe('TokenSelector token list (TASK-246)', () => {
       onSelect: jest.fn(),
     };
 
-    const { getByText, queryByText, rerender } = render(
+    const { getByText, queryByText, rerender } = await render(
       <TokenSelector {...props} excludeTokenId={2} />
     );
 
@@ -75,7 +75,7 @@ describe('TokenSelector token list (TASK-246)', () => {
     expect(queryByText('BBB')).toBeNull();
 
     // Change the excluded token while the modal stays open.
-    rerender(<TokenSelector {...props} excludeTokenId={1} />);
+    await rerender(<TokenSelector {...props} excludeTokenId={1} />);
 
     // List must rebuild: BBB returns, AAA (now excluded) disappears.
     await waitFor(() => expect(getByText('BBB')).toBeTruthy());

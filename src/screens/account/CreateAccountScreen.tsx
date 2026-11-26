@@ -12,7 +12,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { WalletService } from '@/services/wallet';
 import { useWalletStore } from '@/store/walletStore';
-import { AccountType } from '@/types/wallet';
+import { AccountType, backupVerifiedAtImport } from '@/types/wallet';
 import MnemonicBackupFlow, {
   type MnemonicBackupResult,
 } from '@/components/wallet/MnemonicBackupFlow';
@@ -91,7 +91,7 @@ export default function CreateAccountScreen() {
         type: AccountType.STANDARD,
         label: normalizedLabel || `Account ${Date.now()}`,
         mnemonic,
-        backupVerified: result.verified,
+        backupVerified: backupVerifiedAtImport('quiz', result.verified),
       });
 
       // Set the new account as active
