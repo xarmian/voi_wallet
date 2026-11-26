@@ -2021,7 +2021,15 @@ export class MultiAccountWalletService {
         ) {
           throw new AccountExistsError('Account already exists in wallet');
         }
+        // With no listed account selected (deleting the last account leaves
+        // the wallet with a stale active id), the new account becomes active.
+        const hasActive = wallet.accounts.some(
+          (account) => account.id === wallet.activeAccountId
+        );
         wallet.accounts.push(accountMetadata);
+        if (!hasActive) {
+          wallet.activeAccountId = accountMetadata.id;
+        }
         return wallet;
       },
       readEpoch,
