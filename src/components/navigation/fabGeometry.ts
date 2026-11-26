@@ -21,8 +21,13 @@
  */
 export const TAB_BAR_CONTENT_HEIGHT = 49;
 
-/** Diameter of the centre button: the largest that fits the content row. */
-export const FAB_SIZE = 48;
+/**
+ * Diameter of the centre button. It fits the content row with a visible gap
+ * above and below (a full-height 48pt circle touches the bar's top edge and,
+ * with no bottom inset, the screen edge), and it stays at the 44pt minimum
+ * touch target.
+ */
+export const FAB_SIZE = 44;
 
 /**
  * Distance from the screen bottom to the button's bottom edge, so the button
