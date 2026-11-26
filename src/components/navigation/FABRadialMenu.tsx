@@ -27,12 +27,14 @@ import Animated, {
 import { scheduleOnRN } from 'react-native-worklets';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
 import { springConfigs } from '@/utils/animations';
 import { GlassCard } from '@/components/common/GlassCard';
 import { useActiveAccount } from '@/store/walletStore';
 import { useTotalUnreadCount } from '@/store/messagesStore';
 import { buildStackScreenParams } from './fabMenuParams';
+import { FAB_SIZE, fabBottomOffset } from './fabGeometry';
 
 // Menu item configuration
 interface MenuItem {
@@ -91,6 +93,7 @@ const MENU_ITEMS: MenuItem[] = [
 const ITEM_HEIGHT = 52; // Height of each menu item including gap
 const ITEM_GAP = 12; // Gap between items
 const FIRST_ITEM_OFFSET = 80; // Distance from FAB center to first item
+const FAB_ICON_SIZE = 24; // Compass/close icon, proportional to FAB_SIZE
 
 // Individual menu item component
 interface FABMenuItemProps {
@@ -169,16 +172,12 @@ const FABMenuItem: React.FC<FABMenuItemProps> = ({
   );
 };
 
-// Main FAB Radial Menu component
-interface FABRadialMenuProps {
-  bottomOffset?: number;
-}
-
-// Default offset positions the button to overlap the tab bar top (like original design)
-export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({
-  bottomOffset = 20,
-}) => {
+// Main FAB Radial Menu component. The button is seated in the tab bar's
+// content row (see fabGeometry), above the bottom safe-area inset.
+export const FABRadialMenu: React.FC = () => {
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
+  const bottomOffset = fabBottomOffset(insets.bottom);
   const navigation = useNavigation<any>();
   const activeAccount = useActiveAccount();
   const unreadCount = useTotalUnreadCount();
@@ -340,14 +339,18 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({
             <Animated.View style={buttonIconStyle}>
               {/* Compass icon (visible when closed) */}
               <Animated.View style={compassOpacityStyle}>
-                <Ionicons name="compass" size={28} color="white" />
+                <Ionicons name="compass" size={FAB_ICON_SIZE} color="white" />
               </Animated.View>
               {/* Close icon (visible when open) */}
               <Animated.View style={closeIconOpacityStyle}>
-                <Ionicons name="close" size={28} color="white" />
+                <Ionicons name="close" size={FAB_ICON_SIZE} color="white" />
               </Animated.View>
               {/* Invisible placeholder for sizing */}
-              <Ionicons name="compass" size={28} color="transparent" />
+              <Ionicons
+                name="compass"
+                size={FAB_ICON_SIZE}
+                color="transparent"
+              />
             </Animated.View>
           </TouchableOpacity>
 
@@ -388,9 +391,9 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   fabButton: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: FAB_SIZE,
+    height: FAB_SIZE,
+    borderRadius: FAB_SIZE / 2,
     justifyContent: 'center',
     alignItems: 'center',
   },
