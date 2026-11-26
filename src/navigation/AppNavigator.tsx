@@ -81,6 +81,7 @@ import { NFTToken, ARC72Collection } from '@/types/nft';
 import { SerializableClaimableItem } from '@/types/claimable';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { FABRadialMenu } from '@/components/navigation/FABRadialMenu';
+import { FAB_SIZE } from '@/components/navigation/fabGeometry';
 import { useUpdateStore } from '@/store/updateStore';
 import { initializeServices } from './serviceBootstrap';
 
@@ -1475,8 +1476,8 @@ export default function AppNavigator() {
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
     centerButtonPlaceholder: {
-      width: 60,
-      height: 60,
+      width: FAB_SIZE,
+      height: FAB_SIZE,
       // Invisible placeholder to reserve space for FABRadialMenu
     },
   });
