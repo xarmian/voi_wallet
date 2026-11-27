@@ -371,7 +371,7 @@ describe.each(['lock', 'background'] as const)('lapse by %s', (reason) => {
     );
     void internals(controller).startSigning('123456');
     await flush();
-    lapse('background');
+    lapse(reason);
     answer(true);
     await flush();
     if (signer.mock.calls.length) {
