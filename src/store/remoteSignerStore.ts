@@ -47,13 +47,16 @@ const PROCESSED_PERSIST_MAX_ATTEMPTS = 3;
 // failure so a single bad write cannot stall every later persist.
 let processedPersistChain: Promise<void> = Promise.resolve();
 
-async function writeProcessedIds(ids: string[]): Promise<void> {
+async function writeProcessedIds(ids: string[], epoch: number): Promise<void> {
   let lastError: unknown;
   for (
     let attempt = 1;
     attempt <= PROCESSED_PERSIST_MAX_ATTEMPTS;
     attempt += 1
   ) {
+    // A retry runs after a failed write: a wipe may have started since
+    // (TASK-492). No await between this check and the write.
+    if (wipedSince(epoch)) return;
     try {
       await AsyncStorage.setItem(
         STORAGE_KEYS.PROCESSED_REQUESTS,
@@ -80,7 +83,9 @@ function enqueueProcessedPersist(getIds: () => Set<string>): void {
     // Recover before chaining so a prior failure can never block later writes.
     .catch(() => {})
     .then(() =>
-      wipedSince(epoch) ? undefined : writeProcessedIds(Array.from(getIds()))
+      wipedSince(epoch)
+        ? undefined
+        : writeProcessedIds(Array.from(getIds()), epoch)
     );
 }
 
@@ -312,6 +317,10 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
     setAppMode: async (mode: AppMode) => {
       const epoch = wipeEpoch();
       try {
+        // TASK-492: a call made during a wipe writes nothing; one made before
+        // it is queued ahead of the sweep. Checked again after the write for
+        // the in-memory update.
+        if (wipedSince(epoch)) return;
         await AsyncStorage.setItem(STORAGE_KEYS.APP_MODE, mode);
         if (wipedSince(epoch)) return;
         set({ appMode: mode });
@@ -332,6 +341,8 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
           requirePinPerTxn: false,
         };
 
+        // Not during a wipe (see setAppMode).
+        if (wipedSince(epoch)) return;
         await AsyncStorage.setItem(
           STORAGE_KEYS.SIGNER_CONFIG,
           JSON.stringify(config)
@@ -359,6 +370,8 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
 
       const updated = { ...signerConfig, deviceName: name };
       const epoch = wipeEpoch();
+      // Not during a wipe (see setAppMode).
+      if (wipedSince(epoch)) return;
       await AsyncStorage.setItem(
         STORAGE_KEYS.SIGNER_CONFIG,
         JSON.stringify(updated)
@@ -484,6 +497,8 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       updated.set(info.deviceId, info);
 
       const epoch = wipeEpoch();
+      // Not during a wipe (see setAppMode).
+      if (wipedSince(epoch)) return;
       await AsyncStorage.setItem(
         STORAGE_KEYS.PAIRED_SIGNERS,
         JSON.stringify(Array.from(updated.entries()))
@@ -499,6 +514,8 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       updated.delete(deviceId);
 
       const epoch = wipeEpoch();
+      // Not during a wipe (see setAppMode).
+      if (wipedSince(epoch)) return;
       await AsyncStorage.setItem(
         STORAGE_KEYS.PAIRED_SIGNERS,
         JSON.stringify(Array.from(updated.entries()))
@@ -517,6 +534,8 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       updated.set(deviceId, { ...signer, lastActivity: Date.now() });
 
       const epoch = wipeEpoch();
+      // Not during a wipe (see setAppMode).
+      if (wipedSince(epoch)) return;
       await AsyncStorage.setItem(
         STORAGE_KEYS.PAIRED_SIGNERS,
         JSON.stringify(Array.from(updated.entries()))

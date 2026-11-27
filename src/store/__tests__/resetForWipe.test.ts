@@ -182,4 +182,74 @@ describe('remote signer', () => {
     expect(setItem).toHaveBeenCalledTimes(1);
     setItem.mockRestore();
   });
+
+  test('a processed-id write that failed before the reset is not retried after it', async () => {
+    let fail: (error: Error) => void = () => {};
+    const setItem = jest.spyOn(AsyncStorage, 'setItem');
+    setItem.mockImplementationOnce(
+      () => new Promise<void>((_, reject) => (fail = reject))
+    );
+    useRemoteSignerStore.getState().markRequestProcessed('r1');
+    for (let i = 0; i < 10 && setItem.mock.calls.length === 0; i++)
+      await Promise.resolve();
+    expect(setItem).toHaveBeenCalledTimes(1);
+    runWipeResets();
+    fail(new Error('disk full'));
+    await __drainProcessedPersistChainForTests();
+    expect(setItem).toHaveBeenCalledTimes(1);
+    expect(await AsyncStorage.getAllKeys()).toEqual([]);
+    setItem.mockRestore();
+  });
+
+  // Each action that writes, started while a wipe runs. The state is set
+  // after the reset so that each one reaches its write.
+  const signer = (deviceId: string) =>
+    ({ deviceId, deviceName: deviceId, lastActivity: 1 }) as never;
+  const writers: [string, () => Promise<unknown>][] = [
+    ['setAppMode', () => useRemoteSignerStore.getState().setAppMode('signer')],
+    [
+      'initializeSignerConfig',
+      () => useRemoteSignerStore.getState().initializeSignerConfig('Phone'),
+    ],
+    [
+      'updateSignerDeviceName',
+      () => useRemoteSignerStore.getState().updateSignerDeviceName('Renamed'),
+    ],
+    [
+      'addPairedSigner',
+      () => useRemoteSignerStore.getState().addPairedSigner(signer('b')),
+    ],
+    [
+      'removePairedSigner',
+      () => useRemoteSignerStore.getState().removePairedSigner('a'),
+    ],
+    [
+      'updateSignerActivity',
+      () => useRemoteSignerStore.getState().updateSignerActivity('a'),
+    ],
+  ];
+  test.each(writers)(
+    '%s started while a wipe runs writes nothing to storage',
+    async (_name, write) => {
+      const setItem = jest.spyOn(AsyncStorage, 'setItem');
+      openWipeWindow();
+      try {
+        runWipeResets();
+        useRemoteSignerStore.setState({
+          signerConfig: {
+            deviceId: 'd',
+            deviceName: 'n',
+            requirePinPerTxn: false,
+          },
+          pairedSigners: new Map([['a', signer('a')]]),
+        });
+        await write();
+        expect(setItem).not.toHaveBeenCalled();
+        expect(await AsyncStorage.getAllKeys()).toEqual([]);
+      } finally {
+        closeWipeWindow();
+        setItem.mockRestore();
+      }
+    }
+  );
 });
