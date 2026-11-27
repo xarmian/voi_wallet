@@ -92,7 +92,10 @@ export default function CreateAccountScreen() {
       // SecuritySetup gets an opaque id for the phrase, never the phrase; the
       // phrase stays here, so going back from SecuritySetup loses nothing.
       // A failed read lands in the catch below: nothing routed or stored.
+      // The import's own duplicate check runs first, so a phrase already in
+      // the wallet fails here, as the import would, and sets no PIN.
       if (!(await AccountSecureStorage.hasPin())) {
+        await WalletService.assertMnemonicNotInWalletStrict(mnemonic);
         navigation.navigate('SecuritySetup', {
           mnemonicSecretId: storeMnemonicSecret(mnemonic),
           source: 'create',

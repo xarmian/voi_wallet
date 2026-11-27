@@ -19,9 +19,13 @@ import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
 const MOCK_MNEMONIC =
   'abandon ability able abandon absent absorb abandon abstract';
 
+// TASK-522: the import's own duplicate check, run before a PIN is set.
+const mockAssertNotInWallet = jest.fn(async (_mnemonic: string) => {});
 jest.mock('@/services/wallet', () => ({
   WalletService: {
     generateWallet: jest.fn(() => ({ mnemonic: MOCK_MNEMONIC })),
+    assertMnemonicNotInWalletStrict: (mnemonic: string) =>
+      mockAssertNotInWallet(mnemonic),
   },
 }));
 
@@ -80,6 +84,7 @@ jest.mock('@/components/wallet/MnemonicDisplay', () => {
 import { Alert } from 'react-native';
 import CreateAccountScreen from '../CreateAccountScreen';
 import { completeQuiz } from '@/__tests__/fixtures/mnemonicQuiz';
+import * as accountQRParser from '@/utils/accountQRParser';
 import {
   clearAllAccountSecrets,
   getAccountSecret,
@@ -109,6 +114,7 @@ afterEach(() => {
   jest.restoreAllMocks();
   jest.clearAllMocks();
   mockHasPin.mockReset().mockResolvedValue(true);
+  mockAssertNotInWallet.mockReset().mockResolvedValue(undefined);
   clearAllAccountSecrets();
 });
 
@@ -208,6 +214,43 @@ describe('CreateAccountScreen — a wallet with no PIN (TASK-522)', () => {
     expect(mockSetActiveAccount).not.toHaveBeenCalled();
   });
 
+  it('runs the duplicate check on the phrase before routing', async () => {
+    mockHasPin.mockResolvedValue(false);
+    const screen = await renderAtBackupStep();
+    await fireEvent.press(screen.getByTestId('backup-continue'));
+    await completeQuiz(screen, 'backup-verification', MOCK_WORDS);
+    await pressAlertButton('Continue');
+
+    await waitFor(() =>
+      expect(mockNavigation.navigate).toHaveBeenCalledTimes(1)
+    );
+    expect(mockAssertNotInWallet).toHaveBeenCalledTimes(1);
+    expect(mockAssertNotInWallet).toHaveBeenCalledWith(MOCK_MNEMONIC);
+  });
+
+  it('a phrase already in the wallet shows the create error, routes nowhere and sets no PIN', async () => {
+    mockHasPin.mockResolvedValue(false);
+    mockAssertNotInWallet.mockRejectedValue(
+      new Error('Account already exists in wallet')
+    );
+    const store = jest.spyOn(accountQRParser, 'storeMnemonicSecret');
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const screen = await renderAtBackupStep();
+    await fireEvent.press(screen.getByTestId('backup-continue'));
+    await completeQuiz(screen, 'backup-verification', MOCK_WORDS);
+    await pressAlertButton('Continue');
+
+    await waitFor(() =>
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Error',
+        'Failed to create new account'
+      )
+    );
+    expect(mockNavigation.navigate).not.toHaveBeenCalled();
+    expect(store).not.toHaveBeenCalled();
+    expect(mockImportAccount).not.toHaveBeenCalled();
+  });
+
   it('a skipped quiz carries backupVerified false', async () => {
     mockHasPin.mockResolvedValue(false);
     const screen = await renderAtBackupStep();
@@ -232,6 +275,7 @@ describe('CreateAccountScreen — a wallet with no PIN (TASK-522)', () => {
 
     await waitFor(() => expect(mockImportAccount).toHaveBeenCalledTimes(1));
     expect(mockHasPin).toHaveBeenCalledTimes(1);
+    expect(mockAssertNotInWallet).not.toHaveBeenCalled();
     expect(mockNavigation.navigate).not.toHaveBeenCalled();
   });
 

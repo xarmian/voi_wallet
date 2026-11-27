@@ -34,7 +34,13 @@ jest.mock('../../secure/AccountSecureStorage', () => ({
 
 import { storage, secureStorage } from '@/platform';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
-import { AccountType, ResetRacedError, Wallet } from '@/types/wallet';
+import {
+  AccountExistsError,
+  AccountType,
+  InvalidMnemonicError,
+  ResetRacedError,
+  Wallet,
+} from '@/types/wallet';
 import { MultiAccountWalletService as Service } from '../index';
 
 const WALLET_KEY = 'voi_wallet_metadata';
@@ -577,6 +583,77 @@ it('labels an unlabelled import from the strict read, not getAccountCount', asyn
 
   expect(imported.label).toBe('Imported Account 2');
   expect(getAccountCount).not.toHaveBeenCalled();
+});
+
+// TASK-522: the import's own duplicate check, run by itself before a wallet
+// with no PIN sets one, so a phrase already in the wallet sets no PIN.
+describe('assertMnemonicNotInWalletStrict (TASK-522)', () => {
+  const algosdk = require('algosdk');
+  const phrase = () =>
+    algosdk.secretKeyToMnemonic(algosdk.generateAccount().sk);
+  const addressOf = (mnemonic: string) =>
+    algosdk.mnemonicToSecretKey(mnemonic).addr.toString();
+
+  it('refuses a phrase whose address is a watch account, as the import does', async () => {
+    const {
+      AccountSecureStorage,
+    } = require('../../secure/AccountSecureStorage');
+    const mnemonic = phrase();
+    await Service.addWatchAccount({
+      type: AccountType.WATCH,
+      address: addressOf(mnemonic),
+      label: 'Watched',
+    });
+    const before = mockStore[WALLET_KEY];
+
+    const check = Service.assertMnemonicNotInWalletStrict(
+      ` ${mnemonic.toUpperCase()} `
+    );
+    await expect(check).rejects.toBeInstanceOf(AccountExistsError);
+    await expect(check).rejects.toThrow('Account already exists in wallet');
+    await expect(
+      Service.importStandardAccount({
+        type: AccountType.STANDARD,
+        mnemonic,
+      } as never)
+    ).rejects.toThrow('Account already exists in wallet');
+    expect(mockStore[WALLET_KEY]).toBe(before);
+    expect(AccountSecureStorage.storeAccountForCreation).not.toHaveBeenCalled();
+  });
+
+  it('accepts a phrase the wallet does not hold, and on a device with no wallet', async () => {
+    await expect(
+      Service.assertMnemonicNotInWalletStrict(phrase())
+    ).resolves.toBeUndefined();
+    await Service.addWatchAccount({
+      type: AccountType.WATCH,
+      address: addressOf(phrase()),
+      label: 'Other',
+    });
+    await expect(
+      Service.assertMnemonicNotInWalletStrict(phrase())
+    ).resolves.toBeUndefined();
+  });
+
+  it('fails closed on a wallet read failure', async () => {
+    await Service.addWatchAccount({
+      type: AccountType.WATCH,
+      address: addressOf(phrase()),
+      label: 'Watched',
+    });
+    jest
+      .mocked(storage.getItem)
+      .mockRejectedValueOnce(new Error('read unavailable'));
+    await expect(
+      Service.assertMnemonicNotInWalletStrict(phrase())
+    ).rejects.toThrow();
+  });
+
+  it('refuses an invalid phrase as the import does', async () => {
+    await expect(
+      Service.assertMnemonicNotInWalletStrict('not a phrase')
+    ).rejects.toBeInstanceOf(InvalidMnemonicError);
+  });
 });
 
 // Luna confirm round on #240 (b): once the wallet blob is written the add has

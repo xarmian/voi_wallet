@@ -192,8 +192,9 @@ export async function restoreFoundAccount(
     listedAddress
   );
   let newId: string;
+  let upgradeDue: boolean;
   try {
-    ({ id: newId } =
+    ({ id: newId, upgradeDue } =
       await MultiAccountWalletService.restoreFoundStandardAccount(
         key,
         hintLabel,
@@ -228,6 +229,11 @@ export async function restoreFoundAccount(
   } catch {
     console.warn('[foundAccounts] restore step after the wallet write failed');
     return { kind: 'restored-unconfirmed', address: listedAddress };
+  } finally {
+    // TASK-529: the new id's v2 upgrade is queued only once the release has
+    // settled, whatever its outcome. Queued before it, the release would wait
+    // behind a scrypt run, and a lock in that window would keep the copy.
+    if (upgradeDue) AccountSecureStorage.scheduleV2UpgradeAfterStore([newId]);
   }
 }
 

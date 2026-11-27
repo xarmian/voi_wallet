@@ -262,6 +262,9 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       return;
     }
 
+    // TASK-522: whether this submit added the account (or any scanned one),
+    // so a failure after the PIN is committed can say what is true.
+    let accountAdded = false;
     submittingRef.current = true;
     try {
       setSubmitting(true);
@@ -349,6 +352,7 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
             ? await useWalletStore.getState().importAccount(request)
             : await MultiAccountWalletService.importStandardAccount(request);
           imported = true;
+          accountAdded = true;
           console.log('Successfully created account:', importedAccount.address);
           if (addingAccount) {
             successMessage =
@@ -444,6 +448,7 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
           }
         }
 
+        if (successCount > 0) accountAdded = true;
         if (failedCount > 0) {
           Alert.alert(
             'Import Warning',
@@ -474,10 +479,15 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       }
     } catch (error) {
       console.error('Security setup error:', error);
+      const reason = error instanceof Error ? error.message : 'Unknown error';
+      // TASK-522: adding an account, once the PIN is committed the failure is
+      // the account's, not the security setup's. The screen stays, and the
+      // committed-PIN retry above adds the account without a second setup.
       Alert.alert(
         'Error',
-        'Failed to setup wallet security: ' +
-          (error instanceof Error ? error.message : 'Unknown error')
+        addingAccount && committedSecretRef.current && !accountAdded
+          ? `Your PIN is set, but the account was not added: ${reason}`
+          : 'Failed to setup wallet security: ' + reason
       );
     } finally {
       submittingRef.current = false;

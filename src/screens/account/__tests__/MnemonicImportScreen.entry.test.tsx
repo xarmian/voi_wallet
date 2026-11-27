@@ -28,7 +28,14 @@ import { Alert, TextInput } from 'react-native';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import algosdk from 'algosdk';
 
-jest.mock('@/services/wallet', () => ({}));
+// TASK-522: the import's own duplicate check, run before a PIN is set.
+const mockAssertNotInWallet = jest.fn(async (_mnemonic: string) => {});
+jest.mock('@/services/wallet', () => ({
+  MultiAccountWalletService: {
+    assertMnemonicNotInWalletStrict: (mnemonic: string) =>
+      mockAssertNotInWallet(mnemonic),
+  },
+}));
 
 const mockImportAccount = jest.fn();
 jest.mock('@/store/walletStore', () => ({
@@ -93,6 +100,7 @@ jest.mock('react-native/Libraries/Lists/FlatList', () => {
 });
 
 import MnemonicImportScreen from '../MnemonicImportScreen';
+import * as accountQRParser from '@/utils/accountQRParser';
 import {
   clearAllAccountSecrets,
   getAccountSecret,
@@ -179,6 +187,7 @@ afterEach(() => {
   jest.restoreAllMocks();
   jest.clearAllMocks();
   mockHasPin.mockReset().mockResolvedValue(true);
+  mockAssertNotInWallet.mockReset().mockResolvedValue(undefined);
 });
 
 describe('MnemonicImportScreen — add-account entry method (TASK-556)', () => {
@@ -394,6 +403,51 @@ describe('MnemonicImportScreen — adding to a wallet with no PIN (TASK-522)', (
     expect(Alert.alert).not.toHaveBeenCalled();
     // The words stay on screen: going back from SecuritySetup loses nothing.
     expect(field(screen, 0).props.value).toBe(WORDS[0]);
+  });
+
+  it('runs the duplicate check on the phrase before routing', async () => {
+    mockHasPin.mockResolvedValue(false);
+    const { navigation, screen } = await renderScreen(false);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(mockAssertNotInWallet).toHaveBeenCalledTimes(1);
+    expect(mockAssertNotInWallet).toHaveBeenCalledWith(MNEMONIC);
+    expect(navigation.navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it('a phrase already in the wallet shows the import error, routes nowhere and sets no PIN', async () => {
+    mockHasPin.mockResolvedValue(false);
+    mockAssertNotInWallet.mockRejectedValue(
+      new Error('Account already exists in wallet')
+    );
+    const store = jest.spyOn(accountQRParser, 'storeMnemonicSecret');
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { navigation, screen } = await renderScreen(false);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Import Failed',
+      'Account already exists in wallet'
+    );
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(store).not.toHaveBeenCalled();
+    expect(mockImportAccount).not.toHaveBeenCalled();
+    // The words stay on screen for another try.
+    expect(field(screen, 0).props.value).toBe(WORDS[0]);
+  });
+
+  it('with a PIN the import runs its own check: no extra one here', async () => {
+    const { screen } = await renderScreen(false);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(mockAssertNotInWallet).not.toHaveBeenCalled();
+    expect(mockImportAccount).toHaveBeenCalledTimes(1);
   });
 
   it('a pasted phrase carries phraseTyped false', async () => {

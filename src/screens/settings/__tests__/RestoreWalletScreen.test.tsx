@@ -50,8 +50,14 @@ let mockHasPin = false;
 let mockLockedUntil: number | null = null;
 // The bounded read the Settings landing makes after a restore (TASK-522).
 const mockHasPinAfterRestore = jest.fn(async () => true);
-// orphanPin (for its message) imports the wallet services; nothing here runs them.
-jest.mock('@/services/wallet', () => ({}));
+// The strict key-bearing probe the Settings landing makes when no PIN is set
+// (TASK-522), the one boot routing uses.
+const mockKeyBearing = jest.fn(async () => true);
+jest.mock('@/services/wallet', () => ({
+  MultiAccountWalletService: {
+    hasKeyBearingAccountStrict: () => mockKeyBearing(),
+  },
+}));
 jest.mock('@/services/wallet/crossStoreReconcile', () => ({}));
 jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
@@ -193,6 +199,7 @@ beforeEach(() => {
   mockCanOfferBiometric.mockReset().mockResolvedValue(false);
   mockUnlockWithBiometrics.mockReset();
   mockHasPinAfterRestore.mockReset().mockResolvedValue(true);
+  mockKeyBearing.mockReset().mockResolvedValue(true);
   jest.restoreAllMocks();
 });
 
@@ -826,7 +833,7 @@ describe('TASK-514: restore refresh landings', () => {
 });
 
 describe('TASK-522: a Settings restore onto a wallet with no PIN', () => {
-  it('no PIN after the restore: refreshes, then resets to SecuritySetup(restore)', async () => {
+  it('no PIN and a key-bearing account now: refreshes, then resets to SecuritySetup(restore)', async () => {
     mockAccountCount = 2;
     mockHasPinAfterRestore.mockResolvedValue(false);
     const { pressOk } = await restoreThroughScreen(restoreResult(false));
@@ -835,6 +842,7 @@ describe('TASK-522: a Settings restore onto a wallet with no PIN', () => {
     });
     expect(mockRefresh).toHaveBeenCalledTimes(1);
     expect(mockHasPinAfterRestore).toHaveBeenCalledTimes(1);
+    expect(mockKeyBearing).toHaveBeenCalledTimes(1);
     expect(mockDispatch).toHaveBeenCalledTimes(1);
     expect(mockDispatch.mock.calls[0][0]).toMatchObject({
       type: 'RESET',
@@ -845,6 +853,38 @@ describe('TASK-522: a Settings restore onto a wallet with no PIN', () => {
     expect(mockRecheck).not.toHaveBeenCalled();
   });
 
+  it('no PIN and still no key-bearing account (a watch-only restore): goes back', async () => {
+    mockAccountCount = 2;
+    mockHasPinAfterRestore.mockResolvedValue(false);
+    mockKeyBearing.mockResolvedValue(false);
+    const { pressOk, alert } = await restoreThroughScreen(restoreResult(false));
+    await act(async () => {
+      await pressOk();
+    });
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    expect(mockKeyBearing).toHaveBeenCalledTimes(1);
+    expect(mockGoBack).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('no PIN and a failed key-bearing read: resets to SecuritySetup (fails toward a PIN)', async () => {
+    mockAccountCount = 2;
+    mockHasPinAfterRestore.mockResolvedValue(false);
+    mockKeyBearing.mockRejectedValue(new Error('storage unavailable'));
+    const { pressOk } = await restoreThroughScreen(restoreResult(false));
+    await act(async () => {
+      await pressOk();
+    });
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(mockDispatch.mock.calls[0][0]).toMatchObject({
+      type: 'RESET',
+      index: 0,
+      routes: [{ name: 'SecuritySetup', params: { source: 'restore' } }],
+    });
+    expect(mockGoBack).not.toHaveBeenCalled();
+  });
+
   it('with a PIN: goes back as before', async () => {
     mockAccountCount = 2;
     const { pressOk } = await restoreThroughScreen(restoreResult(false));
@@ -852,6 +892,7 @@ describe('TASK-522: a Settings restore onto a wallet with no PIN', () => {
       await pressOk();
     });
     expect(mockHasPinAfterRestore).toHaveBeenCalledTimes(1);
+    expect(mockKeyBearing).not.toHaveBeenCalled();
     expect(mockGoBack).toHaveBeenCalledTimes(1);
     expect(mockDispatch).not.toHaveBeenCalled();
   });

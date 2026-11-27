@@ -1219,6 +1219,66 @@ describe('TASK-522: adding an account to a wallet with no PIN', () => {
     await screen.unmount();
   });
 
+  it.each(['create', 'mnemonic'])(
+    '%s: an import failure after the PIN is set says so, stays, and a retry adds the account',
+    async (source) => {
+      mockStoreImportAccount.mockRejectedValueOnce(
+        new Error('Account already exists in wallet')
+      );
+      const id = storeMnemonicSecret(FAKE_MNEMONIC);
+      const { navigation, screen } = await renderScreen({
+        mnemonicSecretId: id,
+        source,
+        addingAccount: true,
+      });
+
+      await submitPin(screen);
+
+      expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Error',
+        'Your PIN is set, but the account was not added: Account already exists in wallet'
+      );
+      expect(Alert.alert).not.toHaveBeenCalledWith(
+        'Error',
+        expect.stringContaining('Failed to setup wallet security')
+      );
+      expect(navigation.reset).not.toHaveBeenCalled();
+      expect(navigation.navigate).not.toHaveBeenCalled();
+      expect(navigation.goBack).not.toHaveBeenCalled();
+      expect(getAccountSecret(id)?.mnemonic).toBe(FAKE_MNEMONIC);
+
+      // The committed-PIN retry: no second setup, the account is added.
+      await fireEvent.press(screen.getByTestId('complete-setup'));
+      expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+      expect(mockStoreImportAccount).toHaveBeenCalledTimes(2);
+      expect(navigation.reset).toHaveBeenCalledWith({
+        index: 0,
+        routes: [{ name: 'Main', params: { screen: 'Home' } }],
+      });
+      await screen.unmount();
+    }
+  );
+
+  it('a failure before the PIN is set keeps the setup failure text', async () => {
+    mockAuthSetupPin.mockRejectedValueOnce(new Error('setup boom'));
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'mnemonic',
+      addingAccount: true,
+    });
+
+    await submitPin(screen);
+
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Error',
+      'Failed to setup wallet security: setup boom'
+    );
+    expect(mockStoreImportAccount).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+
   it('back before submit stores nothing and releases the phrase', async () => {
     const id = storeMnemonicSecret(FAKE_MNEMONIC);
     const { navigation, screen } = await renderScreen({

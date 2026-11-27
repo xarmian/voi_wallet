@@ -40,6 +40,7 @@ import { useWalletStore } from '@/store/walletStore';
 import { BIP39Utils, WordSuggestion } from '@/utils/bip39';
 import { storeMnemonicSecret } from '@/utils/accountQRParser';
 import { AccountSecureStorage } from '@/services/secure';
+import { MultiAccountWalletService } from '@/services/wallet';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColors } from '@/hooks/useThemedStyles';
@@ -549,6 +550,12 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
         // TASK-522: a wallet with no PIN sets one before any key is stored.
         // The words stay on this screen, so going back loses nothing. A
         // failed read lands in the catch below: nothing routed or stored.
+        // The import's own duplicate check runs first, so a phrase already
+        // in the wallet (often as a watch account) fails here, as the import
+        // would, and sets no PIN for nothing.
+        await MultiAccountWalletService.assertMnemonicNotInWalletStrict(
+          mnemonic
+        );
         navigation.navigate('SecuritySetup', {
           mnemonicSecretId: storeMnemonicSecret(mnemonic),
           source: 'mnemonic',
