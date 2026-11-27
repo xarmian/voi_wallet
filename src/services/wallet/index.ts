@@ -892,7 +892,9 @@ export class MultiAccountWalletService {
     }
 
     // Delete the private key from secure storage
-    await AccountSecureStorage.deleteAccount(accountId);
+    await AccountSecureStorage.deleteAccount(accountId, {
+      walletAccount: true,
+    });
 
     // Create the new RemoteSignerAccountMetadata
     const remoteSignerAccount: RemoteSignerAccountMetadata = {
@@ -1485,6 +1487,7 @@ export class MultiAccountWalletService {
     // Remove from secure storage
     await AccountSecureStorage.deleteAccount(accountId, {
       requireNoSecret: expected.keyless,
+      walletAccount: true,
     });
 
     await this.storeWallet((current) => {

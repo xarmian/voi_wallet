@@ -3882,9 +3882,16 @@ export class AccountSecureStorage {
     });
   }
 
+  /**
+   * `walletAccount`: the id is a wallet account's (a user delete, a conversion
+   * to a remote signer), so found-key verdicts may name it and are cleared
+   * strictly first (clearVerdictsNamingLocked). Other callers, such as the
+   * boot reconcile's orphan deletes, delete ids no live verdict can name and
+   * are never blocked by a found-accounts record.
+   */
   static async deleteAccount(
     accountId: string,
-    options: { requireNoSecret?: boolean } = {}
+    options: { requireNoSecret?: boolean; walletAccount?: boolean } = {}
   ): Promise<void> {
     // Secret writer → acquire the GLOBAL key-mutation mutex (P1-1a) so a delete
     // can never interleave with a rewrap enumeration+commit.
@@ -3903,8 +3910,11 @@ export class AccountSecureStorage {
       }
       // TASK-478: a found key's verdict that names this account must be gone
       // before its slot is, or the key would read as a duplicate of a key that
-      // no longer exists. If that can't be saved, nothing is deleted.
-      await this.clearVerdictsNamingLocked(accountId, { strict: true });
+      // no longer exists. For a wallet account, if that can't be done, nothing
+      // is deleted.
+      await this.clearVerdictsNamingLocked(accountId, {
+        strict: options.walletAccount === true,
+      });
       await this.deleteAccountLocked(accountId);
       await this.dropQuarantineRecordsLocked(accountId);
     });
@@ -3916,8 +3926,8 @@ export class AccountSecureStorage {
    * found-accounts scan entry and notice record (TASK-478). Every found key's
    * verdict that names the id as its wallet account loses it (the address
    * stays), since the slot it described is gone; the next scan checks again,
-   * and until then the key counts. deleteAccount already cleared those
-   * verdicts strictly before the slot write; clearing again here is harmless.
+   * and until then the key counts. On deleteAccount they were already cleared
+   * before the slot write; for found-key deletes no verdict names the id.
    * Best-effort: a corrupt registry or record must never turn a completed
    * delete into a failure. The caller holds the key-mutation mutex.
    */
@@ -3960,32 +3970,44 @@ export class AccountSecureStorage {
   /**
    * Strips the `wallet` verdict (keeping the address) from every found key's
    * scan entry that names `accountId` as its wallet account. A missing verdict
-   * is always safe (the key counts and is scanned again). With `strict`, run
-   * by deleteAccount before the slot is touched, a failure throws
-   * AccountStorageError, so a wallet account's slot is never deleted while a
-   * verdict still describes it; a map with nothing to clear is never written,
-   * so it can't block. Otherwise best effort: a failure is logged without
-   * detail and never thrown.
-   * The caller holds the key-mutation mutex.
+   * is always safe (the key counts and is scanned again). Only a `keyUsable:
+   * true` verdict can make a found key read as a duplicate, so with `strict`
+   * (deleteAccount for a wallet account, before the slot is touched) a map
+   * that can't be read, or a true verdict that can't be cleared, throws
+   * AccountStorageError and nothing is deleted. Anything else is best effort:
+   * a failure is logged without detail and never thrown, and a map with
+   * nothing to clear is never written. The caller holds the key-mutation
+   * mutex.
    */
   private static async clearVerdictsNamingLocked(
     accountId: string,
     options: { strict?: boolean } = {}
   ): Promise<void> {
+    const refuse = () =>
+      new AccountStorageError(
+        'Found-account records could not be updated, so nothing was deleted'
+      );
+    let scan: Record<string, QuarantineScanEntry>;
     try {
-      const scan = await this.readQuarantineScanTolerant();
-      let changed = false;
-      for (const [id, entry] of Object.entries(scan))
-        if ('address' in entry && entry.wallet?.ownerId === accountId) {
-          scan[id] = { address: entry.address };
-          changed = true;
-        }
-      if (changed) await this.writeQuarantineScanLocked(scan);
+      scan = await this.readQuarantineScanTolerant();
     } catch {
-      if (options.strict)
-        throw new AccountStorageError(
-          'Found-account records could not be updated, so nothing was deleted'
-        );
+      if (options.strict) throw refuse();
+      console.warn('[deleteAccount] found-accounts verdict cleanup failed');
+      return;
+    }
+    let changed = false;
+    let clearsTrue = false;
+    for (const [id, entry] of Object.entries(scan))
+      if ('address' in entry && entry.wallet?.ownerId === accountId) {
+        if (entry.wallet.keyUsable) clearsTrue = true;
+        scan[id] = { address: entry.address };
+        changed = true;
+      }
+    if (!changed) return;
+    try {
+      await this.writeQuarantineScanLocked(scan);
+    } catch {
+      if (options.strict && clearsTrue) throw refuse();
       console.warn('[deleteAccount] found-accounts verdict cleanup failed');
     }
   }
@@ -4108,9 +4130,11 @@ export class AccountSecureStorage {
   /** RAW deleteAccount (no mutex acquire) — for callers already holding it
    *  (e.g. clearAll). */
   private static async deleteAccountLocked(accountId: string): Promise<void> {
-    // A wallet account's found-key verdicts are cleared strictly by
-    // deleteAccount before this runs. The other callers (the bulk wipe, create
-    // rollbacks, found-key deletes) delete ids no verdict names.
+    // A wallet account's found-key verdicts are cleared by deleteAccount
+    // before this runs. The other callers (the bulk wipe, create rollbacks,
+    // found-key deletes) delete ids no verdict is expected to name; a rare
+    // rollback over an id another writer just listed is still covered by
+    // Remove's re-check of the slot.
     try {
       // Remove from secure storage
       await this.saveSecret(accountId, null);

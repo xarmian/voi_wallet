@@ -579,7 +579,7 @@ describe("TASK-478 deleting a wallet account's slot clears verdicts naming it", 
         ? 'reject'
         : undefined;
     await expect(
-      AccountSecureStorage.deleteAccount(account.id)
+      AccountSecureStorage.deleteAccount(account.id, { walletAccount: true })
     ).rejects.toThrow();
     mockPlatform.__state.fault = undefined;
     // Nothing was deleted, and the verdict still describes a slot that exists.
@@ -601,8 +601,73 @@ describe("TASK-478 deleting a wallet account's slot clears verdicts naming it", 
       op === 'kv.set' && key === 'voi_reconcile_quarantine_scan'
         ? 'reject'
         : undefined;
-    await AccountSecureStorage.deleteAccount(other.id);
+    await AccountSecureStorage.deleteAccount(other.id, { walletAccount: true });
     mockPlatform.__state.fault = undefined;
     expect(mockPlatform.__secure.has(SECRET(other.id))).toBe(false);
+  });
+
+  it('a scan map that cannot be read never blocks a reconcile delete', async () => {
+    const { account } = await canaryInWalletScanned();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest
+      .spyOn(AccountSecureStorage as never, 'readQuarantineScanTolerant')
+      .mockRejectedValue(new Error('read failed') as never);
+    // The boot reconcile deletes without walletAccount.
+    await AccountSecureStorage.deleteAccount(account.id);
+    jest.restoreAllMocks();
+    warn.mockRestore();
+    expect(mockPlatform.__secure.has(SECRET(account.id))).toBe(false);
+  });
+
+  it('a wallet account delete refuses when the scan map cannot be read', async () => {
+    const { account } = await canaryInWalletScanned();
+    const slotBefore = mockPlatform.__secure.get(SECRET(account.id));
+    jest
+      .spyOn(AccountSecureStorage as never, 'readQuarantineScanTolerant')
+      .mockRejectedValue(new Error('read failed') as never);
+    await expect(
+      AccountSecureStorage.deleteAccount(account.id, { walletAccount: true })
+    ).rejects.toThrow();
+    jest.restoreAllMocks();
+    expect(mockPlatform.__secure.get(SECRET(account.id))).toBe(slotBefore);
+  });
+
+  it('only a false verdict naming the account never blocks its delete', async () => {
+    const { formatA, account } = await canaryInWalletScanned();
+    const map = readScanMap() as Record<string, unknown>;
+    map[formatA.id] = {
+      address: CANARY_ADDRESS,
+      wallet: { ownerId: account.id, keyUsable: false },
+    };
+    mockPlatform.__kv.set('voi_reconcile_quarantine_scan', JSON.stringify(map));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockPlatform.__state.fault = (op, key) =>
+      op === 'kv.set' && key === 'voi_reconcile_quarantine_scan'
+        ? 'reject'
+        : undefined;
+    await AccountSecureStorage.deleteAccount(account.id, {
+      walletAccount: true,
+    });
+    mockPlatform.__state.fault = undefined;
+    warn.mockRestore();
+    expect(mockPlatform.__secure.has(SECRET(account.id))).toBe(false);
+  });
+
+  it("the wallet's own delete clears verdicts strictly", async () => {
+    const { account } = await canaryInWalletScanned();
+    const slotBefore = mockPlatform.__secure.get(SECRET(account.id));
+    mockPlatform.__state.fault = (op, key) =>
+      op === 'kv.set' && key === 'voi_reconcile_quarantine_scan'
+        ? 'reject'
+        : undefined;
+    await expect(
+      MultiAccountWalletService.deleteAccount(account.id, {
+        address: account.address,
+        type: AccountType.STANDARD,
+        keyless: false,
+      })
+    ).rejects.toThrow();
+    mockPlatform.__state.fault = undefined;
+    expect(mockPlatform.__secure.get(SECRET(account.id))).toBe(slotBefore);
   });
 });
