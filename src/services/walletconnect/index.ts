@@ -40,7 +40,13 @@ import {
   resolveV1Chain,
 } from '@/services/walletconnect/v1/config';
 import { redactSensitiveForLog, redactError } from '@/utils/logRedaction';
-import { registerWipeReset } from '@/services/wipe/gate';
+import {
+  isWipeWindowOpen,
+  registerWipeReset,
+  wipeWindowClosed,
+} from '@/services/wipe/gate';
+import { WRITE_TIMEOUT_MS } from '@/services/secure/boundedWrites';
+import { withTimeout } from '@/utils/withTimeout';
 import {
   readSessionKey,
   writeSessionKey,
@@ -116,7 +122,14 @@ function beginRetentionSweep(): Promise<void> | null {
       // The sweep body is deferred by one microtask so that `retentionSweep` is
       // filled in BEFORE any of it runs: nothing, however re-entrant, can find
       // the latch set and the slot still empty.
-      retentionSweep = Promise.resolve()
+      //
+      // TASK-469: a first start during a wipe sweeps only once the wipe has
+      // settled; before that its rewrite of the stored messages could land
+      // after the wipe removed them.
+      const startedDuringWipe = isWipeWindowOpen();
+      retentionSweep = (
+        startedDuringWipe ? wipeWindowClosed() : Promise.resolve()
+      )
         .then(() => {
           // Re-check at the moment of execution, not just at scheduling: Core
           // may have been constructed in between. From here on every service
@@ -172,11 +185,34 @@ export class WalletConnectService extends EventEmitter {
    * lands after the wipe's final storage check can write a `wc@2:` record
    * again; it holds no session (they are gone from memory) and the next
    * Delete Everything removes it.
+   *
+   * An initialize() under way restores the stored sessions into the SDK and
+   * then loads them here, so the purge waits for it (bounded; a timeout
+   * rejects and the wipe reports incomplete) and purges what it loaded. An
+   * initialize() that starts during the wipe waits for the wipe to settle
+   * (see runInitialization), so it finds nothing to restore.
    */
   purgeLocalForWipe(): Promise<void> {
+    this.forgetLocalSessions();
+    const starting = this.initializing;
+    if (!starting) return this.purgeClient();
+    return withTimeout(
+      starting.catch(() => undefined),
+      WRITE_TIMEOUT_MS,
+      () => new Error('WalletConnect start did not finish')
+    ).then(() => {
+      this.forgetLocalSessions();
+      return this.purgeClient();
+    });
+  }
+
+  private forgetLocalSessions(): void {
     this.activeSessions.clear();
     WalletConnectV1Client.getInstance().resetForWipe();
     this.emit('sessions_changed');
+  }
+
+  private purgeClient(): Promise<void> {
     if (!this.client.isInitialized()) return Promise.resolve();
     const signClient = this.client.getProvider().client;
     const core = this.client.getCore();
@@ -239,8 +275,11 @@ export class WalletConnectService extends EventEmitter {
     // executes: without the sweep in front (off-native, or a warm Core) the
     // body would otherwise reach `client.initialize()` synchronously, while
     // `initializing` was still null.
+    // Taken now, not when the run starts: a run that began before a wipe is
+    // one the wipe's purge waits for, so it must not wait for the wipe.
+    const startedDuringWipe = isWipeWindowOpen();
     this.initializing = Promise.resolve().then(() =>
-      this.runInitialization(pendingRetentionSweep)
+      this.runInitialization(pendingRetentionSweep, startedDuringWipe)
     );
     try {
       await this.initializing;
@@ -250,7 +289,8 @@ export class WalletConnectService extends EventEmitter {
   }
 
   private async runInitialization(
-    pendingRetentionSweep: Promise<void> | null
+    pendingRetentionSweep: Promise<void> | null,
+    startedDuringWipe: boolean
   ): Promise<void> {
     try {
       // Must complete BEFORE the provider constructs Core: once the SDK's
@@ -258,6 +298,11 @@ export class WalletConnectService extends EventEmitter {
       // next message and would clobber the swept records (PLAN-324 DR-2).
       // Never rejects — see beginRetentionSweep.
       if (pendingRetentionSweep) await pendingRetentionSweep;
+
+      // A start during a wipe waits for it to settle: until the sweep, storage
+      // still holds the previous wallet's sessions, which the SDK would
+      // restore into memory.
+      if (startedDuringWipe) await wipeWindowClosed();
 
       await this.client.initialize();
       await this.loadExistingSessions();

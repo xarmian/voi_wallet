@@ -17,6 +17,7 @@ const fakeStore = (keys: (string | number)[]) => {
     delete: jest.fn(async (key: string | number) => {
       map.delete(key);
     }),
+    getAll: () => [],
   };
 };
 const mockSession = fakeStore(['s1', 's2']);
@@ -37,6 +38,7 @@ const mockSubscriptions = new Map([['sub1', { topic: 's1' }]]);
 const mockTopicMapClear = jest.fn();
 const mockTransportClose = jest.fn(() => new Promise<void>(() => {}));
 let mockInitialized = true;
+const mockClientInitialize = jest.fn(async () => {});
 const mockCore = {
   pairing: { pairings: mockPairings },
   crypto: {
@@ -82,16 +84,21 @@ jest.mock('../client', () => ({
   WalletConnectClient: {
     getInstance: () => ({
       isInitialized: () => mockInitialized,
+      initialize: () => mockClientInitialize(),
       getProvider: () => ({
         client: {
           session: mockSession,
           proposal: mockProposal,
           pendingRequest: mockPendingRequest,
+          on: jest.fn(),
         },
       }),
       getCore: () => mockCore,
     }),
   },
+}));
+jest.mock('../messagesRetention', () => ({
+  sweepWalletConnectMessageStore: jest.fn(async () => {}),
 }));
 jest.mock('@walletconnect/utils', () => ({
   getSdkError: (key: string) => ({ code: 6000, message: key }),
@@ -110,7 +117,11 @@ jest.mock('@/services/walletconnect/v1', () => ({
 }));
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { runWipeResets } from '@/services/wipe/gate';
+import {
+  closeWipeWindow,
+  openWipeWindow,
+  runWipeResets,
+} from '@/services/wipe/gate';
 import { WalletConnectService } from '../index';
 import { HandledStore } from '../handledStore';
 
@@ -140,14 +151,91 @@ test('sessions, proposals, requests, pairings, keys, expiries, history and messa
   expect(WalletConnectService.getInstance().getActiveSessions()).toEqual([]);
 });
 
-test('with the client never started there is nothing to purge', async () => {
-  mockInitialized = false;
-  mockTransportClose.mockClear();
-  WalletConnectService.getInstance();
-  const run = await settle();
-  expect(run.failed).toEqual([]);
-  expect(mockTransportClose).not.toHaveBeenCalled();
-  mockInitialized = true;
+describe('an initialize() and a wipe at the same time', () => {
+  const flush = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+  const service = () => WalletConnectService.getInstance();
+  const notStarted = () => {
+    (service() as unknown as { initialized: boolean }).initialized = false;
+  };
+  afterEach(() => {
+    closeWipeWindow();
+    mockInitialized = true;
+    mockClientInitialize.mockReset();
+    mockClientInitialize.mockImplementation(async () => {});
+  });
+
+  test('a purge during an initialize under way waits for it, then removes the sessions it restored', async () => {
+    notStarted();
+    mockInitialized = false;
+    let finishStart: () => void = () => {};
+    mockClientInitialize.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishStart = resolve;
+        })
+    );
+    const starting = service().initialize();
+    await flush();
+    expect(mockClientInitialize).toHaveBeenCalledTimes(1);
+
+    const run = runWipeResets();
+    const purge = run.pending.find((p) => p.name === 'walletconnect');
+    expect(purge).toBeDefined();
+    let purged = false;
+    void purge!.done.then(() => {
+      purged = true;
+    });
+    // The SDK restores the stored session into memory as its start finishes.
+    mockSession.map.set('restored', {});
+    mockKeychain.set('restored', 'k3');
+    mockInitialized = true;
+    await flush();
+    expect(purged).toBe(false);
+
+    finishStart();
+    await starting;
+    await purge!.done;
+    expect(mockSession.keys).toEqual([]);
+    expect(mockKeychain.size).toBe(0);
+    expect(service().getActiveSessions()).toEqual([]);
+  });
+
+  test('a purge that waits on an initialize that never finishes rejects (the wipe reports it)', async () => {
+    jest.useFakeTimers();
+    try {
+      notStarted();
+      mockClientInitialize.mockImplementationOnce(
+        () => new Promise<void>(() => {})
+      );
+      void service().initialize();
+      await flush();
+      const purge = runWipeResets().pending.find(
+        (p) => p.name === 'walletconnect'
+      );
+      const outcome = purge!.done.then(
+        () => 'resolved',
+        () => 'rejected'
+      );
+      await jest.advanceTimersByTimeAsync(6000);
+      expect(await outcome).toBe('rejected');
+    } finally {
+      jest.useRealTimers();
+      (service() as unknown as { initializing: unknown }).initializing = null;
+    }
+  });
+
+  test('an initialize that starts during a wipe does not restore anything until the wipe settles', async () => {
+    notStarted();
+    openWipeWindow();
+    const starting = service().initialize();
+    await flush();
+    expect(mockClientInitialize).not.toHaveBeenCalled();
+    closeWipeWindow();
+    await starting;
+    expect(mockClientInitialize).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('handled-request ledger', () => {
