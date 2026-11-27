@@ -37,7 +37,8 @@ jest.mock('@/platform', () => ({
         mockEvents.push(`secure-delete:${key}`);
         mockSecure.delete(key);
       } finally {
-        if (mockDropMarkerOnDelete) mockPlain.delete(`__voi_ss_present__${key}`);
+        if (mockDropMarkerOnDelete)
+          mockPlain.delete(`__voi_ss_present__${key}`);
       }
     }),
   },

@@ -1123,9 +1123,9 @@ describe('TASK-469: a wipe while an admission awaits storage', () => {
 
   it('an admission that starts after the reset is shown normally', async () => {
     coordinator.resetForWipe();
-    expect(await coordinator.admit(ref, (now + 900_000) / 1000)).toMatchObject(
-      { action: 'show' }
-    );
+    expect(await coordinator.admit(ref, (now + 900_000) / 1000)).toMatchObject({
+      action: 'show',
+    });
     expect(coordinator.isOpen(ref)).toBe(true);
   });
 });

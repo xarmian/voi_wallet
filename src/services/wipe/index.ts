@@ -136,7 +136,8 @@ async function deleteSecureLeftovers(
     record.state === 'corrupt' ||
     record.names.length > 0
   ) {
-    if (record.state === 'corrupt') unresolved.push(SECURE_LEFTOVERS_RECORD_KEY);
+    if (record.state === 'corrupt')
+      unresolved.push(SECURE_LEFTOVERS_RECORD_KEY);
     try {
       await withTimeout(
         storage.setItem(SECURE_LEFTOVERS_RECORD_KEY, JSON.stringify(failed)),

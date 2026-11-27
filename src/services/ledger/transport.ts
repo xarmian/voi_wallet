@@ -10,11 +10,7 @@ import {
   LedgerAccountError,
 } from '@/types/wallet';
 import { ledgerDeviceStorage, LedgerDeviceStorage } from './storage';
-import {
-  registerWipeReset,
-  wipeEpoch,
-  wipedSince,
-} from '@/services/wipe/gate';
+import { registerWipeReset, wipeEpoch, wipedSince } from '@/services/wipe/gate';
 import { isLedgerSigningInProgress } from '@/services/ledger/signingState';
 import { isPermissionDeniedError } from '@/utils/errorMapping';
 import { redactError } from '@/utils/logRedaction';
