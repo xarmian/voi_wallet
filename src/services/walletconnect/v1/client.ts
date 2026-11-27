@@ -813,8 +813,10 @@ export class WalletConnectV1Client extends EventEmitter {
     } catch {
       console.error('WC v1 Client: Failed to store session');
       if (secureWritten) {
+        // Once a wipe has started, the prior slot is the wiped wallet's key:
+        // never write it back. Only try (again) to delete the key written here.
         try {
-          await restoreSessionKeySlot(priorSlot);
+          await restoreSessionKeySlot(wipedSince(epoch) ? null : priorSlot);
         } catch {
           console.error('WC v1 Client: Failed to roll back session key');
         }
