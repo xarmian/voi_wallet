@@ -25,6 +25,7 @@ import {
   AccountDeletionPreconditionError,
   AccountDeletionExpectation,
   AccountExistsError,
+  FoundRestoreUnconfirmedError,
   InvalidAddressError,
   InvalidMnemonicError,
   LedgerAccountError,
@@ -46,6 +47,7 @@ import { NetworkService } from '@/services/network';
 import type { LedgerAccountDerivation } from '@/services/ledger/algorand';
 import { redactAddress, redactError } from '@/utils/logRedaction';
 import { withTimeout } from '@/utils/withTimeout';
+import { keyBelongsToAddress, seedDerivedAddress } from '@/utils/keyIdentity';
 
 /**
  * F-22 (TASK-179) — getCurrentWallet() memoization.
@@ -163,53 +165,8 @@ export class MultiAccountWalletService {
         backupVerified: false,
       };
 
-      const secretKey = account.sk;
-      // TASK-220: capture the secure reset generation BEFORE the key write so
-      // the cross-store creation is atomic against a concurrent full reset.
-      const creationGen = AccountSecureStorage.getResetGeneration();
-      let token: string | undefined;
-      // Set once the wallet metadata write has committed: after that, deleting
-      // the secret would leave a keyless record, so a later failure keeps it.
-      let metadataCommitted = false;
-      try {
-        token = await AccountSecureStorage.storeAccountForCreation(
-          accountMetadata,
-          secretKey,
-          creationGen
-        );
-        await this.addAccountToWallet(accountMetadata, creationGen);
-        metadataCommitted = true;
-        await AccountSecureStorage.commitPendingCreate(
-          accountMetadata.id,
-          token
-        );
-        return accountMetadata;
-      } catch (error) {
-        // DR-2 (reset wins) and audit 10-29 (Luna P2): ANY failure before the
-        // metadata committed (a raced reset, a strict-read failure, a corrupt
-        // blob, a duplicate) rolls back the just-written secret
-        // (ownership-checked; a no-op if a reset already deleted it), so
-        // neither store keeps a half-created account.
-        if (token !== undefined && !metadataCommitted) {
-          try {
-            await AccountSecureStorage.deleteAccountIfAttemptMatches(
-              accountMetadata.id,
-              token
-            );
-          } catch (rollbackError) {
-            // TASK-415: retain the indexed, journaled id for reconciliation.
-            console.warn(
-              'Account rollback failed:',
-              redactError(rollbackError)
-            );
-          }
-        }
-        throw error;
-      } finally {
-        if (secretKey) {
-          secretKey.fill(0);
-        }
-      }
+      await this.persistNewKeyedAccount(accountMetadata, account.sk);
+      return accountMetadata;
     } catch (error) {
       // Preserve ResetRacedError so the UI can show "wallet was reset — creation
       // cancelled" instead of a generic failure.
@@ -309,49 +266,8 @@ export class MultiAccountWalletService {
         backupVerified: !!request.mnemonic && request.backupVerified === true,
       };
 
-      const secretKey = account.sk;
-      // TASK-220: guard the cross-store creation against a concurrent full reset.
-      const creationGen = AccountSecureStorage.getResetGeneration();
-      let token: string | undefined;
-      // Set once the wallet metadata write has committed: after that, deleting
-      // the secret would leave a keyless record, so a later failure keeps it.
-      let metadataCommitted = false;
-      try {
-        token = await AccountSecureStorage.storeAccountForCreation(
-          accountMetadata,
-          secretKey,
-          creationGen
-        );
-        await this.addAccountToWallet(accountMetadata, creationGen);
-        metadataCommitted = true;
-        await AccountSecureStorage.commitPendingCreate(
-          accountMetadata.id,
-          token
-        );
-        return accountMetadata;
-      } catch (error) {
-        // Same rollback rule as createStandardAccount: any failure before the
-        // metadata committed removes the secret this import wrote.
-        if (token !== undefined && !metadataCommitted) {
-          try {
-            await AccountSecureStorage.deleteAccountIfAttemptMatches(
-              accountMetadata.id,
-              token
-            );
-          } catch (rollbackError) {
-            // TASK-415: retain the indexed, journaled id for reconciliation.
-            console.warn(
-              'Account rollback failed:',
-              redactError(rollbackError)
-            );
-          }
-        }
-        throw error;
-      } finally {
-        if (secretKey) {
-          secretKey.fill(0);
-        }
-      }
+      await this.persistNewKeyedAccount(accountMetadata, account.sk);
+      return accountMetadata;
     } catch (error) {
       if (
         error instanceof InvalidMnemonicError ||
@@ -364,6 +280,111 @@ export class MultiAccountWalletService {
         `Failed to import account: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  /**
+   * The journaled create shared by create, import and a found-key restore
+   * (TASK-220): the secret is written under a journal entry, the account is
+   * added to the wallet, then the entry is committed. Any failure before the
+   * wallet write committed rolls back the secret this attempt wrote (DR-2: a
+   * raced reset wins; audit 10-29: a strict-read failure, a corrupt blob or a
+   * duplicate too), ownership-checked, so neither store keeps a half-created
+   * account. After that commit a failure keeps the secret: deleting it would
+   * leave a keyless record. `secretKey` is zeroed on every path.
+   */
+  private static async persistNewKeyedAccount(
+    accountMetadata: StandardAccountMetadata,
+    secretKey: Uint8Array,
+    // Captured by the caller BEFORE the key was obtained, when it was not
+    // obtained here (a found-key restore).
+    creationGen: number = AccountSecureStorage.getResetGeneration(),
+    // Called once the wallet metadata write has committed, so a caller can
+    // tell a later failure from one that left nothing behind.
+    onMetadataCommitted?: () => void
+  ): Promise<void> {
+    let token: string | undefined;
+    let metadataCommitted = false;
+    try {
+      token = await AccountSecureStorage.storeAccountForCreation(
+        accountMetadata,
+        secretKey,
+        creationGen
+      );
+      await this.addAccountToWallet(accountMetadata, creationGen);
+      metadataCommitted = true;
+      onMetadataCommitted?.();
+      await AccountSecureStorage.commitPendingCreate(accountMetadata.id, token);
+    } catch (error) {
+      if (token !== undefined && !metadataCommitted) {
+        try {
+          await AccountSecureStorage.deleteAccountIfAttemptMatches(
+            accountMetadata.id,
+            token
+          );
+        } catch (rollbackError) {
+          // TASK-415: retain the indexed, journaled id for reconciliation.
+          console.warn('Account rollback failed:', redactError(rollbackError));
+        }
+      }
+      throw error;
+    } finally {
+      secretKey.fill(0);
+    }
+  }
+
+  /**
+   * TASK-478: add a standard account for a key found on this device, under a
+   * fresh id, through the journaled create. The key is used as bytes only: no
+   * recovery-phrase string is built (`mnemonic: ''`). The caller zeroes
+   * `secretKey` too. Returns the new id and address, never the metadata.
+   */
+  static async restoreFoundStandardAccount(
+    secretKey: Uint8Array,
+    hintLabel: string | undefined,
+    creationGen: number
+  ): Promise<{ id: string; address: string }> {
+    const address = seedDerivedAddress(secretKey);
+    if (address === null || !keyBelongsToAddress(secretKey, address)) {
+      throw new Error('The found key is not a complete account key');
+    }
+    const currentWallet = await this.readWalletStrict();
+    if (currentWallet?.accounts.some((acc) => acc.address === address)) {
+      throw new AccountExistsError('Account already exists in wallet');
+    }
+    const now = new Date().toISOString();
+    const accountMetadata: StandardAccountMetadata = {
+      id: this.generateAccountId(),
+      address,
+      publicKey: Buffer.from(secretKey.slice(32)).toString('hex'),
+      type: AccountType.STANDARD,
+      label:
+        hintLabel ||
+        `Recovered Account ${(currentWallet?.accounts.length ?? 0) + 1}`,
+      color: this.generateAccountColor(),
+      isHidden: false,
+      createdAt: now,
+      importedAt: now,
+      lastUsed: now,
+      mnemonic: '',
+      hasBackup: false,
+      backupVerified: false,
+    };
+    let committed = false;
+    try {
+      await this.persistNewKeyedAccount(
+        accountMetadata,
+        secretKey,
+        creationGen,
+        () => {
+          committed = true;
+        }
+      );
+    } catch (error) {
+      // After the wallet write the account exists: say so, not "failed".
+      if (committed) throw new FoundRestoreUnconfirmedError(error);
+      throw error;
+    }
+    return { id: accountMetadata.id, address };
   }
 
   static async importLedgerAccount(
@@ -871,7 +892,9 @@ export class MultiAccountWalletService {
     }
 
     // Delete the private key from secure storage
-    await AccountSecureStorage.deleteAccount(accountId);
+    await AccountSecureStorage.deleteAccount(accountId, {
+      walletAccount: true,
+    });
 
     // Create the new RemoteSignerAccountMetadata
     const remoteSignerAccount: RemoteSignerAccountMetadata = {
@@ -1464,6 +1487,7 @@ export class MultiAccountWalletService {
     // Remove from secure storage
     await AccountSecureStorage.deleteAccount(accountId, {
       requireNoSecret: expected.keyless,
+      walletAccount: true,
     });
 
     await this.storeWallet((current) => {

@@ -110,3 +110,68 @@ it('keeps every reveal caller behind withFreshAuth', () => {
     )
   ).toBe(true);
 });
+
+// TASK-478: the found-accounts readers. The storage methods that read or delete
+// a quarantined key are called only by the found-accounts service, and the
+// service's entry points only by its screen, each inside withFreshAuth.
+it('keeps the found-accounts key reads within their reviewed population', () => {
+  const files = sources(root);
+  const hits = (pattern: RegExp) =>
+    files
+      .filter((file) =>
+        new RegExp(pattern.source).test(fs.readFileSync(file, 'utf8'))
+      )
+      .map((file) => path.relative(root, file))
+      .sort();
+  expect(
+    hits(
+      /\b(scanQuarantinedAddresses|readQuarantinedKeyForRestore|deleteQuarantinedOrphan)\s*\(/
+    )
+  ).toEqual([
+    'services/secure/AccountSecureStorage.ts',
+    'services/secure/foundAccounts.ts',
+  ]);
+  expect(hits(/\breadQuarantinedKeyLocked\s*\(/)).toEqual([
+    'services/secure/AccountSecureStorage.ts',
+  ]);
+  expect(
+    hits(/\b(scanFoundAccounts|restoreFoundAccount|removeFoundAccount)\s*\(/)
+  ).toEqual([
+    'screens/settings/FoundAccountsScreen.tsx',
+    'services/secure/foundAccounts.ts',
+  ]);
+  const screen = fs.readFileSync(
+    path.join(root, 'screens/settings/FoundAccountsScreen.tsx'),
+    'utf8'
+  );
+  for (const name of [
+    'scanFoundAccounts',
+    'restoreFoundAccount',
+    'removeFoundAccount',
+  ]) {
+    const calls = screen.match(new RegExp(`\\b${name}\\s*\\(`, 'g')) ?? [];
+    const gated =
+      screen.match(
+        new RegExp(
+          `withFreshAuth\\(\\s*'[a-z_]+',\\s*\\(cap\\)\\s*=>\\s*${name}\\(`,
+          'g'
+        )
+      ) ?? [];
+    expect(`${name}: ${calls.length} calls, ${gated.length} gated`).toBe(
+      `${name}: ${gated.length} calls, ${gated.length} gated`
+    );
+    expect(gated.length).toBeGreaterThan(0);
+  }
+  const service = fs.readFileSync(
+    path.join(root, 'services/secure/foundAccounts.ts'),
+    'utf8'
+  );
+  for (const name of [
+    'scanFoundAccounts',
+    'restoreFoundAccount',
+    'removeFoundAccount',
+  ])
+    expect(
+      `${name}: ${new RegExp(`export async function ${name}\\([^)]*cap: FreshAuthCapability`).test(service)}`
+    ).toBe(`${name}: true`);
+});

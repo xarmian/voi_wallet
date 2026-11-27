@@ -126,6 +126,7 @@ describe('MultiAccountWalletService.deleteAccount — caller expectation (TASK-4
     });
     expect(mockSecureDeleteAccount).toHaveBeenCalledWith('acc-1', {
       requireNoSecret: true,
+      walletAccount: true,
     });
     expect(storedIds()).toEqual([]);
   });
@@ -139,6 +140,7 @@ describe('MultiAccountWalletService.deleteAccount — caller expectation (TASK-4
     });
     expect(mockSecureDeleteAccount).toHaveBeenCalledWith('acc-1', {
       requireNoSecret: false,
+      walletAccount: true,
     });
     expect(storedIds()).toEqual([]);
   });

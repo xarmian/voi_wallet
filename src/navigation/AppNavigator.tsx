@@ -35,6 +35,7 @@ import NFTDetailScreen from '@/screens/wallet/NFTDetailScreen';
 import CollectionDetailScreen from '@/screens/wallet/CollectionDetailScreen';
 import SettingsScreen from '@/screens/settings/SettingsScreen';
 import ShowRecoveryPhraseScreen from '@/screens/settings/ShowRecoveryPhraseScreen';
+import FoundAccountsScreen from '@/screens/settings/FoundAccountsScreen';
 import ChangePinScreen from '@/screens/settings/ChangePinScreen';
 import SecuritySettingsScreen from '@/screens/settings/SecuritySettingsScreen';
 import AboutScreen from '@/screens/settings/AboutScreen';
@@ -515,6 +516,7 @@ export type SettingsStackParamList = {
   ShowRecoveryPhrase: {
     accountAddress: string;
   };
+  FoundAccounts: undefined;
   ChangePin: undefined;
   WalletConnectSessions: undefined;
   AddWatchAccount: undefined;
@@ -702,6 +704,10 @@ function SettingsStackNavigator() {
         <SettingsStack.Screen
           name="ShowRecoveryPhrase"
           component={ShowRecoveryPhraseScreen}
+        />
+        <SettingsStack.Screen
+          name="FoundAccounts"
+          component={FoundAccountsScreen}
         />
         <SettingsStack.Screen name="ChangePin" component={ChangePinScreen} />
         <SettingsStack.Screen

@@ -48,12 +48,15 @@ jest.mock('@/services/network', () => ({
   },
 }));
 
-const mockSecureDeleteAccount = jest.fn(async (_id: string) => {});
+const mockSecureDeleteAccount = jest.fn(
+  async (_id: string, _options?: unknown) => {}
+);
 const mockProbe = jest.fn(async (_id: string) => true);
 
 jest.mock('../../secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
-    deleteAccount: (id: string) => mockSecureDeleteAccount(id),
+    deleteAccount: (id: string, options?: unknown) =>
+      mockSecureDeleteAccount(id, options),
     probeSecretPresenceStrict: (id: string) => mockProbe(id),
   },
 }));
@@ -108,7 +111,9 @@ describe('MultiAccountWalletService.convertStandardToRemoteSigner — own-key cu
           'device-1'
         );
       expect(converted.type).toBe(AccountType.REMOTE_SIGNER);
-      expect(mockSecureDeleteAccount).toHaveBeenCalledWith('acc-1');
+      expect(mockSecureDeleteAccount).toHaveBeenCalledWith('acc-1', {
+        walletAccount: true,
+      });
       expect(storedType()).toBe(AccountType.REMOTE_SIGNER);
     }
   );

@@ -74,6 +74,7 @@ import {
 } from '@/store/claimableStore';
 import UpdateBanner from '@/components/update/UpdateBanner';
 import RemovedAccountNoticeHost from '@/components/account/RemovedAccountNoticeHost';
+import FoundAccountsNoticeHost from '@/components/account/FoundAccountsNoticeHost';
 import { useUpdateStore } from '@/store/updateStore';
 import { useUpdates } from 'expo-updates';
 import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsModal';
@@ -1491,6 +1492,16 @@ export default function HomeScreen() {
               <RemovedAccountNoticeHost
                 onReimport={() =>
                   navigation.navigate('MnemonicImport', { isOnboarding: false })
+                }
+              />
+              <FoundAccountsNoticeHost
+                onReview={() =>
+                  navigation.dispatch(
+                    CommonActions.navigate({
+                      name: 'Settings',
+                      params: { screen: 'FoundAccounts' },
+                    })
+                  )
                 }
               />
               {/* Update Available Banner */}

@@ -32,6 +32,8 @@ import DeleteAccountModal from '@/components/account/DeleteAccountModal';
 import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
 import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
 import { formatAddress } from '@/utils/address';
+import { useFoundAccountsSummary } from '@/hooks/useFoundAccountsSummary';
+import { actionableCount } from '@/services/secure/foundAccountsCount';
 import { AccountMetadata, AccountType, isBackupVerified } from '@/types/wallet';
 import { useIsCurrentNetworkHealthy } from '@/store/networkStore';
 import NetworkIndicator from '@/components/network/NetworkIndicator';
@@ -268,6 +270,13 @@ export default function SettingsScreen() {
   );
   const accounts = useAccounts();
   const deleteAccount = useWalletStore((state) => state.deleteAccount);
+  // TASK-478: keys found on this device (read on focus; no key is read).
+  const foundAccounts = useFoundAccountsSummary();
+  // Counted as Home's notice counts them: an in-wallet copy counts unless the
+  // scan found its wallet account holds the key itself.
+  const foundCount = foundAccounts.summary
+    ? actionableCount(foundAccounts.summary)
+    : 0;
   const updateAccountLabel = useWalletStore(
     (state) => state.updateAccountLabel
   );
@@ -652,6 +661,18 @@ export default function SettingsScreen() {
                   : undefined
               }
             />
+            {foundCount > 0 || foundAccounts.error ? (
+              <SettingsRow
+                icon="search-outline"
+                label="Accounts found on this device"
+                onPress={() => navigation.navigate('FoundAccounts')}
+                subtitle={
+                  foundCount > 0
+                    ? `${foundCount} account${foundCount === 1 ? '' : 's'} found on this device`
+                    : "Couldn't check"
+                }
+              />
+            ) : null}
             <SettingsRow
               icon="save-outline"
               label="Backup Wallet"
