@@ -48,6 +48,8 @@ import {
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { realtimeService } from '@/services/realtime';
 import { redactError } from '@/utils/logRedaction';
+import { withTimeout } from '@/utils/withTimeout';
+import { registerWipeReset, wipeEpoch, wipedSince } from '@/services/wipe/gate';
 import {
   deriveRekeyState,
   RekeyState,
@@ -668,13 +670,18 @@ const loadPersistedMultiNetworkBalanceCache = async (): Promise<
 const persistMultiNetworkBalanceToStorage = async (
   accountId: string,
   balance: MultiNetworkBalance,
-  lastUpdated: number
+  lastUpdated: number,
+  // The wipe epoch when the balance was fetched: a wipe since then must not
+  // see the previous wallet's balance written back (TASK-492).
+  epoch: number
 ) => {
   try {
     const cacheKey = getMultiNetworkCacheKey(accountId);
 
     // Load existing cache
     const existingCache = await loadPersistedMultiNetworkBalanceCache();
+    // No await between this check and the write below.
+    if (wipedSince(epoch)) return;
 
     // Update with new balance data
     const updatedCache = {
@@ -703,6 +710,9 @@ const persistMultiNetworkBalanceToStorage = async (
 // twice on cold start. It is reset on settle, so a later explicit
 // initialize()/refresh()/account-switch still re-runs initialization normally.
 let walletInitializationPromise: Promise<void> | null = null;
+
+/** Bound on the strict wallet probe a load runs when it finds no wallet. */
+const WALLET_PROBE_TIMEOUT_MS = 5000;
 
 // In-flight balance-load dedup. Keyed by `${accountId}:${networkId}` (NOT
 // accountId alone): loadAccountBalance captures the network before its await and
@@ -767,6 +777,9 @@ export const useWalletStore = create<WalletState>()(
         resolveInitialization = resolve;
       });
 
+      // A wipe while this pass reads must not see it install the previous
+      // wallet afterwards (TASK-492).
+      const epoch = wipeEpoch();
       try {
         set({ isLoading: true, lastError: null });
 
@@ -879,6 +892,7 @@ export const useWalletStore = create<WalletState>()(
             });
           }
 
+          if (wipedSince(epoch)) return;
           set({
             wallet,
             accountStates,
@@ -891,13 +905,21 @@ export const useWalletStore = create<WalletState>()(
           // that succeeds and finds no accounts is a genuine empty wallet; a
           // read that fails, or that finds accounts the first read missed, is a
           // failed load, and Home must not tell the user to get started.
+          //
+          // Bounded (TASK-469): refresh() waits on this pass, so a probe that
+          // never settles would hang every awaited refresh. A timeout is a
+          // failed load.
           let loadFailed: boolean;
           try {
-            loadFailed =
-              await MultiAccountWalletService.hasWalletWithAccountsStrict();
+            loadFailed = await withTimeout(
+              MultiAccountWalletService.hasWalletWithAccountsStrict(),
+              WALLET_PROBE_TIMEOUT_MS,
+              () => new Error('wallet probe timed out')
+            );
           } catch {
             loadFailed = true;
           }
+          if (wipedSince(epoch)) return;
           set({
             isInitialized: true,
             walletLoadFailed: loadFailed,
@@ -2873,11 +2895,13 @@ export const useWalletStore = create<WalletState>()(
         });
 
         // Persist the multi-network balance cache
+        const persistEpoch = wipeEpoch();
         setTimeout(() => {
           persistMultiNetworkBalanceToStorage(
             accountId,
             multiNetworkBalance,
-            now
+            now,
+            persistEpoch
           );
         }, 0);
       } catch (error) {
@@ -3763,3 +3787,32 @@ export const useRekeyState = (address: string, networkId: NetworkId) => {
     useShallow((state) => selectRekeyState(state, address, networkId))
   );
 };
+
+/** Move every per-account request token on, so no in-flight load can commit. */
+const supersedeAll = (seq: Map<string, number>) => {
+  for (const [accountId, token] of seq) seq.set(accountId, token + 1);
+};
+
+// TASK-492: forget the previous wallet without persisting. Every in-flight
+// balance, multi-network and transactions load is superseded first, so none
+// can commit (or persist) into the reset store.
+registerWipeReset('wallet', () => {
+  invalidateBalanceRequests();
+  supersedeAll(transactionsRequestSeq);
+  supersedeAll(multiNetworkRequestSeq);
+  balanceLoadsInFlight.clear();
+  forcedBalanceFollowUps.clear();
+  clearWalletUICache();
+  useWalletStore.setState({
+    wallet: null,
+    isInitialized: false,
+    isLoading: false,
+    lastError: null,
+    walletLoadFailed: false,
+    walletLoadFailures: 0,
+    accountStates: {},
+    isAccountSelectorVisible: false,
+    isAddAccountModalVisible: false,
+    selectedAccountType: null,
+  });
+});

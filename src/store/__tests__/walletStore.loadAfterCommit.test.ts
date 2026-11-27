@@ -270,3 +270,59 @@ describe('TASK-514: the failure counter and what does NOT count as a failed wall
     expect(store().walletLoadFailures).toBe(0);
   });
 });
+
+describe('TASK-469: the strict probe is bounded', () => {
+  it('a probe that never settles counts as a failed load after 5 s, so an awaited refresh finishes', async () => {
+    jest.useFakeTimers();
+    try {
+      mockGetCurrentWallet.mockResolvedValue(null);
+      mockHasWalletWithAccountsStrict.mockImplementation(
+        () => new Promise<boolean>(() => {})
+      );
+      let settled = false;
+      const refreshed = store()
+        .refresh()
+        .then(() => {
+          settled = true;
+        });
+      await jest.advanceTimersByTimeAsync(4900);
+      expect(settled).toBe(false);
+      await jest.advanceTimersByTimeAsync(200);
+      await refreshed;
+      expect(settled).toBe(true);
+      expect(store().isInitialized).toBe(true);
+      expect(store().walletLoadFailed).toBe(true);
+      expect(store().isLoading).toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe('TASK-492: a wipe resets the wallet store without persisting', () => {
+  it('the wallet and every account state are cleared', async () => {
+    const { runWipeResets } = require('@/services/wipe/gate');
+    mockGetCurrentWallet.mockResolvedValue(walletWith(['a', 'b']));
+    await store().initialize();
+    expect(Object.keys(store().accountStates)).toEqual(['a', 'b']);
+    runWipeResets();
+    expect(store().wallet).toBeNull();
+    expect(store().accountStates).toEqual({});
+    expect(store().isInitialized).toBe(false);
+    expect(store().walletLoadFailed).toBe(false);
+  });
+
+  it('a load in flight when the wipe starts does not install the previous wallet', async () => {
+    const { runWipeResets } = require('@/services/wipe/gate');
+    let finish: (w: Wallet | null) => void = () => {};
+    mockGetCurrentWallet.mockImplementationOnce(
+      () => new Promise<Wallet | null>((resolve) => (finish = resolve))
+    );
+    const loading = store().initialize();
+    runWipeResets();
+    finish(walletWith(['a']));
+    await loading;
+    expect(store().wallet).toBeNull();
+    expect(store().accountStates).toEqual({});
+  });
+});

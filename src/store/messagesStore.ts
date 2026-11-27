@@ -25,6 +25,7 @@ import { AppLockSignal } from '@/services/secure/appLockState';
 import { shouldSkipForOffline } from '@/services/network/offline';
 import { useFriendsStore } from './friendsStore';
 import { useWalletStore } from './walletStore';
+import { registerWipeReset } from '@/services/wipe/gate';
 
 // TASK-462: account adoption follows the wallet's active account.
 function activeWalletAddress(): string | null {
@@ -156,6 +157,14 @@ const getHiddenStorageKey = (userAddress: string) =>
   `${HIDDEN_THREADS_STORAGE_KEY_PREFIX}${userAddress}`;
 const getCommittedIdStorageKey = (userAddress: string) =>
   `${COMMITTED_ID_STORAGE_KEY_PREFIX}${userAddress}`;
+
+/**
+ * Persist only for the account the store holds (TASK-492). A wipe or a
+ * clearCache drops the account first, so data read before it is not written
+ * back after it.
+ */
+const storeHolds = (userAddress: string) =>
+  useMessagesStore.getState().currentUserAddress === userAddress;
 
 interface MessagesState {
   // State
@@ -1036,6 +1045,31 @@ export const useMessagesStore = create<MessagesState>()(
   }))
 );
 
+// TASK-492: forget the previous wallet's messages without persisting. The
+// account, loading and key-check counters move on, so no action in flight can
+// commit into the reset store.
+registerWipeReset('messages', () => {
+  const { pollingInterval } = useMessagesStore.getState();
+  if (pollingInterval) clearInterval(pollingInterval);
+  accountEpoch++;
+  accountSwitches++;
+  loadingOwner++;
+  inFlightThreadFetches.clear();
+  MessagingService.clearKeyCache();
+  useMessagesStore.setState({
+    threads: {},
+    currentUserAddress: null,
+    isLoading: false,
+    isInitialized: false,
+    isKeyRegistered: false,
+    lastError: null,
+    pollingInterval: null,
+    committedId: null,
+    hiddenThreads: new Set<string>(),
+    showHiddenThreads: false,
+  });
+});
+
 /**
  * Merge chain-fetched messages into an existing list, deduplicating by ID.
  *
@@ -1265,6 +1299,7 @@ async function persistThreads(
   userAddress: string,
   threads: Record<string, MessageThread>
 ): Promise<boolean> {
+  if (!storeHolds(userAddress)) return false;
   try {
     const storageKey = getStorageKey(userAddress);
     // Only persist threads that have actual messages, and never a
@@ -1329,6 +1364,7 @@ async function persistCommittedId(
   userAddress: string,
   id: number | null
 ): Promise<void> {
+  if (!storeHolds(userAddress)) return;
   try {
     const storageKey = getCommittedIdStorageKey(userAddress);
     if (id == null) {
@@ -1366,6 +1402,7 @@ async function persistHiddenThreads(
   userAddress: string,
   hiddenThreads: Set<string>
 ): Promise<void> {
+  if (!storeHolds(userAddress)) return;
   try {
     const storageKey = getHiddenStorageKey(userAddress);
     // Convert Set to array for JSON serialization

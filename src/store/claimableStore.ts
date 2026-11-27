@@ -12,6 +12,7 @@ import MimirApiService, { Arc200Approval } from '@/services/mimir';
 import EnvoiService from '@/services/envoi';
 import { ClaimableItem, TokenApproval } from '@/types/claimable';
 import { dedupeLatestApprovals } from '@/utils/arc200Approvals';
+import { registerWipeReset } from '@/services/wipe/gate';
 
 const HIDDEN_STORAGE_KEY_PREFIX = '@claimable/hidden/';
 
@@ -312,6 +313,27 @@ export const useClaimableStore = create<ClaimableState>()(
     },
   }))
 );
+
+// TASK-492: forget the previous wallet's claimables without persisting. With
+// no current account, no fetch in flight can commit (see isLatest).
+registerWipeReset('claimable', () => {
+  inFlightFetches.clear();
+  useClaimableStore.setState({
+    approvals: [],
+    claimableItems: [],
+    itemsAccountAddress: null,
+    hiddenApprovals: new Set<string>(),
+    hiddenApprovalsAccount: null,
+    showHiddenApprovals: false,
+    isLoading: false,
+    isValidating: false,
+    lastFetchedAt: {},
+    errorBackoffAt: {},
+    hasPartialFailure: false,
+    currentAccountAddress: null,
+    lastError: null,
+  });
+});
 
 type ClaimableSet = (partial: Partial<ClaimableState>) => void;
 type ClaimableGet = () => ClaimableState;

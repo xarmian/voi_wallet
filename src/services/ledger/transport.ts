@@ -10,6 +10,7 @@ import {
   LedgerAccountError,
 } from '@/types/wallet';
 import { ledgerDeviceStorage, LedgerDeviceStorage } from './storage';
+import { registerWipeReset } from '@/services/wipe/gate';
 import { isLedgerSigningInProgress } from '@/services/ledger/signingState';
 import { isPermissionDeniedError } from '@/utils/errorMapping';
 import { redactError } from '@/utils/logRedaction';
@@ -1455,6 +1456,19 @@ export class LedgerTransportService {
   }
 
   /**
+   * TASK-492: forget the known devices without persisting, and cancel every
+   * pending device save so none lands after a wipe. Connections and listeners
+   * are left alone.
+   */
+  resetForWipe(): void {
+    for (const timer of this.saveThrottleTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.saveThrottleTimers.clear();
+    this.devices.clear();
+  }
+
+  /**
    * Dispose the transport service: stop discovery, disconnect, clear devices and listeners.
    */
   async dispose(): Promise<void> {
@@ -1477,3 +1491,7 @@ export class LedgerTransportService {
 }
 
 export const ledgerTransportService = LedgerTransportService.getInstance();
+
+registerWipeReset('ledger-devices', () =>
+  ledgerTransportService.resetForWipe()
+);

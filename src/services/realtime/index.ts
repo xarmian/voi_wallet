@@ -41,6 +41,7 @@ import type {
 } from '@supabase/supabase-js';
 import { AppState, AppStateStatus } from 'react-native';
 import { getSupabaseClient, isSupabaseConfigured } from '../supabase';
+import { registerWipeReset } from '../wipe/gate';
 import type { WalletEvent } from '../notifications/types';
 
 /**
@@ -141,7 +142,13 @@ export class RealtimeService {
    */
   static getInstance(): RealtimeService {
     if (!RealtimeService.instance) {
-      RealtimeService.instance = new RealtimeService();
+      const instance = new RealtimeService();
+      RealtimeService.instance = instance;
+      // TASK-492: a wipe drops the previous wallet's address subscriptions.
+      // Fire-and-forget: the channel teardown is network and must not hold the wipe.
+      registerWipeReset('realtime', () => {
+        void instance.cleanup().catch(() => {});
+      });
     }
     return RealtimeService.instance;
   }

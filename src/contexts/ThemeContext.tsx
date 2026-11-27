@@ -29,6 +29,7 @@ import {
   type ColorPalette,
 } from '../services/theme/colorExtraction';
 import { generateThemeFromColors } from '../services/theme/themeGenerator';
+import { registerWipeReset } from '../services/wipe/gate';
 
 interface ThemeContextType {
   theme: Theme;
@@ -382,6 +383,19 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   useEffect(() => {
     loadThemeData();
   }, [loadThemeData]);
+
+  // TASK-469: a wipe removes the picked NFT (it names a token the previous
+  // wallet owned). Drop it from memory too; with no pick the base theme shows,
+  // whatever the kept toggles say.
+  useEffect(
+    () =>
+      registerWipeReset('nft-theme', () => {
+        setNftThemeDataState(null);
+        setNftExtractedColors(null);
+        setNftPalettes([]);
+      }),
+    []
+  );
 
   useEffect(() => {
     const subscription = Appearance.addChangeListener(({ colorScheme }) => {

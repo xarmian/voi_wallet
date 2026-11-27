@@ -24,6 +24,7 @@ import { AccountSecureStorage } from './AccountSecureStorage';
 import { SessionKeyVault } from './SessionKeyVault';
 import { AppLockSignal } from './appLockState';
 import { clearMessagingKeyCache } from '../messaging/keyDerivation';
+import { registerWipeReset } from '../wipe/gate';
 
 /**
  * Run every step even if an earlier one throws, then rethrow the first error.
@@ -55,6 +56,9 @@ export function clearSessionSecurity(): void {
     () => clearMessagingKeyCache(),
   ]);
 }
+
+// TASK-492: a wipe drops every piece of in-memory session key material too.
+registerWipeReset('session-security', clearSessionSecurity);
 
 /**
  * Enter the locked state synchronously (Codex P1-E race fix). Order matters:

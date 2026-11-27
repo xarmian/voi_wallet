@@ -11,6 +11,7 @@ import {
   SigningProgress,
   REMOTE_SIGNER_CONSTANTS,
 } from '../types/remoteSigner';
+import { registerWipeReset, wipeEpoch, wipedSince } from '@/services/wipe/gate';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -73,10 +74,14 @@ async function writeProcessedIds(ids: string[]): Promise<void> {
 }
 
 function enqueueProcessedPersist(getIds: () => Set<string>): void {
+  // A write queued before a wipe must not land after it (TASK-492).
+  const epoch = wipeEpoch();
   processedPersistChain = processedPersistChain
     // Recover before chaining so a prior failure can never block later writes.
     .catch(() => {})
-    .then(() => writeProcessedIds(Array.from(getIds())));
+    .then(() =>
+      wipedSince(epoch) ? undefined : writeProcessedIds(Array.from(getIds()))
+    );
 }
 
 /**
@@ -225,6 +230,7 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
         resolveInitialization = resolve;
       });
 
+      const epoch = wipeEpoch();
       try {
         // Batch the independent cold-boot reads (F-03). APP_MODE reuses the
         // promise getAppModeEarly() already cached at startup — AppNavigator
@@ -238,6 +244,8 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
             AsyncStorage.getItem(STORAGE_KEYS.PAIRED_SIGNERS),
             AsyncStorage.getItem(STORAGE_KEYS.PROCESSED_REQUESTS),
           ]);
+        // A wipe during the reads reset the store: do not install what they read.
+        if (wipedSince(epoch)) return;
 
         // Parse signer config (if exists)
         const signerConfig: SignerDeviceConfig | null = storedConfig
@@ -296,8 +304,10 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
 
     // ============ Mode Switching ============
     setAppMode: async (mode: AppMode) => {
+      const epoch = wipeEpoch();
       try {
         await AsyncStorage.setItem(STORAGE_KEYS.APP_MODE, mode);
+        if (wipedSince(epoch)) return;
         set({ appMode: mode });
         console.log(`[RemoteSignerStore] App mode set to: ${mode}`);
       } catch (error) {
@@ -308,6 +318,7 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
 
     // ============ Signer Mode Actions ============
     initializeSignerConfig: async (deviceName: string) => {
+      const epoch = wipeEpoch();
       try {
         const config: SignerDeviceConfig = {
           deviceId: generateDeviceId(),
@@ -319,6 +330,7 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
           STORAGE_KEYS.SIGNER_CONFIG,
           JSON.stringify(config)
         );
+        if (wipedSince(epoch)) return;
         set({ signerConfig: config });
         console.log(
           '[RemoteSignerStore] Signer config initialized:',
@@ -340,10 +352,12 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       }
 
       const updated = { ...signerConfig, deviceName: name };
+      const epoch = wipeEpoch();
       await AsyncStorage.setItem(
         STORAGE_KEYS.SIGNER_CONFIG,
         JSON.stringify(updated)
       );
+      if (wipedSince(epoch)) return;
       set({ signerConfig: updated });
     },
 
@@ -463,10 +477,12 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       const updated = new Map(pairedSigners);
       updated.set(info.deviceId, info);
 
+      const epoch = wipeEpoch();
       await AsyncStorage.setItem(
         STORAGE_KEYS.PAIRED_SIGNERS,
         JSON.stringify(Array.from(updated.entries()))
       );
+      if (wipedSince(epoch)) return;
       set({ pairedSigners: updated });
       console.log('[RemoteSignerStore] Added paired signer:', info.deviceId);
     },
@@ -476,10 +492,12 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       const updated = new Map(pairedSigners);
       updated.delete(deviceId);
 
+      const epoch = wipeEpoch();
       await AsyncStorage.setItem(
         STORAGE_KEYS.PAIRED_SIGNERS,
         JSON.stringify(Array.from(updated.entries()))
       );
+      if (wipedSince(epoch)) return;
       set({ pairedSigners: updated });
       console.log('[RemoteSignerStore] Removed paired signer:', deviceId);
     },
@@ -492,10 +510,12 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       const updated = new Map(pairedSigners);
       updated.set(deviceId, { ...signer, lastActivity: Date.now() });
 
+      const epoch = wipeEpoch();
       await AsyncStorage.setItem(
         STORAGE_KEYS.PAIRED_SIGNERS,
         JSON.stringify(Array.from(updated.entries()))
       );
+      if (wipedSince(epoch)) return;
       set({ pairedSigners: updated });
     },
 
@@ -505,6 +525,21 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
     },
   }))
 );
+
+// TASK-492: forget pairings, the signer config and processed ids without
+// persisting; the mode goes back to wallet.
+registerWipeReset('remote-signer', () => {
+  appModePromise = null;
+  useRemoteSignerStore.setState({
+    appMode: 'wallet',
+    isInitialized: false,
+    signerConfig: null,
+    pendingRequest: null,
+    signingProgress: createInitialSigningProgress(),
+    processedRequestIds: new Set(),
+    pairedSigners: new Map(),
+  });
+});
 
 // ============ Selector Hooks ============
 
