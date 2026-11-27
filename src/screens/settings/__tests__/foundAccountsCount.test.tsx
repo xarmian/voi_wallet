@@ -9,7 +9,10 @@ import SettingsScreen from '../SettingsScreen';
 import FoundAccountsNoticeHost from '@/components/account/FoundAccountsNoticeHost';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 import type { FoundSummary } from '@/services/secure/foundAccounts';
-import { actionableOf } from '@/services/secure/foundAccountsCount';
+import {
+  actionableOf,
+  walletHoldsOwnKey,
+} from '@/services/secure/foundAccountsCount';
 
 const READY = 'AAAAREADYADDRESSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const WALLET = 'BBBBWALLETADDRESSBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
@@ -120,6 +123,23 @@ it('an in-wallet copy whose wallet account has no key counts; one with a key doe
     ids: ['w2'],
     address: READY,
   });
+});
+
+it('a watch or Ledger account counts as keyless even when its slot holds something', () => {
+  for (const walletType of [AccountType.WATCH, AccountType.LEDGER]) {
+    const row = {
+      kind: 'in-wallet' as const,
+      id: 'w3',
+      address: READY,
+      walletLabel: 'Watched',
+      walletType,
+      walletHasKey: true,
+    };
+    // The row and the count use one rule, so a key the screen calls the
+    // only usable copy is also listed in Settings and announced on Home.
+    expect(walletHoldsOwnKey(row)).toBe(false);
+    expect(actionableOf({ ...mockSummary, rows: [row] }).count).toBe(1);
+  }
 });
 
 it('Settings and Home show the same count', async () => {

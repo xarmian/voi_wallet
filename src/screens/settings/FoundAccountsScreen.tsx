@@ -23,7 +23,10 @@ import {
   FoundAccountOnlyCopyError,
   FoundAccountWalletKeyUncheckedError,
 } from '@/services/secure/AccountSecureStorage';
-import { actionableCount } from '@/services/secure/foundAccountsCount';
+import {
+  actionableCount,
+  walletHoldsOwnKey,
+} from '@/services/secure/foundAccountsCount';
 import {
   readFoundAccountsSummary,
   removeFoundAccount,
@@ -32,7 +35,6 @@ import {
   type FoundRow,
   type FoundSummary,
 } from '@/services/secure/foundAccounts';
-import { AccountType } from '@/types/wallet';
 import { formatAddress } from '@/utils/address';
 
 type ScreenState =
@@ -49,15 +51,13 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const onlyCopyText = (address: string) =>
   `This key is the only usable copy for ${formatAddress(address)} on this device. It's kept here.`;
 
+/** The wallet account's name, or its short address when it has no label. */
+const walletName = (row: Extract<FoundRow, { kind: 'in-wallet' }>) =>
+  row.walletLabel || formatAddress(row.address);
+
 /** An in-wallet row whose wallet account can't use the key: how to recover. */
 const onlyCopyRowText = (row: Extract<FoundRow, { kind: 'in-wallet' }>) =>
-  `${onlyCopyText(row.address)} To use it, remove the account "${row.walletLabel}" from your wallet, then restore it here.`;
-
-/** Remove is offered only when the wallet account holds a key of its own. */
-const walletKeepsKey = (row: Extract<FoundRow, { kind: 'in-wallet' }>) =>
-  row.walletHasKey &&
-  row.walletType !== AccountType.WATCH &&
-  row.walletType !== AccountType.LEDGER;
+  `${onlyCopyText(row.address)} To use it, remove the account "${walletName(row)}" from your wallet, then restore it here.`;
 
 function authAlert(error: FreshAuthError, what: string) {
   // A cancel shows nothing; other auth failures say so without detail.
@@ -133,7 +133,9 @@ export default function FoundAccountsScreen() {
       }
       if (!current()) return;
       if (!summary.hasPin) {
-        setState({ kind: 'no-pin', count: actionableCount(summary) });
+        const count = actionableCount(summary);
+        // Nothing to act on: the empty state, never "0 accounts found".
+        setState(count > 0 ? { kind: 'no-pin', count } : { kind: 'empty' });
         return;
       }
       if (summary.unscannedIds.length > 0) {
@@ -341,10 +343,10 @@ export default function FoundAccountsScreen() {
     return (
       <View key={row.id} style={styles.card}>
         <Text style={styles.address}>{formatAddress(row.address)}</Text>
-        {walletKeepsKey(row) ? (
+        {walletHoldsOwnKey(row) ? (
           <>
             <Text style={styles.label}>
-              {`Already in your wallet as ${row.walletLabel}`}
+              {`Already in your wallet as ${walletName(row)}`}
             </Text>
             <View style={styles.actions}>
               {button(

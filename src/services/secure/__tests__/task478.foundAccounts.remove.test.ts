@@ -267,4 +267,27 @@ describe('TASK-478 remove keeps the only usable copy', () => {
     expect(mockPlatform.__secure.get(SECRET(formatA.id))).toBe(before);
     expect(readRegistry()).toContain(formatA.id);
   });
+
+  it('an unlocked vault with a corrupt wallet slot: the found key is the only usable copy, kept', async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans({
+      formatAMnemonic: CANARY_MNEMONIC,
+    });
+    unregister = installPrompter(true).unregister;
+    await scanAll();
+    const account = await MultiAccountWalletService.importStandardAccount({
+      type: AccountType.STANDARD,
+      mnemonic: CANARY_MNEMONIC,
+      label: 'Imported',
+    });
+    // The wallet account's own slot holds something that doesn't open;
+    // unlocking can't change that, so this isn't an "unlock and retry" case.
+    mockPlatform.__secure.set(SECRET(account.id), '{"not":"a key"}');
+    const before = mockPlatform.__secure.get(SECRET(formatA.id));
+
+    await expect(remove(formatA.id)).rejects.toBeInstanceOf(
+      FoundAccountOnlyCopyError
+    );
+    expect(mockPlatform.__secure.get(SECRET(formatA.id))).toBe(before);
+    expect(readRegistry()).toContain(formatA.id);
+  });
 });

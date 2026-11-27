@@ -242,6 +242,54 @@ describe('FoundAccountsScreen', () => {
     expect(prompts).toEqual([]);
   });
 
+  it('no PIN and only duplicate in-wallet copies shows the empty state, not "0 accounts"', async () => {
+    prompter(true);
+    summaryMock.mockResolvedValue(
+      summary({
+        hasPin: false,
+        presentCount: 1,
+        rows: [
+          {
+            kind: 'in-wallet',
+            id: 'w1',
+            address: READY,
+            walletLabel: '',
+            walletType: AccountType.STANDARD,
+            walletHasKey: true,
+          },
+        ],
+      })
+    );
+    const view = await render(<FoundAccountsScreen />);
+    await view.findByText('No accounts found on this device.');
+    expect(view.queryByText(/0 accounts/)).toBeNull();
+  });
+
+  it('an unlabelled wallet account is named by its short address', async () => {
+    prompter(true);
+    summaryMock.mockResolvedValue(
+      summary({
+        presentCount: 1,
+        rows: [
+          {
+            kind: 'in-wallet',
+            id: 'w1',
+            address: READY,
+            walletLabel: '',
+            walletType: AccountType.WATCH,
+            walletHasKey: false,
+          },
+        ],
+      })
+    );
+    const view = await render(<FoundAccountsScreen />);
+    await view.findByText(
+      new RegExp(
+        `remove the account "${formatAddress(READY)}" from your wallet`
+      )
+    );
+  });
+
   it('states: empty', async () => {
     prompter(true);
     summaryMock.mockResolvedValue(summary());

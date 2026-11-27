@@ -2,19 +2,37 @@
  * TASK-478: how found keys are counted. No storage imports: Settings, the Home
  * notice and the found screen count from a summary they already hold.
  */
+import { AccountType } from '@/types/wallet';
 import type { FoundRow, FoundSummary } from './foundAccounts';
 
 /**
+ * The one rule for whether an in-wallet copy's wallet account can use a key
+ * of its own. The count, the row text and the Remove button all use it. A
+ * watch or Ledger account never signs with a stored key, whatever its slot
+ * holds. This is presence only, never a decrypt; Remove re-checks the slot
+ * under the key-mutation mutex.
+ */
+export function walletHoldsOwnKey(
+  row: Extract<FoundRow, { kind: 'in-wallet' }>
+): boolean {
+  return (
+    row.walletHasKey &&
+    row.walletType !== AccountType.WATCH &&
+    row.walletType !== AccountType.LEDGER
+  );
+}
+
+/**
  * A row the user can act on: a ready or unscanned key, or an in-wallet copy
- * whose wallet account holds no key of its own (a watch, Ledger or emptied
- * account), since the found key is then its only usable copy. A copy whose
- * wallet account already holds a key is a duplicate and is not counted.
+ * whose wallet account can't use a key of its own (walletHoldsOwnKey), since
+ * the found key is then its only usable copy. A copy whose wallet account
+ * already holds a key is a duplicate and is not counted.
  */
 function isActionable(row: FoundRow): boolean {
   return (
     row.kind === 'ready' ||
     row.kind === 'unscanned' ||
-    (row.kind === 'in-wallet' && !row.walletHasKey)
+    (row.kind === 'in-wallet' && !walletHoldsOwnKey(row))
   );
 }
 

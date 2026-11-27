@@ -3005,7 +3005,9 @@ export class AccountSecureStorage {
           owner.id,
           address
         );
-        if (slot.state === 'occupied-unreadable')
+        // Only a locked vault is worth an "unlock and retry": a corrupt,
+        // legacy-only or undecryptable slot stays that way after unlocking.
+        if (slot.state === 'occupied-unreadable' && slot.vault === 'locked')
           throw new FoundAccountWalletKeyUncheckedError();
         if (slot.state !== 'key-matches') throw new FoundAccountOnlyCopyError();
       }
