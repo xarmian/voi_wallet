@@ -287,9 +287,10 @@ describe('TASK-478 restore a found account', () => {
     jest
       .spyOn(AccountSecureStorage, 'commitPendingCreate')
       .mockImplementation(async (id, token) => {
-        await original(id, token);
+        const committed = await original(id, token);
         // The new slot no longer holds this key.
         mockPlatform.__secure.set(SECRET(id), '{"accountId":"x"}');
+        return committed;
       });
 
     expect(await restore(formatA)).toEqual({
@@ -340,8 +341,9 @@ describe('TASK-478 restore a found account', () => {
     jest
       .spyOn(AccountSecureStorage, 'commitPendingCreate')
       .mockImplementation(async (id, token) => {
-        await original(id, token);
+        const committed = await original(id, token);
         mockPlatform.__secure.set(SECRET(id), '{"accountId":"x"}');
+        return committed;
       });
     expect((await restore(formatA)).kind).toBe('restored-copy-kept');
     const account = await walletAccountAt(formatA.address);

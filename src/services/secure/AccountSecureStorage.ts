@@ -1514,6 +1514,43 @@ export class AccountSecureStorage {
   }
 
   /**
+   * TASK-529: upgrade keys this device just stored to the v2 envelope, so a key
+   * added in an unlocked session does not wait on the device key for its first
+   * read or the next unlock. Call it only once the store is FINAL (for a
+   * journaled creation, after commitPendingCreate removed its own entry) and
+   * outside the key-mutation mutex. The store itself still writes Format A
+   * (storeAccountLocked); this runs the existing migrateAccountToV2 on top,
+   * with the same gate as the lazy read trigger: only a secret the vault holds,
+   * read together with its epoch, and the migrator's own current-credential
+   * check. Fire-and-forget and sequential (one scrypt at a time, as the
+   * sweep); it stops when the vault no longer holds a secret. Never throws.
+   */
+  static scheduleV2UpgradeAfterStore(accountIds: readonly string[]): void {
+    if (accountIds.length === 0 || SessionKeyVault.getSecret() === null) {
+      return;
+    }
+    const ids = [...accountIds];
+    void (async () => {
+      for (const id of ids) {
+        // Secret, source and epoch read together, with no await between them.
+        const secret = SessionKeyVault.getSecret();
+        if (secret === null) return;
+        const vaultEpoch = SessionKeyVault.currentEpoch();
+        try {
+          await this.migrateAccountToV2(
+            id,
+            secret,
+            SessionKeyVault.getSecretSource(),
+            vaultEpoch
+          );
+        } catch {
+          // migrateAccountToV2 never throws; one id never stops the rest.
+        }
+      }
+    })();
+  }
+
+  /**
    * Public read-path legacy fold (Format B → Format A). Acquires the GLOBAL
    * key-mutation mutex so its secret write can never bypass the lock (P1-1a).
    * Reached ONLY outside the mutex (readMetadata / getPrivateKey); in-mutex
@@ -1627,9 +1664,17 @@ export class AccountSecureStorage {
     // secret payload AND the account-list mutation — so a store can never
     // interleave with a setupPin/changePin rewrap enumeration+commit. See the
     // keyMutationChain comment above.
-    return this.runKeyMutationExclusive(() =>
+    await this.runKeyMutationExclusive(() =>
       this.storeAccountLocked(account, privateKey)
     );
+    // TASK-529: the store is final and the mutex released.
+    if (
+      privateKey &&
+      (account.type === AccountType.STANDARD ||
+        account.type === AccountType.REKEYED)
+    ) {
+      this.scheduleV2UpgradeAfterStore([account.id]);
+    }
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -2020,6 +2065,13 @@ export class AccountSecureStorage {
         after
       );
       return { kind: 'unconfirmed' };
+    }).then((result) => {
+      // TASK-529: a key read back as this record's own is upgraded once the
+      // mutex is released. Nothing else this repair returns wrote a usable key.
+      if (result.kind === 'repaired') {
+        this.scheduleV2UpgradeAfterStore([entry.id]);
+      }
+      return result;
     });
   }
 
@@ -2202,15 +2254,26 @@ export class AccountSecureStorage {
    */
   static async commitPendingCreate(
     accountId: string,
-    token: string
-  ): Promise<void> {
-    return this.runKeyMutationExclusive(async () => {
+    token: string,
+    // TASK-529: `upgrade: false` leaves the v2 upgrade to the caller, which
+    // schedules its committed ids in one batch (a restore).
+    options: { upgrade?: boolean } = {}
+  ): Promise<boolean> {
+    const committed = await this.runKeyMutationExclusive(async () => {
       const journal = await this.readPendingCreateJournal();
       if (journal[accountId] === token) {
         delete journal[accountId];
         await this.writePendingCreateJournal(journal);
+        return true;
       }
+      return false;
     });
+    // TASK-529: only once THIS attempt's journal entry is gone (so no rollback
+    // of it can follow) and outside the mutex.
+    if (committed && options.upgrade !== false) {
+      this.scheduleV2UpgradeAfterStore([accountId]);
+    }
+    return committed;
   }
 
   /**
