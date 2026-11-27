@@ -1316,10 +1316,11 @@ export async function performFullRestore(
   const stagedAccounts = accounts.map((account) => ({ ...account }));
   validateRetainedKeys(stagedAccounts);
   // TASK-492: a restore that straddles a wipe writes none of the file's
-  // settings, friends or flags after it (the accounts step has its own reset
-  // check). Each settings write below checks again, because a wipe can start
-  // while the one before it is awaited; the first that finds a wipe stops the
-  // restore with RESTORE_FAILED, so no count is reported for a wiped device.
+  // settings, friends or flags after it, and reports no success. The check
+  // runs before the breadcrumb, right after the accounts step returns (fresh
+  // or not), before each settings write, and once more after the last write;
+  // the first that finds a wipe stops the restore with RESTORE_FAILED, so no
+  // count is reported for a wiped device.
   const epoch = wipeEpoch();
   const stopIfWiped = () => {
     if (wipedSince(epoch)) {
@@ -1360,13 +1361,14 @@ export async function performFullRestore(
   }
 
   const accountCounts = await restoreAccounts(stagedAccounts, options);
+  // A wipe during the accounts step deleted what it added.
+  stopIfWiped();
 
   // The device was fresh when this restore began; if another writer put an
   // account on the wallet before our commit, it is not fresh now, and the file
   // changes accounts only. A stale "fresh" can only affect display settings: a
   // fresh restore never sets a PIN or protection state from the file.
-  fresh =
-    fresh && !accountCounts.deviceHadAccountsAtCommit && !wipedSince(epoch);
+  fresh = fresh && !accountCounts.deviceHadAccountsAtCommit;
 
   let remoteSignerSettingsRestored = false;
   let friendsCount = 0;
@@ -1384,6 +1386,8 @@ export async function performFullRestore(
     stopIfWiped();
     await restoreExperimental(experimental);
   }
+  // After the last write: a wipe that started during it reports no success.
+  stopIfWiped();
 
   return {
     records: accountCounts.records,
