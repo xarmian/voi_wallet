@@ -29,7 +29,7 @@ import {
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { FreshAuthError } from '@/services/secure/freshAuth';
 import { MultiAccountWalletService } from '@/services/wallet';
-import { AccountType } from '@/types/wallet';
+import { AccountStorageError, AccountType } from '@/types/wallet';
 import { UNKNOWN_WRITES_STORAGE_KEY } from '@/services/secure/boundedWrites';
 import {
   actionableOf,
@@ -580,7 +580,7 @@ describe("TASK-478 deleting a wallet account's slot clears verdicts naming it", 
         : undefined;
     await expect(
       AccountSecureStorage.deleteAccount(account.id, { walletAccount: true })
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(AccountStorageError);
     mockPlatform.__state.fault = undefined;
     // Nothing was deleted, and the verdict still describes a slot that exists.
     expect(mockPlatform.__secure.get(SECRET(account.id))).toBe(slotBefore);
@@ -627,7 +627,7 @@ describe("TASK-478 deleting a wallet account's slot clears verdicts naming it", 
       .mockRejectedValue(new Error('read failed') as never);
     await expect(
       AccountSecureStorage.deleteAccount(account.id, { walletAccount: true })
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(AccountStorageError);
     jest.restoreAllMocks();
     expect(mockPlatform.__secure.get(SECRET(account.id))).toBe(slotBefore);
   });
@@ -654,7 +654,7 @@ describe("TASK-478 deleting a wallet account's slot clears verdicts naming it", 
   });
 
   it("the wallet's own delete clears verdicts strictly", async () => {
-    const { account } = await canaryInWalletScanned();
+    const { formatA, account } = await canaryInWalletScanned();
     const slotBefore = mockPlatform.__secure.get(SECRET(account.id));
     mockPlatform.__state.fault = (op, key) =>
       op === 'kv.set' && key === 'voi_reconcile_quarantine_scan'
@@ -666,8 +666,17 @@ describe("TASK-478 deleting a wallet account's slot clears verdicts naming it", 
         type: AccountType.STANDARD,
         keyless: false,
       })
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(AccountStorageError);
     mockPlatform.__state.fault = undefined;
     expect(mockPlatform.__secure.get(SECRET(account.id))).toBe(slotBefore);
+    expect(
+      (await MultiAccountWalletService.readWalletStrict())!.accounts.map(
+        (a) => a.id
+      )
+    ).toContain(account.id);
+    expect(readScanMap()?.[formatA.id]).toEqual({
+      address: CANARY_ADDRESS,
+      wallet: { ownerId: account.id, keyUsable: true },
+    });
   });
 });

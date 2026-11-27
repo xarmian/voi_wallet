@@ -2630,8 +2630,9 @@ export class AccountSecureStorage {
   // answer, and a release that deletes it records `true` for the new account
   // on the remaining copies. A locked vault records nothing. A wallet
   // account's delete clears the verdicts that name it before its slot is
-  // touched, and refuses if it can't. Everything else here works from ids,
-  // presence and public data, and never decrypts.
+  // touched, and refuses if the map can't be read or a verdict saying the
+  // account holds its key can't be cleared. Everything else here works from
+  // ids, presence and public data, and never decrypts.
   // ───────────────────────────────────────────────────────────────────────────
 
   /** The public scan map. Missing is `{}`; a corrupt map or entry is dropped. */
