@@ -165,6 +165,23 @@ describe('a wipe and the notification taps the deep-link service holds', () => {
     expect(routed()).toBe(0);
   });
 
+  it('a tap waiting for navigation while locked is not held for unlock after the wipe', async () => {
+    nav.isReady.mockReturnValue(false);
+    const waiting = tap({ type: 'payment' }, 'n-6');
+    await flush();
+
+    openWipeWindow();
+    runWipeResets();
+    closeWipeWindow();
+    nav.isReady.mockReturnValue(true);
+    service.setNavigationRef(nav as unknown as NavigationContainerRef<any>);
+    await waiting;
+    expect(service.hasPendingNotification()).toBe(false);
+    service.setUnlockState(true);
+    await flush();
+    expect(routed()).toBe(0);
+  });
+
   it('a tap waiting behind a WalletConnect review is not routed when the wipe empties the queue', async () => {
     service.setUnlockState(true);
     const event = { id: 1, topic: 'topic-1' };

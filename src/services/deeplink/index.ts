@@ -48,12 +48,7 @@ import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
 import { createPendingRouteQueue, PendingRouteQueue } from './pendingRoute';
-import {
-  isWipeWindowOpen,
-  registerWipeReset,
-  wipeEpoch,
-  wipedSince,
-} from '@/services/wipe/gate';
+import { registerWipeReset, wipeEpoch, wipedSince } from '@/services/wipe/gate';
 
 // Log-redaction helpers (TASK-33): deep-link URIs and their parsed contents can
 // embed full addresses, amounts, notes and other PII. These keep debug logs
@@ -388,14 +383,10 @@ export class DeepLinkService {
   private setupNotificationHandler(): void {
     notificationService.setNotificationTapHandler(
       (data: NotificationData, notificationId?: string) => {
-        // TASK-469: a tap that arrives while a wipe runs belongs to the wallet
-        // being wiped; it is neither held nor routed.
-        if (isWipeWindowOpen()) {
-          console.log('[DeepLink] Notification tap dropped by a wipe');
-          return Promise.resolve();
-        }
-        // A wipe after this point drops the tap wherever it is waiting:
-        // for navigation, for unlock, or behind a WalletConnect review.
+        // TASK-469: taken on arrival. A tap that arrives while a wipe runs
+        // (the capture counts as wiped for good), or that is still waiting for
+        // navigation, for unlock or behind a WalletConnect review when a wipe
+        // starts, belongs to the wiped wallet and is dropped.
         const epoch = wipeEpoch();
         // Keyed by the notification identifier, so the cold-start response
         // and a response-listener event for the same tap route once. The
