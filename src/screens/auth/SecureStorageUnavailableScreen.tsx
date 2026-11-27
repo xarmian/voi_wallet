@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   TextInput,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -296,7 +297,13 @@ export default function SecureStorageUnavailableScreen({
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <View style={styles.content}>
+      {/* Scrolls so long text never clips the header or the reset button. */}
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        bounces={false}
+        alwaysBounceVertical={false}
+      >
         <View style={styles.header}>
           <Ionicons
             name="warning-outline"
@@ -382,7 +389,7 @@ export default function SecureStorageUnavailableScreen({
               : 'Reset & restore from recovery phrase'}
           </Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -394,8 +401,9 @@ const createStyles = (theme: Theme) =>
       backgroundColor: theme.colors.background,
     },
     content: {
-      flex: 1,
+      flexGrow: 1,
       paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.lg,
       justifyContent: 'center',
       alignItems: 'center',
     },
