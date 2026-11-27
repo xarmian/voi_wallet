@@ -66,6 +66,11 @@ import { useIsSwapEnabled } from '@/store/experimentalStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
 import { redactError } from '@/utils/logRedaction';
+import {
+  FLOW_LAPSE_TITLE,
+  FLOW_WITHHELD_BEFORE_SEND_MESSAGE,
+  flowLapsedSince,
+} from '@/services/auth/flowLapse';
 
 interface SwapScreenRouteParams {
   assetName?: string;
@@ -697,6 +702,12 @@ export default function SwapScreen() {
           return txn as Uint8Array;
         });
 
+        // A lock or background after signing withholds the send (TASK-531).
+        // No await between this check and the submit call.
+        if (flowLapsedSince(result.lapseEpoch)) {
+          Alert.alert(FLOW_LAPSE_TITLE, FLOW_WITHHELD_BEFORE_SEND_MESSAGE);
+          return;
+        }
         // Submit transaction group
         const submitRes = await networkService.submitTransaction(signedTxns);
         txId = submitRes.txId;

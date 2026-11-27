@@ -66,6 +66,11 @@ import { registerNavigationCallbacks } from '@/services/navigation/callbackRegis
 import type { WalletStackParamList } from '@/navigation/AppNavigator';
 import { ARC200_RECONFIRM_MESSAGE } from '@/services/transactions/arc200MbrRace';
 import { useArc200Confirmation } from '@/hooks/useArc200Confirmation';
+import {
+  FLOW_LAPSE_TITLE,
+  FLOW_WITHHELD_BEFORE_SEND_MESSAGE,
+  flowLapsedSince,
+} from '@/services/auth/flowLapse';
 
 // Claimable tokens are always on Voi network
 const CLAIM_NETWORK_ID = NetworkId.VOI_MAINNET;
@@ -361,6 +366,12 @@ export default function ClaimAllConfirmationScreen() {
             const signedTxns = rawSigned.map(
               (txn) => new Uint8Array(Buffer.from(txn as string, 'base64'))
             );
+            // A lock or background after signing withholds the send (TASK-531).
+            // Checked before the latch is taken, with no await before the submit.
+            if (flowLapsedSince(result.lapseEpoch)) {
+              Alert.alert(FLOW_LAPSE_TITLE, FLOW_WITHHELD_BEFORE_SEND_MESSAGE);
+              return;
+            }
             hasSubmittedRef.current = true;
             // Through submitTransaction, so an ambiguous send is resent with
             // the same bytes and reconciled by txid, never reported as a

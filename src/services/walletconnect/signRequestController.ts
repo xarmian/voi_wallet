@@ -1,5 +1,6 @@
 import { SIGNED_THEN_LAPSED_BATCH_MESSAGE } from '@/services/auth/transactionAuthController';
 import { redactError } from '@/utils/logRedaction';
+import { flowLapsedSince } from '@/services/auth/flowLapse';
 import {
   RequestCoordinator,
   type ExitReason,
@@ -442,6 +443,19 @@ export class SignRequestController {
         return;
       }
       if (!won) {
+        Alert.alert('Request ended', SIGNED_THEN_LAPSED_BATCH_MESSAGE);
+        reviewGrant.revoke();
+        if (!this.rejecting) {
+          this.rejecting = true;
+          await this.advanceAfterEnd();
+        }
+        return;
+      }
+      // A request with no review grant that locked or went to the background
+      // after signing answers 'lapsed' and returns nothing (TASK-531). No await
+      // between this check and the response call.
+      if (flowLapsedSince(result.lapseEpoch)) {
+        await coordinator.sendError(ref, 'lapsed');
         Alert.alert('Request ended', SIGNED_THEN_LAPSED_BATCH_MESSAGE);
         reviewGrant.revoke();
         if (!this.rejecting) {
