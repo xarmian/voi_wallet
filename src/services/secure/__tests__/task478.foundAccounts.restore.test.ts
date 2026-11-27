@@ -286,10 +286,11 @@ describe('TASK-478 restore a found account', () => {
       AccountSecureStorage.commitPendingCreate.bind(AccountSecureStorage);
     jest
       .spyOn(AccountSecureStorage, 'commitPendingCreate')
-      .mockImplementation(async (id, token) => {
-        await original(id, token);
+      .mockImplementation(async (id, token, options) => {
+        const committed = await original(id, token, options);
         // The new slot no longer holds this key.
         mockPlatform.__secure.set(SECRET(id), '{"accountId":"x"}');
+        return committed;
       });
 
     expect(await restore(formatA)).toEqual({
@@ -339,9 +340,10 @@ describe('TASK-478 restore a found account', () => {
       AccountSecureStorage.commitPendingCreate.bind(AccountSecureStorage);
     jest
       .spyOn(AccountSecureStorage, 'commitPendingCreate')
-      .mockImplementation(async (id, token) => {
-        await original(id, token);
+      .mockImplementation(async (id, token, options) => {
+        const committed = await original(id, token, options);
         mockPlatform.__secure.set(SECRET(id), '{"accountId":"x"}');
+        return committed;
       });
     expect((await restore(formatA)).kind).toBe('restored-copy-kept');
     const account = await walletAccountAt(formatA.address);
@@ -629,6 +631,51 @@ describe('TASK-478 a restored found key signs through the app signing path', () 
       expect(rekeyLookup).toHaveBeenLastCalledWith(o.address, true);
     }
     expect(ledgerSign).not.toHaveBeenCalled();
+  });
+});
+
+describe('TASK-522 restore a found account: the v2 upgrade waits for the release', () => {
+  it('the release runs before any migration of the new id; the upgrade follows', async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans();
+    await scanAll();
+    const store = jest.spyOn(service, 'storeAccountForCreation');
+    const release = jest.spyOn(AccountSecureStorage, 'releaseRestoredOrphan');
+    const migrate = jest.spyOn(AccountSecureStorage, 'migrateAccountToV2');
+
+    expect(await restore(formatA)).toEqual({
+      kind: 'restored',
+      address: formatA.address,
+    });
+    const newId = (store.mock.calls[0][0] as { id: string }).id;
+    const migrationsOf = () =>
+      migrate.mock.calls.flatMap(([id], i) =>
+        id === newId ? [migrate.mock.invocationCallOrder[i]] : []
+      );
+    await until(() => migrationsOf().length > 0);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(Math.min(...migrationsOf())).toBeGreaterThan(
+      release.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('a failed release still schedules the upgrade', async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans();
+    await scanAll();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = jest.spyOn(service, 'storeAccountForCreation');
+    const release = jest
+      .spyOn(AccountSecureStorage, 'releaseRestoredOrphan')
+      .mockRejectedValue(new Error('release failed'));
+    const migrate = jest.spyOn(AccountSecureStorage, 'migrateAccountToV2');
+
+    expect((await restore(formatA)).kind).toBe('restored-unconfirmed');
+    const newId = (store.mock.calls[0][0] as { id: string }).id;
+    await until(() => migrate.mock.calls.some(([id]) => id === newId));
+    const first = migrate.mock.calls.findIndex(([id]) => id === newId);
+    expect(migrate.mock.invocationCallOrder[first]).toBeGreaterThan(
+      release.mock.invocationCallOrder[0]
+    );
+    warn.mockRestore();
   });
 });
 

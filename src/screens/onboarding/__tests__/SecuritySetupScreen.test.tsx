@@ -19,15 +19,25 @@ import React from 'react';
 import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
 
 const mockRefresh = jest.fn();
+const mockStoreImportAccount = jest.fn();
+const mockSetActiveAccount = jest.fn();
 jest.mock('@/store/walletStore', () => ({
-  useWalletStore: { getState: () => ({ refresh: mockRefresh }) },
+  useWalletStore: {
+    getState: () => ({
+      refresh: mockRefresh,
+      importAccount: mockStoreImportAccount,
+      setActiveAccount: mockSetActiveAccount,
+    }),
+  },
 }));
 const mockImportStandardAccount = jest.fn();
+const mockDeleteAccount = jest.fn();
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
     importStandardAccount: (...args: unknown[]) =>
       mockImportStandardAccount(...args),
     addWatchAccount: jest.fn(),
+    deleteAccount: (...args: unknown[]) => mockDeleteAccount(...args),
     hasKeyBearingAccountStrict: jest.fn(),
   },
 }));
@@ -195,6 +205,7 @@ function makeNavigation() {
     navigate: jest.fn(),
     goBack: jest.fn(),
     setOptions: jest.fn(),
+    reset: jest.fn(),
     addListener: jest.fn((event: string, cb: BeforeRemove) => {
       if (event === 'beforeRemove') beforeRemove.push(cb);
       return () => {
@@ -283,6 +294,11 @@ beforeEach(() => {
     .mockResolvedValue(false);
   mockAuthSetupPin.mockResolvedValue(undefined);
   mockImportStandardAccount.mockResolvedValue({ address: 'FAKEADDRESS' });
+  mockStoreImportAccount.mockResolvedValue({
+    id: 'added-account-id',
+    address: 'FAKEADDRESS',
+  });
+  mockSetActiveAccount.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -994,4 +1010,399 @@ describe('TASK-514: refresh before leaving security setup', () => {
       await screen.unmount();
     }
   );
+});
+
+describe('TASK-522: adding an account to a wallet with no PIN', () => {
+  const ADD_SUBTITLE =
+    'Set a PIN to protect this wallet. Your account is added as soon as the PIN is set.';
+
+  it('says the account is added once the PIN is set', async () => {
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'create',
+      addingAccount: true,
+    });
+    expect(screen.getByText(ADD_SUBTITLE)).toBeTruthy();
+    await screen.unmount();
+  });
+
+  it('create: sets the PIN, then imports through the wallet store, sets the account active and resets to Home', async () => {
+    const order: string[] = [];
+    mockAuthSetupPin.mockImplementation(async () => {
+      order.push('setup');
+    });
+    mockStoreImportAccount.mockImplementation(async () => {
+      order.push('import');
+      return { id: 'added-account-id', address: 'FAKEADDRESS' };
+    });
+    mockSetActiveAccount.mockImplementation(async () => {
+      order.push('active');
+    });
+    mockRefresh.mockImplementation(async () => {
+      order.push('refresh');
+    });
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'create',
+      addingAccount: true,
+      backupVerified: true,
+    });
+
+    await submitPin(screen);
+
+    expect(order).toEqual(['setup', 'import', 'active', 'refresh']);
+    expect(mockImportStandardAccount).not.toHaveBeenCalled();
+    expect(mockStoreImportAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mnemonic: FAKE_MNEMONIC,
+        backupVerified: true,
+        label: expect.stringMatching(/^Account \d+$/),
+      })
+    );
+    expect(mockSetActiveAccount).toHaveBeenCalledWith('added-account-id');
+    expect(getAccountSecret(id)).toBeUndefined();
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(navigation.reset).toHaveBeenCalledWith({
+      index: 0,
+      routes: [{ name: 'Main', params: { screen: 'Home' } }],
+    });
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Success',
+      'New account created successfully!'
+    );
+    await screen.unmount();
+  });
+
+  it('mnemonic: keeps the typed name and phraseTyped, does not change the active account', async () => {
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'mnemonic',
+      addingAccount: true,
+      accountLabel: 'Savings',
+      phraseTyped: true,
+    });
+
+    await submitPin(screen);
+
+    expect(mockStoreImportAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mnemonic: FAKE_MNEMONIC,
+        label: 'Savings',
+        backupVerified: true,
+      })
+    );
+    expect(mockSetActiveAccount).not.toHaveBeenCalled();
+    expect(navigation.reset).toHaveBeenCalledWith({
+      index: 0,
+      routes: [{ name: 'Main', params: { screen: 'Home' } }],
+    });
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Success',
+      'Account imported successfully!'
+    );
+    await screen.unmount();
+  });
+
+  it('mnemonic: an unnamed account gets the import screen default label', async () => {
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'mnemonic',
+      addingAccount: true,
+    });
+
+    await submitPin(screen);
+
+    expect(mockStoreImportAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: `Imported Account ${new Date().toLocaleDateString()}`,
+      })
+    );
+    await screen.unmount();
+  });
+
+  it.each(['create', 'mnemonic', 'qr'])(
+    '%s: a PIN found at submit refuses; no heal, no PIN set, nothing imported',
+    async (source) => {
+      jest.mocked(AccountSecureStorage.hasPinStrict).mockResolvedValue(true);
+      const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+      const { navigation, screen } = await renderScreen({
+        source,
+        addingAccount: true,
+        mnemonicSecretId: source === 'qr' ? undefined : secretId,
+        ...(source === 'qr'
+          ? {
+              accounts: [
+                {
+                  id: 'qr',
+                  type: 'standard',
+                  address: 'FAKEADDRESS',
+                  isValid: true,
+                  secretId,
+                },
+              ],
+            }
+          : {}),
+      });
+
+      await submitPin(screen);
+
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Error',
+        'A PIN is already set. Go back and add the account again.'
+      );
+      expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
+      expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict
+      ).not.toHaveBeenCalled();
+      expect(mockAuthSetupPin).not.toHaveBeenCalled();
+      expect(mockStoreImportAccount).not.toHaveBeenCalled();
+      expect(mockImportStandardAccount).not.toHaveBeenCalled();
+      expect(navigation.reset).not.toHaveBeenCalled();
+      expect(navigation.navigate).not.toHaveBeenCalled();
+      await screen.unmount();
+    }
+  );
+
+  it('a PIN read that fails at submit refuses and stores nothing', async () => {
+    jest
+      .mocked(AccountSecureStorage.hasPinStrict)
+      .mockRejectedValue(new Error('keychain unavailable'));
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'create',
+      addingAccount: true,
+    });
+
+    await submitPin(screen);
+
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Error',
+      expect.stringContaining(ORPHAN_PIN_UNVERIFIABLE_MESSAGE)
+    );
+    expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
+    expect(mockAuthSetupPin).not.toHaveBeenCalled();
+    expect(mockStoreImportAccount).not.toHaveBeenCalled();
+    expect(navigation.reset).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+
+  it('qr: imports the scanned accounts after the PIN and resets to Home', async () => {
+    const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      source: 'qr',
+      addingAccount: true,
+      accounts: [
+        {
+          id: 'qr',
+          type: 'standard',
+          address: 'FAKEADDRESS',
+          isValid: true,
+          secretId,
+        },
+      ],
+    });
+
+    await submitPin(screen);
+
+    expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(navigation.reset).toHaveBeenCalledWith({
+      index: 0,
+      routes: [{ name: 'Main', params: { screen: 'Home' } }],
+    });
+    await screen.unmount();
+  });
+
+  it.each(['create', 'mnemonic'])(
+    '%s: an import failure after the PIN is set says so, stays, and a retry adds the account',
+    async (source) => {
+      mockStoreImportAccount.mockRejectedValueOnce(
+        new Error('Account already exists in wallet')
+      );
+      const id = storeMnemonicSecret(FAKE_MNEMONIC);
+      const { navigation, screen } = await renderScreen({
+        mnemonicSecretId: id,
+        source,
+        addingAccount: true,
+      });
+
+      await submitPin(screen);
+
+      expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Error',
+        'Your PIN is set, but the account was not added: Account already exists in wallet'
+      );
+      expect(Alert.alert).not.toHaveBeenCalledWith(
+        'Error',
+        expect.stringContaining('Failed to setup wallet security')
+      );
+      expect(navigation.reset).not.toHaveBeenCalled();
+      expect(navigation.navigate).not.toHaveBeenCalled();
+      expect(navigation.goBack).not.toHaveBeenCalled();
+      expect(getAccountSecret(id)?.mnemonic).toBe(FAKE_MNEMONIC);
+
+      // The committed-PIN retry: no second setup, the account is added.
+      await fireEvent.press(screen.getByTestId('complete-setup'));
+      expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+      expect(mockStoreImportAccount).toHaveBeenCalledTimes(2);
+      expect(navigation.reset).toHaveBeenCalledWith({
+        index: 0,
+        routes: [{ name: 'Main', params: { screen: 'Home' } }],
+      });
+      await screen.unmount();
+    }
+  );
+
+  it('a failure before the PIN is set keeps the setup failure text', async () => {
+    mockAuthSetupPin.mockRejectedValueOnce(new Error('setup boom'));
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'mnemonic',
+      addingAccount: true,
+    });
+
+    await submitPin(screen);
+
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Error',
+      'Failed to setup wallet security: setup boom'
+    );
+    expect(mockStoreImportAccount).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+
+  it('back before submit stores nothing and releases the phrase', async () => {
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'create',
+      addingAccount: true,
+    });
+
+    await fireEvent.press(screen.getByTestId('header-back'));
+    expect(navigation.goBack).toHaveBeenCalledTimes(1);
+    await screen.unmount();
+
+    expect(getAccountSecret(id)).toBeUndefined();
+    expect(mockAuthSetupPin).not.toHaveBeenCalled();
+    expect(mockStoreImportAccount).not.toHaveBeenCalled();
+    expect(mockImportStandardAccount).not.toHaveBeenCalled();
+  });
+});
+
+// TASK-522 fold-in: a QR upgrade of a watch account (the preview marks it
+// `isUpgrade`) on a wallet with no PIN now reaches SecuritySetup. As the
+// preview's direct import does, the watch entry is deleted first, then the
+// full account imported; otherwise the import meets the duplicate check
+// (MultiAccountWalletService.importStandardAccount: "Account already exists").
+describe('TASK-522: a QR watch-to-full upgrade through PIN setup', () => {
+  const ADDRESS = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ';
+  let watchListed: boolean;
+
+  beforeEach(() => {
+    watchListed = true;
+    mockDeleteAccount.mockReset().mockImplementation(async () => {
+      watchListed = false;
+    });
+    mockImportStandardAccount.mockImplementation(async () => {
+      if (watchListed) throw new Error('Account already exists in wallet');
+      return { address: ADDRESS };
+    });
+  });
+
+  function upgradeAccount(secretId: string): ScannedAccount {
+    return {
+      id: 'qr-upgrade',
+      type: 'standard',
+      address: ADDRESS,
+      name: 'Upgraded',
+      secretId,
+      isValid: true,
+      isDuplicate: true,
+      isUpgrade: true,
+      existingAccountId: 'watch-id',
+    };
+  }
+
+  it('deletes the watch entry, then imports the full account', async () => {
+    const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      source: 'qr',
+      addingAccount: true,
+      accounts: [upgradeAccount(secretId)],
+    });
+
+    await submitPin(screen);
+
+    expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAccount).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAccount).toHaveBeenCalledWith('watch-id', {
+      address: ADDRESS,
+      type: 'watch',
+      keyless: true,
+    });
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAccount.mock.invocationCallOrder[0]).toBeLessThan(
+      mockImportStandardAccount.mock.invocationCallOrder[0]
+    );
+    await expect(
+      mockImportStandardAccount.mock.results[0].value
+    ).resolves.toEqual({ address: ADDRESS });
+    expect(Alert.alert).not.toHaveBeenCalledWith(
+      'Import Warning',
+      expect.anything()
+    );
+    expect(getAccountSecret(secretId)).toBeUndefined();
+    expect(navigation.reset).toHaveBeenCalledTimes(1);
+    await screen.unmount();
+  });
+
+  it('a failed watch delete imports nothing for that account and warns', async () => {
+    mockDeleteAccount.mockRejectedValue(new Error('delete failed'));
+    const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { screen } = await renderScreen({
+      source: 'qr',
+      addingAccount: true,
+      accounts: [upgradeAccount(secretId)],
+    });
+
+    await submitPin(screen);
+
+    expect(mockImportStandardAccount).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Import Warning',
+      '0 accounts imported successfully. 1 accounts failed to import.'
+    );
+    await screen.unmount();
+  });
+
+  it('an account that is not an upgrade deletes nothing', async () => {
+    watchListed = false;
+    const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { screen } = await renderScreen({
+      source: 'qr',
+      accounts: [
+        {
+          ...upgradeAccount(secretId),
+          isDuplicate: false,
+          isUpgrade: false,
+          existingAccountId: undefined,
+        },
+      ],
+    });
+
+    await submitPin(screen);
+
+    expect(mockDeleteAccount).not.toHaveBeenCalled();
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+    await screen.unmount();
+  });
 });

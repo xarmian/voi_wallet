@@ -9,8 +9,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { WalletService } from '@/services/wallet';
+import { AccountSecureStorage } from '@/services/secure';
+import { storeMnemonicSecret } from '@/utils/accountQRParser';
+import type { RootStackParamList } from '@/navigation/AppNavigator';
 import { useWalletStore } from '@/store/walletStore';
 import { AccountType, backupVerifiedAtImport } from '@/types/wallet';
 import MnemonicBackupFlow, {
@@ -24,7 +28,8 @@ import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView
 export default function CreateAccountScreen() {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
-  const navigation = useNavigation();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   // Block OS screenshots / screen recordings while creating a new account (the
   // backup step displays the recovery phrase). No-op on web/extension.
@@ -82,6 +87,24 @@ export default function CreateAccountScreen() {
     try {
       // Import the account with the generated mnemonic
       const normalizedLabel = accountLabel.trim();
+
+      // TASK-522: a wallet with no PIN sets one before any key is stored.
+      // SecuritySetup gets an opaque id for the phrase, never the phrase; the
+      // phrase stays here, so going back from SecuritySetup loses nothing.
+      // A failed read lands in the catch below: nothing routed or stored.
+      // The import's own duplicate check runs first, so a phrase already in
+      // the wallet fails here, as the import would, and sets no PIN.
+      if (!(await AccountSecureStorage.hasPin())) {
+        await WalletService.assertMnemonicNotInWalletStrict(mnemonic);
+        navigation.navigate('SecuritySetup', {
+          mnemonicSecretId: storeMnemonicSecret(mnemonic),
+          source: 'create',
+          addingAccount: true,
+          accountLabel: normalizedLabel || undefined,
+          backupVerified: result.verified,
+        });
+        return;
+      }
 
       // TASK-45 / DR-11: add-account does NOT route through SecuritySetup, so the
       // quiz outcome is carried on the import request itself. `verified` is true

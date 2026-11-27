@@ -230,6 +230,13 @@ export type RootStackParamList = {
      * false fails closed (a pasted phrase). A BOOLEAN, not key material.
      */
     phraseTyped?: boolean;
+    /**
+     * TASK-522: set when an account is being added to a wallet that has no
+     * PIN (outside onboarding). SecuritySetup then sets the PIN before storing
+     * the key, never runs the orphan-PIN healer, refuses if a PIN already
+     * exists, and resets to Home when done. A BOOLEAN, not key material.
+     */
+    addingAccount?: true;
   };
   MnemonicImport: { isOnboarding?: boolean } | undefined;
   AddWatchAccount: { isOnboarding?: boolean };

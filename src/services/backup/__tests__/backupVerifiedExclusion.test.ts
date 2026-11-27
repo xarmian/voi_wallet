@@ -116,7 +116,8 @@ jest.mock('@/services/secure/AccountSecureStorage', () => {
           reassigned: false,
         })
       ),
-      commitPendingCreate: jest.fn(async () => {}),
+      commitPendingCreate: jest.fn(async () => true),
+      scheduleV2UpgradeAfterStore: jest.fn(),
       deleteAccountIfAttemptMatches: jest.fn(async () => {}),
     },
   };
@@ -543,7 +544,7 @@ it('never rolls back secrets the persisted wallet already references', async () 
   jest
     .mocked(secure.commitPendingCreate)
     .mockReset()
-    .mockResolvedValueOnce(undefined)
+    .mockResolvedValueOnce(true)
     .mockRejectedValueOnce(new Error('keychain write failed'));
   jest.mocked(secure.deleteAccountIfAttemptMatches).mockClear();
   await expect(
@@ -552,7 +553,7 @@ it('never rolls back secrets the persisted wallet already references', async () 
   expect(mockPersistRestoredWallet).toHaveBeenCalled();
   expect(secure.deleteAccountIfAttemptMatches).not.toHaveBeenCalled();
   jest.mocked(secure.storeAccountForCreation).mockResolvedValue('token');
-  jest.mocked(secure.commitPendingCreate).mockResolvedValue(undefined);
+  jest.mocked(secure.commitPendingCreate).mockResolvedValue(true);
 });
 
 it('keeps secrets when the persist call fails after its blob write', async () => {

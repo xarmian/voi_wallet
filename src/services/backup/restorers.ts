@@ -990,8 +990,24 @@ async function restoreAccountsNow(
     // TASK-220: metadata committed — finalize each secret this attempt wrote
     // (drop its pending-creation journal entry). The secure wipe tombstone stays
     // sticky. A metadata-only record never had a journal entry.
-    for (const p of pendingCreates) {
-      await AccountSecureStorage.commitPendingCreate(p.id, p.token);
+    // TASK-529: the v2 upgrade of the committed keys runs once, after the loop,
+    // so no commit waits behind a scrypt run. A key whose commit landed is
+    // final even if a later commit throws, so it is scheduled either way.
+    const committed: string[] = [];
+    try {
+      for (const p of pendingCreates) {
+        if (
+          await AccountSecureStorage.commitPendingCreate(p.id, p.token, {
+            upgrade: false,
+          })
+        ) {
+          committed.push(p.id);
+        }
+      }
+    } finally {
+      if (committed.length > 0) {
+        AccountSecureStorage.scheduleV2UpgradeAfterStore(committed);
+      }
     }
 
     const typeOfRecord = new Map(accounts.map((a) => [a.id, a.type] as const));

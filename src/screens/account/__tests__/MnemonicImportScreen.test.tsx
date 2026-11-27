@@ -25,6 +25,9 @@ jest.mock('@/utils/bip39', () => ({
 }));
 
 jest.mock('@/services/wallet', () => ({}));
+jest.mock('@/services/secure', () => ({
+  AccountSecureStorage: { hasPin: jest.fn(async () => true) },
+}));
 
 const mockImportAccount = jest.fn();
 jest.mock('@/store/walletStore', () => ({

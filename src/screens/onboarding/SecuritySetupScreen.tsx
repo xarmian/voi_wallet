@@ -48,6 +48,12 @@ const QR_SECRETS_UNAVAILABLE_MESSAGE =
 const MNEMONIC_UNAVAILABLE_MESSAGE =
   'Your recovery phrase is no longer available. Please go back and try again.';
 
+const PIN_ALREADY_SET_MESSAGE =
+  'A PIN is already set. Go back and add the account again.';
+
+const ADDING_ACCOUNT_SUBTITLE =
+  'Set a PIN to protect this wallet. Your account is added as soon as the PIN is set.';
+
 type SecuritySetupScreenRouteProp = RouteProp<
   RootStackParamList,
   'SecuritySetup'
@@ -89,6 +95,8 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
     // device, no paste or autofill detected) counts; absent or any other
     // value fails closed as a pasted phrase.
     phraseTyped: phraseTypedParam,
+    // TASK-522: adding an account to a wallet with no PIN (not onboarding).
+    addingAccount = false,
   } = route.params;
   const [accountLabel, setAccountLabel] = useState(initialAccountLabel ?? '');
   // Synchronous in-flight guard. `submitting` is state, so a second tap can land
@@ -254,22 +262,49 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       return;
     }
 
+    // TASK-522: whether this submit added the account (or any scanned one),
+    // so a failure after the PIN is committed can say what is true.
+    let accountAdded = false;
     submittingRef.current = true;
     try {
       setSubmitting(true);
 
       if (!committed) {
-        // TASK-413 DR-1 / #195: re-entry after an abandoned import may leave a
-        // PIN with no keys. Strict reads must fail closed before first-secret
-        // setup; same-session retries keep their already committed credential.
-        try {
-          if (await withStrictReadTimeout(AccountSecureStorage.hasPinStrict()))
-            await clearOrphanPin();
-        } catch {
-          throw new Error(ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
+        if (addingAccount) {
+          // TASK-522: this wallet already holds accounts, so a PIN found now
+          // is never an orphan to heal: it appeared after the source screen
+          // checked. Refuse and store nothing; the source screen imports
+          // directly once a PIN exists.
+          let pinExists: boolean;
+          try {
+            pinExists = await withStrictReadTimeout(
+              AccountSecureStorage.hasPinStrict()
+            );
+          } catch {
+            throw new Error(ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
+          }
+          if (pinExists) {
+            Alert.alert('Error', PIN_ALREADY_SET_MESSAGE);
+            return;
+          }
+        } else {
+          // TASK-413 DR-1 / #195: re-entry after an abandoned import may leave
+          // a PIN with no keys. Strict reads must fail closed before
+          // first-secret setup; same-session retries keep their already
+          // committed credential.
+          try {
+            if (
+              await withStrictReadTimeout(AccountSecureStorage.hasPinStrict())
+            )
+              await clearOrphanPin();
+          } catch {
+            throw new Error(ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
+          }
         }
         await setUpSecretAndBiometrics();
       }
+
+      let successMessage: string | null = null;
 
       // Handle different onboarding sources
       if (isPhraseSource) {
@@ -288,25 +323,56 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
           if (!mnemonic) {
             throw new Error(MNEMONIC_UNAVAILABLE_MESSAGE);
           }
-          const importedAccount =
-            await MultiAccountWalletService.importStandardAccount({
-              type: AccountType.STANDARD,
-              mnemonic,
-              label: normalizedLabel || 'Main Account',
-              // TASK-45 / DR-11, amended by TASK-556. isPhraseSource admits
-              // only 'create' and 'mnemonic'. 'create' counts only when the
-              // verification quiz was passed; 'mnemonic' counts only when
-              // MnemonicImport reports the phrase typed in, and otherwise is a
-              // pasted phrase.
-              backupVerified:
-                source === 'create'
-                  ? backupVerifiedAtImport('quiz', backupVerifiedParam)
-                  : backupVerifiedAtImport(
-                      phraseTypedParam === true ? 'entered-phrase' : 'pasted'
-                    ),
-            });
+          // TASK-522: an added account keeps its source screen's default label.
+          const defaultLabel = !addingAccount
+            ? 'Main Account'
+            : source === 'create'
+              ? `Account ${Date.now()}`
+              : `Imported Account ${new Date().toLocaleDateString()}`;
+          const request: ImportAccountRequest = {
+            type: AccountType.STANDARD,
+            mnemonic,
+            label: normalizedLabel || defaultLabel,
+            // TASK-45 / DR-11, amended by TASK-556. isPhraseSource admits
+            // only 'create' and 'mnemonic'. 'create' counts only when the
+            // verification quiz was passed; 'mnemonic' counts only when
+            // MnemonicImport reports the phrase typed in, and otherwise is a
+            // pasted phrase.
+            backupVerified:
+              source === 'create'
+                ? backupVerifiedAtImport('quiz', backupVerifiedParam)
+                : backupVerifiedAtImport(
+                    phraseTypedParam === true ? 'entered-phrase' : 'pasted'
+                  ),
+          };
+          // TASK-522: an added account goes through the wallet store, as the
+          // source screens' direct import does (account state, notification
+          // and realtime subscribe).
+          const importedAccount = addingAccount
+            ? await useWalletStore.getState().importAccount(request)
+            : await MultiAccountWalletService.importStandardAccount(request);
           imported = true;
+          accountAdded = true;
           console.log('Successfully created account:', importedAccount.address);
+          if (addingAccount) {
+            successMessage =
+              source === 'create'
+                ? 'New account created successfully!'
+                : 'Account imported successfully!';
+            if (source === 'create') {
+              // As CreateAccount does. Best-effort: the account is stored.
+              try {
+                await useWalletStore
+                  .getState()
+                  .setActiveAccount(importedAccount.id);
+              } catch (error) {
+                console.warn(
+                  'Failed to set the new account active:',
+                  redactError(error)
+                );
+              }
+            }
+          }
         } finally {
           // Consumed: release it on success. On an import FAILURE keep it so a
           // same-screen retry works; the unmount cleanup still guarantees
@@ -333,6 +399,20 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
 
               if (!secret || (!secret.mnemonic && !secret.privateKey)) {
                 throw new Error('Secure account data unavailable for import');
+              }
+
+              // As AccountImportPreview does: upgrading a watch account deletes
+              // the watch entry first, so the import does not meet it as a
+              // duplicate.
+              if (account.isUpgrade && account.existingAccountId) {
+                await MultiAccountWalletService.deleteAccount(
+                  account.existingAccountId,
+                  {
+                    address: account.address,
+                    type: AccountType.WATCH,
+                    keyless: true,
+                  }
+                );
               }
 
               const request: ImportAccountRequest = {
@@ -368,6 +448,7 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
           }
         }
 
+        if (successCount > 0) accountAdded = true;
         if (failedCount > 0) {
           Alert.alert(
             'Import Warning',
@@ -385,13 +466,28 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       // Done: drop the in-flight guard before leaving so beforeRemove can't
       // block this navigation.
       submittingRef.current = false;
-      navigation.navigate('Main');
+      if (addingAccount) {
+        // TASK-522: a reset, not a navigate. Navigating to Main would return
+        // to the source screen still on its backup step, phrase on screen.
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Main', params: { screen: 'Home' } }],
+        });
+        if (successMessage) Alert.alert('Success', successMessage);
+      } else {
+        navigation.navigate('Main');
+      }
     } catch (error) {
       console.error('Security setup error:', error);
+      const reason = error instanceof Error ? error.message : 'Unknown error';
+      // TASK-522: adding an account, once the PIN is committed the failure is
+      // the account's, not the security setup's. The screen stays, and the
+      // committed-PIN retry above adds the account without a second setup.
       Alert.alert(
         'Error',
-        'Failed to setup wallet security: ' +
-          (error instanceof Error ? error.message : 'Unknown error')
+        addingAccount && committedSecretRef.current && !accountAdded
+          ? `Your PIN is set, but the account was not added: ${reason}`
+          : 'Failed to setup wallet security: ' + reason
       );
     } finally {
       submittingRef.current = false;
@@ -417,13 +513,15 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
           contentContainerStyle={styles.content}
         >
           <Text style={[styles.subtitle, { color: theme.colors.textMuted }]}>
-            {source === 'qr'
-              ? 'Secure your imported accounts with a PIN and optional biometric authentication'
-              : source === 'watch'
-                ? 'Secure your watch account with a PIN and optional biometric authentication'
-                : source === 'ledger'
-                  ? 'Secure access to your Ledger accounts with a PIN and optional biometric authentication'
-                  : 'Secure your wallet with a PIN and optional biometric authentication'}
+            {addingAccount
+              ? ADDING_ACCOUNT_SUBTITLE
+              : source === 'qr'
+                ? 'Secure your imported accounts with a PIN and optional biometric authentication'
+                : source === 'watch'
+                  ? 'Secure your watch account with a PIN and optional biometric authentication'
+                  : source === 'ledger'
+                    ? 'Secure access to your Ledger accounts with a PIN and optional biometric authentication'
+                    : 'Secure your wallet with a PIN and optional biometric authentication'}
           </Text>
 
           <GlassCard variant="medium" style={styles.formCard}>

@@ -30,6 +30,8 @@ import OldPinStep from '@/components/backup/OldPinStep';
 import ForgottenPinConsent from '@/components/backup/ForgottenPinConsent';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { ENTER_PIN_INSTEAD_TEXT } from '@/services/backup/forgottenPinCopy';
+import { ORPHAN_PIN_UNVERIFIABLE_MESSAGE } from '@/services/secure/orphanPin';
+import { MultiAccountWalletService } from '@/services/wallet';
 import {
   BackupService,
   RestoreProgress,
@@ -344,7 +346,45 @@ export default function RestoreWalletScreen() {
               void recheckAuthState();
             } else {
               await useWalletStore.getState().refresh();
-              navigation.goBack();
+              // TASK-522: a wallet with no PIN (its accounts all keyless)
+              // that now holds a key sets a PIN before going on. A failed PIN
+              // read goes back: the restore left the pending-PIN marker, so
+              // the next launch asks for the PIN.
+              let pinSet = true;
+              try {
+                pinSet = await AccountSecureStorage.hasPin();
+              } catch {
+                Alert.alert('Error', ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
+              }
+              // A restore can add no key (watch, Ledger or remote-signer
+              // records only, or every record already here), and then no PIN
+              // is needed. The same strict probe boot routing uses decides,
+              // so this landing agrees with the next launch. A failed probe
+              // counts as key-bearing: it fails toward PIN setup.
+              let needsPin = false;
+              if (!pinSet) {
+                try {
+                  needsPin =
+                    await MultiAccountWalletService.hasKeyBearingAccountStrict();
+                } catch {
+                  needsPin = true;
+                }
+              }
+              if (!needsPin) {
+                navigation.goBack();
+              } else {
+                navigation.dispatch(
+                  CommonActions.reset({
+                    index: 0,
+                    routes: [
+                      {
+                        name: 'SecuritySetup',
+                        params: { source: 'restore' },
+                      },
+                    ],
+                  })
+                );
+              }
             }
           },
         },

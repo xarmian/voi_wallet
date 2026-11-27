@@ -37,11 +37,19 @@ import {
   normalizeBase64ToHex,
 } from '@/utils/arc0300';
 import { MultiAccountWalletService } from '@/services/wallet';
+import { AccountSecureStorage } from '@/services/secure';
+import { ORPHAN_PIN_UNVERIFIABLE_MESSAGE } from '@/services/secure/orphanPin';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { getNetworkConfig } from '@/services/network/config';
 import { useCurrentNetwork } from '@/store/networkStore';
 import { useWalletStore } from '@/store/walletStore';
 import { StandardAccountMetadata, AccountType } from '@/types/wallet';
+
+// TASK-522: this screen stores a private key, so it needs a PIN first. It
+// cannot set one itself: carrying the key through PIN setup would lose the
+// verification QR step.
+const SET_PIN_FIRST_MESSAGE =
+  'Set a PIN first. Add or import an account on this device to set one.';
 
 type ImportState =
   | 'disclaimer'
@@ -101,7 +109,21 @@ export default function ImportFromOnlineWalletScreen() {
     }
   }, [state]);
 
-  const handleAcceptDisclaimer = useCallback(() => {
+  const handleAcceptDisclaimer = useCallback(async () => {
+    // TASK-522: no scan, and so no key, on a wallet with no PIN.
+    let pinSet: boolean;
+    try {
+      pinSet = await AccountSecureStorage.hasPin();
+    } catch {
+      setError(ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
+      setState('error');
+      return;
+    }
+    if (!pinSet) {
+      setError(SET_PIN_FIRST_MESSAGE);
+      setState('error');
+      return;
+    }
     setState('scanning');
   }, []);
 
@@ -165,6 +187,10 @@ export default function ImportFromOnlineWalletScreen() {
           // Account already exists - use it instead of re-importing
           account = existingAccount as StandardAccountMetadata;
         } else {
+          // TASK-522: checked again right before the key is stored.
+          if (!(await AccountSecureStorage.hasPin())) {
+            throw new Error(SET_PIN_FIRST_MESSAGE);
+          }
           // Import the account (reuse the hex normalized above so the import
           // and signing paths derive from the exact same key material)
           account = await MultiAccountWalletService.importStandardAccount({

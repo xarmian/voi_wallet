@@ -48,8 +48,20 @@ jest.mock('@/contexts/AuthContext', () => ({
 }));
 let mockHasPin = false;
 let mockLockedUntil: number | null = null;
+// The bounded read the Settings landing makes after a restore (TASK-522).
+const mockHasPinAfterRestore = jest.fn(async () => true);
+// The strict key-bearing probe the Settings landing makes when no PIN is set
+// (TASK-522), the one boot routing uses.
+const mockKeyBearing = jest.fn(async () => true);
+jest.mock('@/services/wallet', () => ({
+  MultiAccountWalletService: {
+    hasKeyBearingAccountStrict: () => mockKeyBearing(),
+  },
+}));
+jest.mock('@/services/wallet/crossStoreReconcile', () => ({}));
 jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
+    hasPin: () => mockHasPinAfterRestore(),
     hasPinStrict: async () => mockHasPin,
     getPinThrottleState: async () => ({
       lockedUntil: mockLockedUntil,
@@ -186,6 +198,8 @@ beforeEach(() => {
   mockClearRestoreVault.mockClear();
   mockCanOfferBiometric.mockReset().mockResolvedValue(false);
   mockUnlockWithBiometrics.mockReset();
+  mockHasPinAfterRestore.mockReset().mockResolvedValue(true);
+  mockKeyBearing.mockReset().mockResolvedValue(true);
   jest.restoreAllMocks();
 });
 
@@ -816,4 +830,96 @@ describe('TASK-514: restore refresh landings', () => {
       expect(isOnboarding ? mockRecheck : mockGoBack).toHaveBeenCalledTimes(1);
     }
   );
+});
+
+describe('TASK-522: a Settings restore onto a wallet with no PIN', () => {
+  it('no PIN and a key-bearing account now: refreshes, then resets to SecuritySetup(restore)', async () => {
+    mockAccountCount = 2;
+    mockHasPinAfterRestore.mockResolvedValue(false);
+    const { pressOk } = await restoreThroughScreen(restoreResult(false));
+    await act(async () => {
+      await pressOk();
+    });
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    expect(mockHasPinAfterRestore).toHaveBeenCalledTimes(1);
+    expect(mockKeyBearing).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(mockDispatch.mock.calls[0][0]).toMatchObject({
+      type: 'RESET',
+      index: 0,
+      routes: [{ name: 'SecuritySetup', params: { source: 'restore' } }],
+    });
+    expect(mockGoBack).not.toHaveBeenCalled();
+    expect(mockRecheck).not.toHaveBeenCalled();
+  });
+
+  it('no PIN and still no key-bearing account (a watch-only restore): goes back', async () => {
+    mockAccountCount = 2;
+    mockHasPinAfterRestore.mockResolvedValue(false);
+    mockKeyBearing.mockResolvedValue(false);
+    const { pressOk, alert } = await restoreThroughScreen(restoreResult(false));
+    await act(async () => {
+      await pressOk();
+    });
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    expect(mockKeyBearing).toHaveBeenCalledTimes(1);
+    expect(mockGoBack).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('no PIN and a failed key-bearing read: resets to SecuritySetup (fails toward a PIN)', async () => {
+    mockAccountCount = 2;
+    mockHasPinAfterRestore.mockResolvedValue(false);
+    mockKeyBearing.mockRejectedValue(new Error('storage unavailable'));
+    const { pressOk } = await restoreThroughScreen(restoreResult(false));
+    await act(async () => {
+      await pressOk();
+    });
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(mockDispatch.mock.calls[0][0]).toMatchObject({
+      type: 'RESET',
+      index: 0,
+      routes: [{ name: 'SecuritySetup', params: { source: 'restore' } }],
+    });
+    expect(mockGoBack).not.toHaveBeenCalled();
+  });
+
+  it('with a PIN: goes back as before', async () => {
+    mockAccountCount = 2;
+    const { pressOk } = await restoreThroughScreen(restoreResult(false));
+    await act(async () => {
+      await pressOk();
+    });
+    expect(mockHasPinAfterRestore).toHaveBeenCalledTimes(1);
+    expect(mockKeyBearing).not.toHaveBeenCalled();
+    expect(mockGoBack).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
+  it('a failed PIN read alerts, then goes back (the next launch asks for the PIN)', async () => {
+    mockAccountCount = 2;
+    mockHasPinAfterRestore.mockRejectedValue(new Error('keychain unavailable'));
+    const { pressOk, alert } = await restoreThroughScreen(restoreResult(false));
+    await act(async () => {
+      await pressOk();
+    });
+    expect(alert).toHaveBeenCalledTimes(2);
+    expect(alert.mock.calls[1][1]).toBe(
+      "We couldn't verify your wallet's security state. Please restart the app."
+    );
+    expect(mockGoBack).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
+  it('onboarding never asks: the auth re-read owns that landing', async () => {
+    mockParams = { isOnboarding: true };
+    mockHasPinAfterRestore.mockResolvedValue(false);
+    const { pressOk } = await restoreThroughScreen(restoreResult(false));
+    await act(async () => {
+      await pressOk();
+    });
+    expect(mockHasPinAfterRestore).not.toHaveBeenCalled();
+    expect(mockRecheck).toHaveBeenCalledTimes(1);
+  });
 });

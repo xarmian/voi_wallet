@@ -193,11 +193,7 @@ export class MultiAccountWalletService {
       };
 
       if (request.mnemonic) {
-        const cleanMnemonic = this.cleanMnemonic(request.mnemonic);
-        if (!this.validateMnemonic(cleanMnemonic)) {
-          throw new InvalidMnemonicError('Invalid mnemonic phrase');
-        }
-        account = algosdk.mnemonicToSecretKey(cleanMnemonic);
+        account = this.accountFromMnemonic(request.mnemonic);
         // Derive public key from secret key (last 32 bytes)
         (account as any).publicKey = account.sk.slice(32);
       } else if (request.privateKey) {
@@ -216,13 +212,9 @@ export class MultiAccountWalletService {
       // wallet". A read error, a corrupt blob, a slow keychain or an
       // unmigrated legacy copy fails the import before any secret is stored.
       // (addAccountToWallet re-checks for duplicates inside the write chain.)
-      const currentWallet = await this.readWalletStrict();
-      const existingAccount = currentWallet?.accounts.find(
-        (acc) => acc.address === account.addr.toString()
+      const currentWallet = await this.readWalletWithoutAddressStrict(
+        account.addr.toString()
       );
-      if (existingAccount) {
-        throw new AccountExistsError('Account already exists in wallet');
-      }
 
       const mnemonic = request.mnemonic
         ? this.cleanMnemonic(request.mnemonic)
@@ -283,6 +275,50 @@ export class MultiAccountWalletService {
   }
 
   /**
+   * TASK-522: importStandardAccount's own duplicate check for a phrase, run by
+   * itself: a wallet with no PIN runs it before setting one, so a phrase
+   * already in the wallet (often as a watch account) sets no PIN for nothing.
+   * The same derivation and the same strict read as the import, so it throws
+   * what the import would: InvalidMnemonicError, AccountExistsError, or the
+   * read's error (fails closed). The derived key is wiped; nothing is stored.
+   */
+  static async assertMnemonicNotInWalletStrict(
+    mnemonic: string
+  ): Promise<void> {
+    const account = this.accountFromMnemonic(mnemonic);
+    let address: string;
+    try {
+      address = account.addr.toString();
+    } finally {
+      account.sk.fill(0);
+    }
+    await this.readWalletWithoutAddressStrict(address);
+  }
+
+  /** The import's derivation of an account from a recovery phrase. */
+  private static accountFromMnemonic(mnemonic: string): algosdk.Account {
+    const cleanMnemonic = this.cleanMnemonic(mnemonic);
+    if (!this.validateMnemonic(cleanMnemonic)) {
+      throw new InvalidMnemonicError('Invalid mnemonic phrase');
+    }
+    return algosdk.mnemonicToSecretKey(cleanMnemonic);
+  }
+
+  /**
+   * The import's duplicate check: the strict wallet read (null = no wallet),
+   * refused with AccountExistsError when it already holds `address`.
+   */
+  private static async readWalletWithoutAddressStrict(
+    address: string
+  ): Promise<Wallet | null> {
+    const currentWallet = await this.readWalletStrict();
+    if (currentWallet?.accounts.some((acc) => acc.address === address)) {
+      throw new AccountExistsError('Account already exists in wallet');
+    }
+    return currentWallet;
+  }
+
+  /**
    * The journaled create shared by create, import and a found-key restore
    * (TASK-220): the secret is written under a journal entry, the account is
    * added to the wallet, then the entry is committed. Any failure before the
@@ -300,8 +336,11 @@ export class MultiAccountWalletService {
     creationGen: number = AccountSecureStorage.getResetGeneration(),
     // Called once the wallet metadata write has committed, so a caller can
     // tell a later failure from one that left nothing behind.
-    onMetadataCommitted?: () => void
-  ): Promise<void> {
+    onMetadataCommitted?: () => void,
+    // Passed to commitPendingCreate: `upgrade: false` leaves the v2 upgrade
+    // to the caller (a found-key restore, whose release must go first).
+    commitOptions: { upgrade?: boolean } = {}
+  ): Promise<boolean> {
     let token: string | undefined;
     let metadataCommitted = false;
     try {
@@ -313,7 +352,12 @@ export class MultiAccountWalletService {
       await this.addAccountToWallet(accountMetadata, creationGen);
       metadataCommitted = true;
       onMetadataCommitted?.();
-      await AccountSecureStorage.commitPendingCreate(accountMetadata.id, token);
+      // True when this attempt's own journal entry was removed.
+      return await AccountSecureStorage.commitPendingCreate(
+        accountMetadata.id,
+        token,
+        commitOptions
+      );
     } catch (error) {
       if (token !== undefined && !metadataCommitted) {
         try {
@@ -337,12 +381,14 @@ export class MultiAccountWalletService {
    * fresh id, through the journaled create. The key is used as bytes only: no
    * recovery-phrase string is built (`mnemonic: ''`). The caller zeroes
    * `secretKey` too. Returns the new id and address, never the metadata.
+   * The v2 upgrade of the new id is the caller's (`upgradeDue`): it runs only
+   * after the found copy's release, so the release does not wait behind it.
    */
   static async restoreFoundStandardAccount(
     secretKey: Uint8Array,
     hintLabel: string | undefined,
     creationGen: number
-  ): Promise<{ id: string; address: string }> {
+  ): Promise<{ id: string; address: string; upgradeDue: boolean }> {
     const address = seedDerivedAddress(secretKey);
     if (address === null || !keyBelongsToAddress(secretKey, address)) {
       throw new Error('The found key is not a complete account key');
@@ -370,21 +416,23 @@ export class MultiAccountWalletService {
       backupVerified: false,
     };
     let committed = false;
+    let upgradeDue: boolean;
     try {
-      await this.persistNewKeyedAccount(
+      upgradeDue = await this.persistNewKeyedAccount(
         accountMetadata,
         secretKey,
         creationGen,
         () => {
           committed = true;
-        }
+        },
+        { upgrade: false }
       );
     } catch (error) {
       // After the wallet write the account exists: say so, not "failed".
       if (committed) throw new FoundRestoreUnconfirmedError(error);
       throw error;
     }
-    return { id: accountMetadata.id, address };
+    return { id: accountMetadata.id, address, upgradeDue };
   }
 
   static async importLedgerAccount(

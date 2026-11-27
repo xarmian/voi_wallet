@@ -28,12 +28,24 @@ import { Alert, TextInput } from 'react-native';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import algosdk from 'algosdk';
 
-jest.mock('@/services/wallet', () => ({}));
+// TASK-522: the import's own duplicate check, run before a PIN is set.
+const mockAssertNotInWallet = jest.fn(async (_mnemonic: string) => {});
+jest.mock('@/services/wallet', () => ({
+  MultiAccountWalletService: {
+    assertMnemonicNotInWalletStrict: (mnemonic: string) =>
+      mockAssertNotInWallet(mnemonic),
+  },
+}));
 
 const mockImportAccount = jest.fn();
 jest.mock('@/store/walletStore', () => ({
   useWalletStore: (selector: (state: unknown) => unknown) =>
     selector({ importAccount: mockImportAccount }),
+}));
+
+const mockHasPin = jest.fn(async () => true);
+jest.mock('@/services/secure', () => ({
+  AccountSecureStorage: { hasPin: () => mockHasPin() },
 }));
 
 jest.mock('@react-navigation/native', () => ({
@@ -88,7 +100,11 @@ jest.mock('react-native/Libraries/Lists/FlatList', () => {
 });
 
 import MnemonicImportScreen from '../MnemonicImportScreen';
-import { clearAllAccountSecrets } from '@/utils/accountQRParser';
+import * as accountQRParser from '@/utils/accountQRParser';
+import {
+  clearAllAccountSecrets,
+  getAccountSecret,
+} from '@/utils/accountQRParser';
 
 const MNEMONIC = algosdk.secretKeyToMnemonic(algosdk.generateAccount().sk);
 const WORDS = MNEMONIC.split(' ');
@@ -170,6 +186,8 @@ afterEach(() => {
   clearAllAccountSecrets();
   jest.restoreAllMocks();
   jest.clearAllMocks();
+  mockHasPin.mockReset().mockResolvedValue(true);
+  mockAssertNotInWallet.mockReset().mockResolvedValue(undefined);
 });
 
 describe('MnemonicImportScreen — add-account entry method (TASK-556)', () => {
@@ -349,6 +367,139 @@ describe('MnemonicImportScreen — onboarding phraseTyped hand-off (TASK-556)', 
       'SecuritySetup',
       expect.objectContaining({ source: 'mnemonic', phraseTyped: false })
     );
+  });
+});
+
+describe('MnemonicImportScreen — adding to a wallet with no PIN (TASK-522)', () => {
+  it('routes a typed phrase to SecuritySetup by secret id and stores nothing', async () => {
+    mockHasPin.mockResolvedValue(false);
+    const { navigation, screen } = await renderScreen(false);
+
+    await fireEvent.changeText(
+      screen.getByPlaceholderText('Imported account name'),
+      'Savings'
+    );
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(navigation.navigate).toHaveBeenCalledTimes(1);
+    const [route, params] = navigation.navigate.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(route).toBe('SecuritySetup');
+    expect(params).toEqual({
+      source: 'mnemonic',
+      addingAccount: true,
+      accountLabel: 'Savings',
+      phraseTyped: true,
+      mnemonicSecretId: expect.any(String),
+    });
+    expect(JSON.stringify(params)).not.toContain(WORDS[0]);
+    expect(getAccountSecret(params.mnemonicSecretId as string)?.mnemonic).toBe(
+      MNEMONIC
+    );
+    expect(mockImportAccount).not.toHaveBeenCalled();
+    expect(Alert.alert).not.toHaveBeenCalled();
+    // The words stay on screen: going back from SecuritySetup loses nothing.
+    expect(field(screen, 0).props.value).toBe(WORDS[0]);
+  });
+
+  it('runs the duplicate check on the phrase before routing', async () => {
+    mockHasPin.mockResolvedValue(false);
+    const { navigation, screen } = await renderScreen(false);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(mockAssertNotInWallet).toHaveBeenCalledTimes(1);
+    expect(mockAssertNotInWallet).toHaveBeenCalledWith(MNEMONIC);
+    expect(navigation.navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it('a phrase already in the wallet shows the import error, routes nowhere and sets no PIN', async () => {
+    mockHasPin.mockResolvedValue(false);
+    mockAssertNotInWallet.mockRejectedValue(
+      new Error('Account already exists in wallet')
+    );
+    const store = jest.spyOn(accountQRParser, 'storeMnemonicSecret');
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { navigation, screen } = await renderScreen(false);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Import Failed',
+      'Account already exists in wallet'
+    );
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(store).not.toHaveBeenCalled();
+    expect(mockImportAccount).not.toHaveBeenCalled();
+    // The words stay on screen for another try.
+    expect(field(screen, 0).props.value).toBe(WORDS[0]);
+  });
+
+  it('with a PIN the import runs its own check: no extra one here', async () => {
+    const { screen } = await renderScreen(false);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(mockAssertNotInWallet).not.toHaveBeenCalled();
+    expect(mockImportAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('a pasted phrase carries phraseTyped false', async () => {
+    mockHasPin.mockResolvedValue(false);
+    const { navigation, screen } = await renderScreen(false);
+
+    await insertWords(screen, 0, WORDS);
+    await pressImport(screen);
+
+    expect(navigation.navigate).toHaveBeenCalledWith(
+      'SecuritySetup',
+      expect.objectContaining({ addingAccount: true, phraseTyped: false })
+    );
+    expect(mockImportAccount).not.toHaveBeenCalled();
+  });
+
+  it('with a PIN imports directly, as before', async () => {
+    const { navigation, screen } = await renderScreen(false);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(mockHasPin).toHaveBeenCalledTimes(1);
+    expect(mockImportAccount).toHaveBeenCalledTimes(1);
+    expect(navigation.navigate).not.toHaveBeenCalled();
+  });
+
+  it('a failed PIN read alerts, routes nowhere and imports nothing', async () => {
+    mockHasPin.mockRejectedValue(new Error('keychain unavailable'));
+    const { navigation, screen } = await renderScreen(false);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Import Failed',
+      expect.any(String)
+    );
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(mockImportAccount).not.toHaveBeenCalled();
+  });
+
+  it('onboarding never asks about the PIN', async () => {
+    mockHasPin.mockResolvedValue(false);
+    const { navigation, screen } = await renderScreen(true);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(mockHasPin).not.toHaveBeenCalled();
+    const params = navigation.navigate.mock.calls[0][1] as object;
+    expect(params).not.toHaveProperty('addingAccount');
   });
 });
 

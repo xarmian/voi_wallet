@@ -343,9 +343,11 @@ describe('QR preview onboarding decision', () => {
           MultiAccountWalletService.importStandardAccount
         ).toHaveBeenCalledTimes(1);
       } else {
+        // TASK-522: outside onboarding SecuritySetup adds, never heals.
         expect(mockNavigation.navigate).toHaveBeenCalledWith('SecuritySetup', {
           accounts,
           source: 'qr',
+          addingAccount: true,
         });
         expectNoDirectImport();
       }
