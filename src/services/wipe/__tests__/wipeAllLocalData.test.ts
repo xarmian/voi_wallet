@@ -16,6 +16,9 @@ let mockSecureDeleteFailures = new Set<string>();
 // Like the mobile adapter: the presence marker goes even when the delete fails.
 let mockDropMarkerOnDelete = false;
 let mockListFailuresLeft = 0;
+// General-storage keys whose read or write rejects.
+let mockFailingReads = new Set<string>();
+let mockFailingWrites = new Set<string>();
 let mockNonce = 0;
 
 jest.mock('@/platform', () => ({
@@ -43,8 +46,12 @@ jest.mock('@/platform', () => ({
     }),
   },
   storage: {
-    getItem: jest.fn(async (key: string) => mockPlain.get(key) ?? null),
+    getItem: jest.fn(async (key: string) => {
+      if (mockFailingReads.has(key)) throw new Error('read failed');
+      return mockPlain.get(key) ?? null;
+    }),
     setItem: jest.fn(async (key: string, value: string) => {
+      if (mockFailingWrites.has(key)) throw new Error('write failed');
       mockPlain.set(key, value);
     }),
     removeItem: jest.fn(async (key: string) => {
@@ -158,9 +165,22 @@ beforeEach(() => {
   mockSecureDeleteFailures = new Set();
   mockDropMarkerOnDelete = false;
   mockListFailuresLeft = 0;
+  mockFailingReads = new Set();
+  mockFailingWrites = new Set();
   mockNonce = 0;
   mockEnvoiLookup.resolve = undefined;
   useFriendsStore.setState({ friends: [], isInitialized: false });
+});
+
+// A delete still refused when a test ends leaves its name in the wipe's
+// in-process set of unconfirmed deletes; a clean wipe lets it go, so it does
+// not reach the next test.
+afterEach(async () => {
+  if (mockSecureDeleteFailures.size === 0) return;
+  mockSecureDeleteFailures = new Set();
+  mockFailingReads = new Set();
+  mockFailingWrites = new Set();
+  await wipeAllLocalData().catch(() => undefined);
 });
 
 describe('wipe by default', () => {
@@ -270,6 +290,51 @@ describe('secure leftovers', () => {
     expect(mockSecure.has('voi_orphan_item')).toBe(false);
     // Cleared only now that the wipe is complete.
     expect(mockPlain.has('voi_wipe_secure_leftovers')).toBe(false);
+    expect(mockPlain.has('voi_wipe_intent')).toBe(false);
+  });
+});
+
+describe('a failed leftover delete the record could not keep', () => {
+  // The adapter drops the marker and the record holds nothing for the item:
+  // only this process still knows the name, and its retry deletes the item.
+  const firstWipeFailsWith = async (failing: 'read' | 'write') => {
+    mockDropMarkerOnDelete = true;
+    mockSecure.set('voi_orphan_item', 'v');
+    seed({ __voi_ss_present__voi_orphan_item: '1' });
+    mockSecureDeleteFailures = new Set(['voi_orphan_item']);
+    if (failing === 'read')
+      mockFailingReads = new Set(['voi_wipe_secure_leftovers']);
+    else mockFailingWrites = new Set(['voi_wipe_secure_leftovers']);
+    await expect(wipeAllLocalData()).rejects.toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: expect.arrayContaining([
+        'voi_orphan_item',
+        'voi_wipe_secure_leftovers',
+      ]),
+    });
+    expect(mockPlain.has('__voi_ss_present__voi_orphan_item')).toBe(false);
+    expect(mockPlain.has('voi_wipe_secure_leftovers')).toBe(false);
+    mockSecureDeleteFailures = new Set();
+    mockFailingReads = new Set();
+    mockFailingWrites = new Set();
+  };
+
+  test('an unreadable record: a retry in the same process still deletes the item', async () => {
+    await firstWipeFailsWith('read');
+    await wipeAllLocalData();
+    expect(mockSecure.has('voi_orphan_item')).toBe(false);
+    expect(mockPlain.has('voi_wipe_intent')).toBe(false);
+
+    // Confirmed deleted, so the name is let go: the next wipe does not ask.
+    mockEvents.length = 0;
+    await wipeAllLocalData();
+    expect(mockEvents).not.toContain('secure-delete:voi_orphan_item');
+  });
+
+  test('a record write that fails: a retry in the same process still deletes the item', async () => {
+    await firstWipeFailsWith('write');
+    await wipeAllLocalData();
+    expect(mockSecure.has('voi_orphan_item')).toBe(false);
     expect(mockPlain.has('voi_wipe_intent')).toBe(false);
   });
 });

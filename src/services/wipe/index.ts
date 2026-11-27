@@ -81,6 +81,14 @@ async function deleteSecureItems(names: Set<string>): Promise<string[]> {
   return list.filter((_, i) => outcomes[i].status === 'rejected');
 }
 
+/**
+ * Secure items whose delete could not be confirmed in this process (names
+ * only). Each run deletes them again; a name goes once its delete is
+ * confirmed. This covers a retry in the same process when the leftover record
+ * could not be read or written.
+ */
+const unconfirmedSecureNames = new Set<string>();
+
 type LeftoverRecord =
   | { state: 'read'; names: string[] }
   | { state: 'corrupt' }
@@ -111,9 +119,14 @@ async function readLeftoverRecord(): Promise<LeftoverRecord> {
 
 /**
  * Delete the secure items clearAll does not know: the named leftovers, any
- * item a leftover presence marker in `keys` points at, and any item an earlier
- * wipe recorded as not deleted. Records the ones that could not be confirmed
- * deleted, so the retry deletes them even though their markers are gone.
+ * item a leftover presence marker in `keys` points at, any item an earlier
+ * wipe recorded as not deleted, and any item this process could not confirm
+ * deleted before. The markers of failed deletes may be gone (the mobile
+ * adapter removes them either way), so the failed names are kept twice: in
+ * the leftover record, which covers a restart when it could be written, and
+ * in memory, which covers a retry in the same process. A failed delete whose
+ * record was unreadable or not written, followed by a restart before a retry,
+ * is not covered.
  * Returns the names still unresolved and the names confirmed deleted.
  */
 async function deleteSecureLeftovers(
@@ -124,9 +137,12 @@ async function deleteSecureLeftovers(
     ...Object.keys(SECURE_LEFTOVER_KEYS),
     ...markedNames(keys),
     ...(record.state === 'read' ? record.names : []),
+    ...unconfirmedSecureNames,
   ]);
   const failed = await deleteSecureItems(names);
   const deleted = new Set([...names].filter((name) => !failed.includes(name)));
+  failed.forEach((name) => unconfirmedSecureNames.add(name));
+  deleted.forEach((name) => unconfirmedSecureNames.delete(name));
   const unresolved = [...failed];
   // An unreadable record is left as it is: rewriting it would lose its names.
   if (record.state === 'unreadable') {
