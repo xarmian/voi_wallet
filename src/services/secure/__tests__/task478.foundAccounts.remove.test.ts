@@ -22,6 +22,7 @@ jest.mock('@/store/walletStore', () => ({
 import {
   AccountSecureStorage,
   FoundAccountOnlyCopyError,
+  FoundAccountUncheckedError,
 } from '@/services/secure/AccountSecureStorage';
 import { FreshAuthError } from '@/services/secure/freshAuth';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -122,6 +123,19 @@ describe('TASK-478 remove a found key', () => {
     );
     unregister = installPrompter(true).unregister;
     await expect(remove(formatA.id)).rejects.toThrow(/unresolved/);
+    expect(typeof mockPlatform.__secure.get(SECRET(formatA.id))).toBe('string');
+    expect(readRegistry()).toContain(formatA.id);
+  });
+
+  it('a key with no checked address is refused and kept', async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans();
+    unregister = installPrompter(true).unregister;
+    // Not scanned: no address names what the delete would erase, so the
+    // wallet-account check cannot run. The key stays.
+    expect(readScanMap() ?? {}).not.toHaveProperty(formatA.id);
+    await expect(remove(formatA.id)).rejects.toBeInstanceOf(
+      FoundAccountUncheckedError
+    );
     expect(typeof mockPlatform.__secure.get(SECRET(formatA.id))).toBe('string');
     expect(readRegistry()).toContain(formatA.id);
   });

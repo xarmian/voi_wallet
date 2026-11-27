@@ -186,6 +186,17 @@ export class FoundAccountOnlyCopyError extends Error {
   }
 }
 
+/**
+ * TASK-478: the found key has no checked address yet, so nothing can say which
+ * account a delete would erase or whether a wallet account still holds it. Kept.
+ */
+export class FoundAccountUncheckedError extends Error {
+  constructor() {
+    super('This key has not been checked on this device yet');
+    this.name = 'FoundAccountUncheckedError';
+  }
+}
+
 /** TASK-478: the id is not (or no longer) a quarantined key. */
 export class FoundAccountNotQuarantinedError extends Error {
   constructor() {
@@ -2994,6 +3005,9 @@ export class AccountSecureStorage {
           'A storage write for this key is unresolved; restart the app'
         );
       }
+      // A key with no checked address can't be matched against the wallet's
+      // accounts, so it may be one's only copy: only Delete Everything erases it.
+      if (address === undefined) throw new FoundAccountUncheckedError();
       await this.deleteAccountLocked(accountId);
       await this.dropQuarantineRecordsLocked(accountId);
     });
