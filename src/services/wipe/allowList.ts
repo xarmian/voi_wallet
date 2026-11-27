@@ -58,6 +58,8 @@ export const EXEMPT_KEYS: Readonly<Record<string, string>> = {
     'tombstone: stops the legacy wallet blob from being migrated back',
   voi_unknown_secure_writes:
     'journal of secure writes whose outcome is unknown; the secure wipe rewrites it',
+  voi_wipe_secure_leftovers:
+    'names (never values) of secure items a wipe could not delete, so the retry deletes them; removed only when the wipe is complete',
 };
 
 /** Secure-storage keys a wipe keeps. */

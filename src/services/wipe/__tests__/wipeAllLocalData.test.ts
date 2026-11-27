@@ -13,6 +13,9 @@ const mockEvents: string[] = [];
 let mockStickyKeys = new Set<string>();
 let mockListFailure = false;
 let mockSecureDeleteFailures = new Set<string>();
+// Like the mobile adapter: the presence marker goes even when the delete fails.
+let mockDropMarkerOnDelete = false;
+let mockListFailuresLeft = 0;
 let mockNonce = 0;
 
 jest.mock('@/platform', () => ({
@@ -28,10 +31,14 @@ jest.mock('@/platform', () => ({
       mockSecure.set(key, value);
     }),
     deleteItem: jest.fn(async (key: string) => {
-      if (mockSecureDeleteFailures.has(key))
-        throw new Error('secure delete failed');
-      mockEvents.push(`secure-delete:${key}`);
-      mockSecure.delete(key);
+      try {
+        if (mockSecureDeleteFailures.has(key))
+          throw new Error('secure delete failed');
+        mockEvents.push(`secure-delete:${key}`);
+        mockSecure.delete(key);
+      } finally {
+        if (mockDropMarkerOnDelete) mockPlain.delete(`__voi_ss_present__${key}`);
+      }
     }),
   },
   storage: {
@@ -51,6 +58,10 @@ jest.mock('@/platform', () => ({
     }),
     getAllKeys: jest.fn(async () => {
       if (mockListFailure) throw new Error('list failed');
+      if (mockListFailuresLeft > 0) {
+        mockListFailuresLeft -= 1;
+        throw new Error('list failed');
+      }
       return [...mockPlain.keys()];
     }),
   },
@@ -144,6 +155,8 @@ beforeEach(() => {
   mockStickyKeys = new Set();
   mockListFailure = false;
   mockSecureDeleteFailures = new Set();
+  mockDropMarkerOnDelete = false;
+  mockListFailuresLeft = 0;
   mockNonce = 0;
   mockEnvoiLookup.resolve = undefined;
   useFriendsStore.setState({ friends: [], isInitialized: false });
@@ -218,6 +231,45 @@ describe('secure leftovers', () => {
       keys: expect.arrayContaining(['voi_orphan_item']),
     });
     expect(mockPlain.get('__voi_ss_present__voi_orphan_item')).toBe('1');
+  });
+
+  test('a failed first listing keeps the marker of an item it never reached, and the retry deletes that item', async () => {
+    mockSecure.set('voi_orphan_item', 'v');
+    seed({ __voi_ss_present__voi_orphan_item: '1' });
+    mockListFailuresLeft = 1;
+    await expect(wipeAllLocalData()).rejects.toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: expect.arrayContaining(['storage_keys']),
+    });
+    expect(mockSecure.has('voi_orphan_item')).toBe(true);
+    expect(mockPlain.get('__voi_ss_present__voi_orphan_item')).toBe('1');
+
+    await wipeAllLocalData();
+    expect(mockSecure.has('voi_orphan_item')).toBe(false);
+    expect(mockPlain.has('__voi_ss_present__voi_orphan_item')).toBe(false);
+  });
+
+  test('a leftover whose delete fails is recorded by name, and the retry deletes it although its marker is gone', async () => {
+    mockDropMarkerOnDelete = true;
+    mockSecure.set('voi_orphan_item', 'secret-value');
+    seed({ __voi_ss_present__voi_orphan_item: '1' });
+    mockSecureDeleteFailures = new Set(['voi_orphan_item']);
+    await expect(wipeAllLocalData()).rejects.toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: expect.arrayContaining(['voi_orphan_item']),
+    });
+    // The adapter dropped the marker; the record still names the item.
+    expect(mockPlain.has('__voi_ss_present__voi_orphan_item')).toBe(false);
+    const record = mockPlain.get('voi_wipe_secure_leftovers') ?? '';
+    expect(JSON.parse(record)).toEqual(['voi_orphan_item']);
+    expect(record).not.toContain('secret-value');
+
+    mockSecureDeleteFailures = new Set();
+    await wipeAllLocalData();
+    expect(mockSecure.has('voi_orphan_item')).toBe(false);
+    // Cleared only now that the wipe is complete.
+    expect(mockPlain.has('voi_wipe_secure_leftovers')).toBe(false);
+    expect(mockPlain.has('voi_wipe_intent')).toBe(false);
   });
 });
 

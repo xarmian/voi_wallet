@@ -33,28 +33,40 @@ async function removeInBatches(keys: string[]): Promise<void> {
   }
 }
 
+export interface SweepResult {
+  /** Keys still present after the retry (STORAGE_KEYS_NAME when storage could not be listed). */
+  unresolved: string[];
+  /** Spared keys present at the last listing. */
+  spared: string[];
+}
+
 /**
- * TASK-469: remove every general-storage key that is not kept (and not in
- * `spare`), then list storage again. A key still there gets one more remove,
- * and is unresolved if it is still there after that. Returns the unresolved key
- * names (STORAGE_KEYS_NAME when storage could not be listed). `keys` is the
- * caller's listing, taken after every in-memory reset ran.
+ * TASK-469: remove every general-storage key that is not kept (and not
+ * spared), then list storage again. A key still there gets one more remove,
+ * and is unresolved if it is still there after that. `keys` is the caller's
+ * listing, taken after every in-memory reset ran; the read-back applies the
+ * same rules to keys that were not in it.
  */
 export async function sweepStorage(
   keys: string[],
-  spare: ReadonlySet<string>
-): Promise<string[]> {
+  spare: (key: string) => boolean
+): Promise<SweepResult> {
   const doomed = (list: string[]) =>
-    list.filter((key) => !isKeptKey(key) && !spare.has(key));
+    list.filter((key) => !isKeptKey(key) && !spare(key));
   await removeInBatches(doomed(keys));
   for (let pass = 0; ; pass += 1) {
-    let left: string[];
+    let listed: string[];
     try {
-      left = doomed(await listStorageKeys());
+      listed = await listStorageKeys();
     } catch {
-      return [STORAGE_KEYS_NAME];
+      return { unresolved: [STORAGE_KEYS_NAME], spared: [] };
     }
-    if (left.length === 0 || pass === 1) return left;
+    const left = doomed(listed);
+    if (left.length === 0 || pass === 1)
+      return {
+        unresolved: left,
+        spared: listed.filter((key) => !isKeptKey(key) && spare(key)),
+      };
     await removeInBatches(left);
   }
 }

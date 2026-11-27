@@ -14,3 +14,11 @@ export const LEGACY_WALLET_BLOB_NAME = 'wallet_metadata_legacy';
  * blob under (MultiAccountWalletService.WALLET_KEY; pinned by a drift test).
  */
 export const LEGACY_WALLET_SECURE_KEY = 'voi_wallet_metadata';
+
+/**
+ * General-storage record of the secure items a wipe could not confirm deleted
+ * (names only, never values). Mobile secure storage removes an item's presence
+ * marker even when the native delete fails, so this record is what lets the
+ * next wipe find the item again.
+ */
+export const SECURE_LEFTOVERS_RECORD_KEY = 'voi_wipe_secure_leftovers';

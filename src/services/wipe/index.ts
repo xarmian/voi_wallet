@@ -1,3 +1,4 @@
+import { storage } from '@/platform';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { WRITE_TIMEOUT_MS } from '@/services/secure/boundedWrites';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -12,6 +13,7 @@ import {
 import {
   LEGACY_WALLET_BLOB_NAME,
   LEGACY_WALLET_SECURE_KEY,
+  SECURE_LEFTOVERS_RECORD_KEY,
   WALLET_BLOB_NAME,
 } from './constants';
 import { WipeResetRun, runWipeResets } from './gate';
@@ -54,23 +56,106 @@ async function settleResets(run: WipeResetRun): Promise<string[]> {
   ].map((name) => `memory:${name}`);
 }
 
+/** Every name in a list of storage keys that a leftover presence marker points at. */
+function markedNames(keys: string[]): string[] {
+  return keys
+    .filter((key) => key.startsWith(PRESENCE_SENTINEL_PREFIX))
+    .map((key) => key.slice(PRESENCE_SENTINEL_PREFIX.length))
+    .filter((name) => !SECURE_KEEP.includes(name));
+}
+
 /**
- * Delete the secure items clearAll does not know: the named leftovers, and any
- * item a leftover presence marker still points at. Returns the ones that could
- * not be confirmed deleted.
+ * Delete secure items by name. Returns the ones that could not be confirmed
+ * deleted.
  */
-async function deleteSecureLeftovers(keys: string[]): Promise<string[]> {
-  const names = new Set(Object.keys(SECURE_LEFTOVER_KEYS));
-  for (const key of keys) {
-    if (!key.startsWith(PRESENCE_SENTINEL_PREFIX)) continue;
-    const name = key.slice(PRESENCE_SENTINEL_PREFIX.length);
-    if (!SECURE_KEEP.includes(name)) names.add(name);
-  }
+async function deleteSecureItems(names: Set<string>): Promise<string[]> {
   const list = [...names];
   const outcomes = await Promise.allSettled(
     list.map((name) => AccountSecureStorage.deleteSecureKeyVerified(name))
   );
   return list.filter((_, i) => outcomes[i].status === 'rejected');
+}
+
+type LeftoverRecord =
+  | { state: 'read'; names: string[] }
+  | { state: 'corrupt' }
+  | { state: 'unreadable' };
+
+/** The secure items an earlier wipe could not delete (names only), bounded. */
+async function readLeftoverRecord(): Promise<LeftoverRecord> {
+  let raw: string | null;
+  try {
+    raw = await withTimeout(
+      storage.getItem(SECURE_LEFTOVERS_RECORD_KEY),
+      WRITE_TIMEOUT_MS,
+      stepTimedOut
+    );
+  } catch {
+    return { state: 'unreadable' };
+  }
+  if (raw === null) return { state: 'read', names: [] };
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.every((n) => typeof n === 'string'))
+      return { state: 'read', names: parsed };
+  } catch {
+    // Falls through to corrupt.
+  }
+  return { state: 'corrupt' };
+}
+
+/**
+ * Delete the secure items clearAll does not know: the named leftovers, any
+ * item a leftover presence marker in `keys` points at, and any item an earlier
+ * wipe recorded as not deleted. Records the ones that could not be confirmed
+ * deleted, so the retry deletes them even though their markers are gone.
+ * Returns the names still unresolved and the names confirmed deleted.
+ */
+async function deleteSecureLeftovers(
+  keys: string[]
+): Promise<{ unresolved: string[]; deleted: Set<string> }> {
+  const record = await readLeftoverRecord();
+  const names = new Set([
+    ...Object.keys(SECURE_LEFTOVER_KEYS),
+    ...markedNames(keys),
+    ...(record.state === 'read' ? record.names : []),
+  ]);
+  const failed = await deleteSecureItems(names);
+  const deleted = new Set([...names].filter((name) => !failed.includes(name)));
+  const unresolved = [...failed];
+  // An unreadable record is left as it is: rewriting it would lose its names.
+  if (record.state === 'unreadable') {
+    unresolved.push(SECURE_LEFTOVERS_RECORD_KEY);
+  } else if (
+    failed.length > 0 ||
+    record.state === 'corrupt' ||
+    record.names.length > 0
+  ) {
+    if (record.state === 'corrupt') unresolved.push(SECURE_LEFTOVERS_RECORD_KEY);
+    try {
+      await withTimeout(
+        storage.setItem(SECURE_LEFTOVERS_RECORD_KEY, JSON.stringify(failed)),
+        WRITE_TIMEOUT_MS,
+        stepTimedOut
+      );
+    } catch {
+      unresolved.push(SECURE_LEFTOVERS_RECORD_KEY);
+    }
+  }
+  return { unresolved, deleted };
+}
+
+/** Remove the leftover record once the wipe is complete, bounded. */
+async function clearLeftoverRecord(): Promise<void> {
+  try {
+    await withTimeout(
+      storage.removeItem(SECURE_LEFTOVERS_RECORD_KEY),
+      WRITE_TIMEOUT_MS,
+      stepTimedOut
+    );
+  } catch {
+    throw new WipeIncompleteError([SECURE_LEFTOVERS_RECORD_KEY]);
+  }
 }
 
 async function runWipe(): Promise<void> {
@@ -117,16 +202,26 @@ async function runWipe(): Promise<void> {
   } catch {
     unresolved.add(STORAGE_KEYS_NAME);
   }
-  const secureLeft = await deleteSecureLeftovers(keys);
-  secureLeft.forEach((name) => unresolved.add(name));
-  // A presence marker whose item could not be deleted stays, so a later read
-  // of that item fails instead of reading as absent.
-  const spare = new Set(
-    secureLeft.map((name) => `${PRESENCE_SENTINEL_PREFIX}${name}`)
-  );
-  for (const key of await sweepStorage(keys, spare)) unresolved.add(key);
+  const leftovers = await deleteSecureLeftovers(keys);
+  leftovers.unresolved.forEach((name) => unresolved.add(name));
+  // The sweep removes a presence marker only when the item behind it was
+  // deleted above. Any other marker (the first listing failed, or it appeared
+  // after that listing) is the only pointer to its item, so it stays for the
+  // retry, and the wipe is incomplete while one is there. An item whose delete
+  // failed is in the leftover record; on mobile its marker is already gone
+  // (the adapter removes it even when the native delete fails).
+  const isMarker = (key: string) =>
+    key.startsWith(PRESENCE_SENTINEL_PREFIX) &&
+    !leftovers.deleted.has(key.slice(PRESENCE_SENTINEL_PREFIX.length));
+  const swept = await sweepStorage(keys, isMarker);
+  swept.unresolved.forEach((key) => unresolved.add(key));
+  const failedNames = new Set(leftovers.unresolved);
+  for (const key of swept.spared)
+    if (!failedNames.has(key.slice(PRESENCE_SENTINEL_PREFIX.length)))
+      unresolved.add(key);
   if (unresolved.size > 0)
     throw new WipeIncompleteError([...unresolved].map(redactKeyName));
+  await clearLeftoverRecord();
   await AccountSecureStorage.endWipe();
 }
 
