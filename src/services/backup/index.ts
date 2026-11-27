@@ -35,6 +35,7 @@ import {
 import type { FreshAuthCapability } from '@/services/secure/freshAuth';
 import { AccountType } from '@/types/wallet';
 import { BACKUP_FILE_EXTENSION, backupDirectory } from './files';
+import { wipeEpoch, wipedSince } from '@/services/wipe/gate';
 import {
   performFullRestore,
   planRestore,
@@ -206,6 +207,19 @@ export class BackupService {
     password: string,
     cap: FreshAuthCapability
   ): Promise<BackupResult> {
+    // TASK-469: a wipe that starts while this backup is collected, encrypted or
+    // written must not find the previous wallet's keys in a file after it. The
+    // wipe deletes the backup files once; a write after that would recreate
+    // the directory and the wipe would never see the file.
+    const epoch = wipeEpoch();
+    const stopIfWiped = () => {
+      if (wipedSince(epoch)) {
+        throw new BackupError(
+          'Backup failed: the wallet was deleted during the backup',
+          'FILE_WRITE_FAILED'
+        );
+      }
+    };
     try {
       // Step 0: Enforce the passphrase policy at the service boundary. The UI
       // modal already gates on this, but a direct caller must not be able to
@@ -299,9 +313,22 @@ export class BackupService {
       const filename = generateBackupFilename();
       const fileContent = JSON.stringify(encrypted, null, 2);
 
+      stopIfWiped();
       const backupDir = await getBackupDirectory();
+      // No await between this check and the write.
+      stopIfWiped();
       const backupFile = new File(backupDir, filename);
       await backupFile.write(fileContent);
+      if (wipedSince(epoch)) {
+        // The wipe started during the write: the file may already be past the
+        // wipe's file step. Delete it, and return nothing that points at it.
+        try {
+          if (backupFile.exists) backupFile.delete();
+        } catch {
+          // Reported as a failed backup either way.
+        }
+        stopIfWiped();
+      }
 
       this.reportProgress({
         step: 'saving',
