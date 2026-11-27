@@ -106,7 +106,16 @@ function useWaitingSummary(visible: boolean) {
   return visible ? buildWaitingSummary(snapshot, now) : null;
 }
 
-export default function LockScreen() {
+export default function LockScreen({
+  onEverythingDeleted,
+}: {
+  /**
+   * Called once a Delete Everything has completed, before the auth re-check.
+   * This screen is an overlay above a navigator that still holds the previous
+   * wallet's routes, so the owner sends the root back to Onboarding.
+   */
+  onEverythingDeleted?: () => void;
+} = {}) {
   const focus = useLockFocus();
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -433,6 +442,10 @@ export default function LockScreen() {
       showWipeIncompleteNotice();
       return;
     }
+
+    // TASK-469: everything is gone, so the routes under this overlay are the
+    // previous wallet's. Send the root to Onboarding while still covered.
+    onEverythingDeleted?.();
 
     // Reset local state (the wipe also erased the persisted PIN throttle).
     setPin('');

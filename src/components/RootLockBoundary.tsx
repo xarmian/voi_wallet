@@ -115,6 +115,14 @@ export default function RootLockBoundary({
   useEffect(() => {
     if (resumeSetup) finishSetup();
   }, [resumeSetup, finishSetup]);
+  // TASK-469: after a complete Delete Everything the navigator under the cover
+  // still shows the previous wallet's routes; start over at Onboarding.
+  const toOnboarding = useCallback(() => {
+    navigationRef.current?.resetRoot({
+      index: 0,
+      routes: [{ name: 'Onboarding' }],
+    });
+  }, [navigationRef]);
   useLayoutEffect(() => {
     setCovered(covered);
     return () => setCovered(false);
@@ -143,7 +151,7 @@ export default function RootLockBoundary({
         <View style={styles.lockOverlay}>
           {!noPin && (
             <RootLockFocusProvider>
-              <LockScreen />
+              <LockScreen onEverythingDeleted={toOnboarding} />
             </RootLockFocusProvider>
           )}
           {resumeSetup && <FinishSetupControl onPress={finishSetup} />}
