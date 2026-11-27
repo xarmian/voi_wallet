@@ -31,11 +31,13 @@ jest.mock('@/store/walletStore', () => ({
   },
 }));
 const mockImportStandardAccount = jest.fn();
+const mockDeleteAccount = jest.fn();
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
     importStandardAccount: (...args: unknown[]) =>
       mockImportStandardAccount(...args),
     addWatchAccount: jest.fn(),
+    deleteAccount: (...args: unknown[]) => mockDeleteAccount(...args),
     hasKeyBearingAccountStrict: jest.fn(),
   },
 }));
@@ -1233,5 +1235,114 @@ describe('TASK-522: adding an account to a wallet with no PIN', () => {
     expect(mockAuthSetupPin).not.toHaveBeenCalled();
     expect(mockStoreImportAccount).not.toHaveBeenCalled();
     expect(mockImportStandardAccount).not.toHaveBeenCalled();
+  });
+});
+
+// TASK-522 fold-in: a QR upgrade of a watch account (the preview marks it
+// `isUpgrade`) on a wallet with no PIN now reaches SecuritySetup. As the
+// preview's direct import does, the watch entry is deleted first, then the
+// full account imported; otherwise the import meets the duplicate check
+// (MultiAccountWalletService.importStandardAccount: "Account already exists").
+describe('TASK-522: a QR watch-to-full upgrade through PIN setup', () => {
+  const ADDRESS = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ';
+  let watchListed: boolean;
+
+  beforeEach(() => {
+    watchListed = true;
+    mockDeleteAccount.mockReset().mockImplementation(async () => {
+      watchListed = false;
+    });
+    mockImportStandardAccount.mockImplementation(async () => {
+      if (watchListed) throw new Error('Account already exists in wallet');
+      return { address: ADDRESS };
+    });
+  });
+
+  function upgradeAccount(secretId: string): ScannedAccount {
+    return {
+      id: 'qr-upgrade',
+      type: 'standard',
+      address: ADDRESS,
+      name: 'Upgraded',
+      secretId,
+      isValid: true,
+      isDuplicate: true,
+      isUpgrade: true,
+      existingAccountId: 'watch-id',
+    };
+  }
+
+  it('deletes the watch entry, then imports the full account', async () => {
+    const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      source: 'qr',
+      addingAccount: true,
+      accounts: [upgradeAccount(secretId)],
+    });
+
+    await submitPin(screen);
+
+    expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAccount).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAccount).toHaveBeenCalledWith('watch-id', {
+      address: ADDRESS,
+      type: 'watch',
+      keyless: true,
+    });
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAccount.mock.invocationCallOrder[0]).toBeLessThan(
+      mockImportStandardAccount.mock.invocationCallOrder[0]
+    );
+    await expect(
+      mockImportStandardAccount.mock.results[0].value
+    ).resolves.toEqual({ address: ADDRESS });
+    expect(Alert.alert).not.toHaveBeenCalledWith(
+      'Import Warning',
+      expect.anything()
+    );
+    expect(getAccountSecret(secretId)).toBeUndefined();
+    expect(navigation.reset).toHaveBeenCalledTimes(1);
+    await screen.unmount();
+  });
+
+  it('a failed watch delete imports nothing for that account and warns', async () => {
+    mockDeleteAccount.mockRejectedValue(new Error('delete failed'));
+    const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { screen } = await renderScreen({
+      source: 'qr',
+      addingAccount: true,
+      accounts: [upgradeAccount(secretId)],
+    });
+
+    await submitPin(screen);
+
+    expect(mockImportStandardAccount).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Import Warning',
+      '0 accounts imported successfully. 1 accounts failed to import.'
+    );
+    await screen.unmount();
+  });
+
+  it('an account that is not an upgrade deletes nothing', async () => {
+    watchListed = false;
+    const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { screen } = await renderScreen({
+      source: 'qr',
+      accounts: [
+        {
+          ...upgradeAccount(secretId),
+          isDuplicate: false,
+          isUpgrade: false,
+          existingAccountId: undefined,
+        },
+      ],
+    });
+
+    await submitPin(screen);
+
+    expect(mockDeleteAccount).not.toHaveBeenCalled();
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+    await screen.unmount();
   });
 });

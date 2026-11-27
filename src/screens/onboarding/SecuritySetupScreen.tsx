@@ -397,6 +397,20 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
                 throw new Error('Secure account data unavailable for import');
               }
 
+              // As AccountImportPreview does: upgrading a watch account deletes
+              // the watch entry first, so the import does not meet it as a
+              // duplicate.
+              if (account.isUpgrade && account.existingAccountId) {
+                await MultiAccountWalletService.deleteAccount(
+                  account.existingAccountId,
+                  {
+                    address: account.address,
+                    type: AccountType.WATCH,
+                    keyless: true,
+                  }
+                );
+              }
+
               const request: ImportAccountRequest = {
                 type: AccountType.STANDARD,
                 label:
