@@ -26,6 +26,7 @@ import {
   BackupError,
 } from '@/services/backup';
 import { FreshAuthError, withFreshAuth } from '@/services/secure/freshAuth';
+import { AppLockSignal } from '@/services/secure/appLockState';
 import KeysNotInBackupModal, {
   BackupReportBlocks,
 } from '@/components/backup/KeysNotInBackupModal';
@@ -158,7 +159,31 @@ export default function BackupWalletScreen() {
         // Show success state - user will see save/share options in the UI
       } catch (err) {
         setShowProgressModal(false);
-        if (err instanceof FreshAuthError && err.code === 'cancelled') return;
+        if (err instanceof FreshAuthError) {
+          if (err.code === 'cancelled') return;
+          // A lock while the prompt is up hides it behind the lock cover, and
+          // the prompt then times out: say the wallet locked.
+          if (!AppLockSignal.isUnlocked()) {
+            Alert.alert(
+              'Wallet Locked',
+              'The wallet locked before the backup was made. Unlock it, then tap Create Backup again.',
+              [{ text: 'OK' }]
+            );
+          } else if (err.code === 'timeout') {
+            Alert.alert(
+              'Authentication Timed Out',
+              'No backup was made. Tap Create Backup to try again.',
+              [{ text: 'OK' }]
+            );
+          } else {
+            Alert.alert(
+              'Authentication Error',
+              'Could not authenticate to create a backup.',
+              [{ text: 'OK' }]
+            );
+          }
+          return;
+        }
         const message =
           err instanceof BackupError
             ? err.message
