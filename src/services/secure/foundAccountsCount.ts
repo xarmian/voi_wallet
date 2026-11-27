@@ -2,7 +2,7 @@
  * TASK-478: how found keys are counted. No storage imports: Settings, the Home
  * notice and the found screen count from a summary they already hold.
  */
-import { AccountType } from '@/types/wallet';
+import { accountTypeHoldsOwnKey } from '@/types/wallet';
 import type { FoundRow, FoundSummary } from './foundAccounts';
 
 /**
@@ -10,18 +10,15 @@ import type { FoundRow, FoundSummary } from './foundAccounts';
  * of its own. The count, the row text and the Remove button all use it. It
  * reads the verdict the auth-gated scan recorded (the wallet account's slot
  * read the key back), never presence and never a slot. A missing verdict is
- * not "holds its key", so the found key stays reachable. A watch or Ledger
- * account never signs with a stored key, whatever was recorded. The verdict
- * can be stale: Remove re-checks the slot under the key-mutation mutex.
+ * not "holds its key", so the found key stays reachable. A watch, Ledger or
+ * remote-signer account never signs with a stored key, whatever was recorded
+ * (accountTypeHoldsOwnKey). The verdict can be stale: Remove re-checks the
+ * slot under the key-mutation mutex.
  */
 export function walletHoldsOwnKey(
   row: Extract<FoundRow, { kind: 'in-wallet' }>
 ): boolean {
-  return (
-    row.walletKeyUsable === true &&
-    row.walletType !== AccountType.WATCH &&
-    row.walletType !== AccountType.LEDGER
-  );
+  return row.walletKeyUsable === true && accountTypeHoldsOwnKey(row.walletType);
 }
 
 /**
@@ -74,16 +71,28 @@ export function actionableCount(summary: FoundSummary): number {
 }
 
 /**
+ * An in-wallet copy the next auth-gated scan should check: no verdict yet, and
+ * its wallet account's type can hold a key (a watch, Ledger or remote-signer
+ * account can't, so its row needs no scan).
+ */
+export function inWalletNeedsVerdict(row: FoundRow): boolean {
+  return (
+    row.kind === 'in-wallet' &&
+    row.walletKeyUsable === undefined &&
+    accountTypeHoldsOwnKey(row.walletType)
+  );
+}
+
+/**
  * The ids an auth-gated scan should read: unscanned keys, and in-wallet copies
- * with no verdict on whether their wallet account still holds its key.
+ * with no verdict on whether their wallet account still holds its key
+ * (inWalletNeedsVerdict).
  */
 export function idsNeedingScan(summary: FoundSummary): string[] {
   return [
     ...summary.unscannedIds,
     ...summary.rows.flatMap((row) =>
-      row.kind === 'in-wallet' && row.walletKeyUsable === undefined
-        ? [row.id]
-        : []
+      inWalletNeedsVerdict(row) ? [row.id] : []
     ),
   ];
 }

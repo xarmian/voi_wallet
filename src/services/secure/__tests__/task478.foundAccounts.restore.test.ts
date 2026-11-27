@@ -46,6 +46,7 @@ import {
   restoreFoundAccount,
   scanFoundAccounts,
 } from '../foundAccounts';
+import { idsNeedingScan } from '../foundAccountsCount';
 import {
   PIN,
   SECRET,
@@ -284,6 +285,83 @@ describe('TASK-478 restore a found account', () => {
       address: formatA.address,
     });
     expect(mockPlatform.__secure.get(SECRET(formatA.id))).toBe(before);
+    expect(readRegistry()).toContain(formatA.id);
+  });
+
+  it("a kept copy records the new account's verdict: no rescan needed", async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans();
+    await scanAll();
+    const before = mockPlatform.__secure.get(SECRET(formatA.id));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    // The new slot reads the key back, then the old slot's delete fails.
+    mockPlatform.__state.fault = (op, key) =>
+      op === 'secure.delete' && key === SECRET(formatA.id)
+        ? 'reject'
+        : undefined;
+    expect(await restore(formatA)).toEqual({
+      kind: 'restored-copy-kept',
+      address: formatA.address,
+    });
+    mockPlatform.__state.fault = undefined;
+    warn.mockRestore();
+    const account = await walletAccountAt(formatA.address);
+    expect(await slotState(account!.id, formatA.address)).toBe('key-matches');
+    expect(mockPlatform.__secure.get(SECRET(formatA.id))).toBe(before);
+    expect(readScanMap()?.[formatA.id]).toEqual({
+      address: formatA.address,
+      wallet: { ownerId: account!.id, keyUsable: true },
+    });
+    const summary = await readFoundAccountsSummary();
+    expect(summary.rows.find((r) => r.id === formatA.id)).toMatchObject({
+      kind: 'in-wallet',
+      walletKeyUsable: true,
+    });
+    // The screen's load goes straight to the list: nothing needs a scan.
+    expect(idsNeedingScan(summary)).toEqual([]);
+  });
+
+  it('a kept copy whose new slot does not verify records false', async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans();
+    await scanAll();
+    const original =
+      AccountSecureStorage.commitPendingCreate.bind(AccountSecureStorage);
+    jest
+      .spyOn(AccountSecureStorage, 'commitPendingCreate')
+      .mockImplementation(async (id, token) => {
+        await original(id, token);
+        mockPlatform.__secure.set(SECRET(id), '{"accountId":"x"}');
+      });
+    expect((await restore(formatA)).kind).toBe('restored-copy-kept');
+    const account = await walletAccountAt(formatA.address);
+    expect(readScanMap()?.[formatA.id]).toEqual({
+      address: formatA.address,
+      wallet: { ownerId: account!.id, keyUsable: false },
+    });
+  });
+
+  it('a kept copy under a locked vault records nothing', async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans();
+    await scanAll();
+    jest
+      .spyOn(service, 'inspectSlotUnderOneVaultState')
+      .mockResolvedValueOnce({ state: 'occupied-unreadable', vault: 'locked' });
+    expect((await restore(formatA)).kind).toBe('restored-copy-kept');
+    expect(readScanMap()?.[formatA.id]).toEqual({ address: formatA.address });
+  });
+
+  it('a failed verdict write at release still keeps the copy', async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans();
+    await scanAll();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockPlatform.__state.fault = (op, key) =>
+      (op === 'secure.delete' && key === SECRET(formatA.id)) ||
+      (op === 'kv.set' && key === 'voi_reconcile_quarantine_scan')
+        ? 'reject'
+        : undefined;
+    expect((await restore(formatA)).kind).toBe('restored-copy-kept');
+    mockPlatform.__state.fault = undefined;
+    expect(warn).toHaveBeenCalledWith('[foundAccounts] scan record not saved');
+    expect(readScanMap()?.[formatA.id]).toEqual({ address: formatA.address });
     expect(readRegistry()).toContain(formatA.id);
   });
 

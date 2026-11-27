@@ -304,7 +304,7 @@ describe("TASK-478 the wallet account's own key: one post-auth verdict", () => {
     });
   });
 
-  it.each([AccountType.WATCH, AccountType.LEDGER])(
+  it.each([AccountType.WATCH, AccountType.LEDGER, AccountType.REMOTE_SIGNER])(
     'a %s owner records keyUsable false with no slot read',
     async (type) => {
       const { formatA } = await pinDeviceWithTwoOrphans();

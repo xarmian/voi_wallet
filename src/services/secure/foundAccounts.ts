@@ -237,7 +237,7 @@ export async function restoreFoundAccount(
  * account is removed only while that account's slot reads the key back, checked
  * again here whatever the scan recorded (FoundAccountWalletKeyUncheckedError
  * when the vault is locked; FoundAccountOnlyCopyError otherwise, including for
- * a watch or Ledger account).
+ * a watch, Ledger or remote-signer account).
  */
 export async function removeFoundAccount(
   ids: string[],

@@ -351,6 +351,7 @@ describe('FoundAccountsScreen', () => {
     ['an empty wallet slot', AccountType.STANDARD, false],
     ['a watch account', AccountType.WATCH, true],
     ['a Ledger account', AccountType.LEDGER, true],
+    ['a remote signer', AccountType.REMOTE_SIGNER, true],
   ])(
     'an in-wallet row over %s offers no Remove',
     async (_label, walletType, walletKeyUsable) => {
@@ -477,6 +478,72 @@ describe('FoundAccountsScreen', () => {
     });
     expect(scanMock).toHaveBeenCalledTimes(2);
     expect(scanMock.mock.calls[1][0]).toEqual(['q2']);
+  });
+
+  it('a remote-signer row with no verdict is the only copy, needs no scan, and counts', async () => {
+    prompter(true);
+    const keyless = summary({
+      presentCount: 1,
+      rows: [
+        {
+          kind: 'in-wallet',
+          id: 'q2',
+          address: WALLET,
+          walletLabel: 'Signer',
+          walletType: AccountType.REMOTE_SIGNER,
+        },
+      ],
+    });
+    summaryMock.mockResolvedValue(keyless);
+    expect(idsNeedingScan(keyless)).toEqual([]);
+    expect(actionableCount(keyless)).toBe(1);
+    const view = await render(<FoundAccountsScreen />);
+    await view.findByText(onlyCopyRow('Signer'));
+    await flush();
+    expect(view.queryByText(notChecked('Signer'))).toBeNull();
+    expect(view.queryByText('Remove')).toBeNull();
+    expect(view.queryByText(/^Check /)).toBeNull();
+    expect(prompts).toEqual([]);
+    expect(scanMock).not.toHaveBeenCalled();
+  });
+
+  it('a restore that kept the found copy lands in the list with no second prompt', async () => {
+    prompter(true);
+    summaryMock
+      .mockResolvedValueOnce(
+        summary({
+          presentCount: 1,
+          rows: [{ kind: 'ready', id: 'q1', ids: ['q1'], address: WALLET }],
+        })
+      )
+      // The release recorded that the new account holds the key.
+      .mockResolvedValue(
+        summary({
+          presentCount: 1,
+          rows: [
+            {
+              kind: 'in-wallet',
+              id: 'q1',
+              address: WALLET,
+              walletLabel: 'Restored',
+              walletType: AccountType.STANDARD,
+              walletKeyUsable: true,
+            },
+          ],
+        })
+      );
+    restoreMock.mockResolvedValue({
+      kind: 'restored-copy-kept',
+      address: WALLET,
+    });
+    const view = await render(<FoundAccountsScreen />);
+    await fireEvent.press(await view.findByText('Restore'));
+    await pressAlertButton('Restore');
+    await view.findByText('Already in your wallet as Restored');
+    await flush();
+    expect(view.getByText('Remove')).toBeTruthy();
+    expect(prompts).toEqual(['restore_found_account']);
+    expect(scanMock).not.toHaveBeenCalled();
   });
 
   it('a remove whose wallet key could not be checked says to unlock and retry', async () => {

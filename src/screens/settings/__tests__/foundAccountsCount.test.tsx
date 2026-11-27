@@ -7,7 +7,11 @@ import React from 'react';
 import { render } from '@testing-library/react-native';
 import SettingsScreen from '../SettingsScreen';
 import FoundAccountsNoticeHost from '@/components/account/FoundAccountsNoticeHost';
-import { AccountMetadata, AccountType } from '@/types/wallet';
+import {
+  AccountMetadata,
+  AccountType,
+  accountTypeHoldsOwnKey,
+} from '@/types/wallet';
 import type { FoundSummary } from '@/services/secure/foundAccounts';
 import {
   actionableOf,
@@ -126,8 +130,14 @@ it('an in-wallet copy whose wallet account has no key counts; one with a key doe
   });
 });
 
-it('a watch or Ledger account counts as keyless even when its slot holds something', () => {
-  for (const walletType of [AccountType.WATCH, AccountType.LEDGER]) {
+const KEYLESS = [
+  AccountType.WATCH,
+  AccountType.LEDGER,
+  AccountType.REMOTE_SIGNER,
+];
+
+it('a watch, Ledger or remote-signer account counts as keyless even when its slot holds something', () => {
+  for (const walletType of KEYLESS) {
     const row = {
       kind: 'in-wallet' as const,
       id: 'w3',
@@ -171,6 +181,32 @@ it('an in-wallet copy with no verdict counts and needs a scan', () => {
       ],
     })
   ).toEqual([]);
+});
+
+it('a watch, Ledger or remote-signer row with no verdict counts and needs no scan', () => {
+  for (const walletType of KEYLESS) {
+    const row = {
+      kind: 'in-wallet' as const,
+      id: 'w6',
+      address: READY,
+      walletLabel: 'Keyless',
+      walletType,
+    };
+    // The type decides: no scan can make it hold a key.
+    const summary: FoundSummary = { ...mockSummary, rows: [row] };
+    expect(walletHoldsOwnKey(row)).toBe(false);
+    expect(idsNeedingScan(summary)).toEqual([]);
+    expect(actionableOf(summary)).toEqual({
+      count: 1,
+      ids: ['w6'],
+      address: READY,
+    });
+  }
+});
+
+it('accountTypeHoldsOwnKey is false only for watch, Ledger and remote signer', () => {
+  for (const type of Object.values(AccountType))
+    expect(accountTypeHoldsOwnKey(type)).toBe(!KEYLESS.includes(type));
 });
 
 it('Settings and Home show the same count', async () => {

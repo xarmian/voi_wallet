@@ -9,6 +9,20 @@ export enum AccountType {
   REMOTE_SIGNER = 'remote_signer', // Air-gapped signing via QR codes
 }
 
+/**
+ * TASK-478: whether an account of this type can sign with a key stored in its
+ * own slot on this device. A watch account has no key, a Ledger account's key
+ * stays on the device, and a remote signer's key stays on the air-gapped
+ * signer, so none of them ever uses a stored key, whatever its slot holds.
+ */
+export function accountTypeHoldsOwnKey(type: AccountType): boolean {
+  return (
+    type !== AccountType.WATCH &&
+    type !== AccountType.LEDGER &&
+    type !== AccountType.REMOTE_SIGNER
+  );
+}
+
 // Base Account Metadata Interface
 export interface BaseAccountMetadata {
   id: string; // Unique account identifier

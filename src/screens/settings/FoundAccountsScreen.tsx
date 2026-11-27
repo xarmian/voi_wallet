@@ -26,6 +26,7 @@ import {
 import {
   actionableCount,
   idsNeedingScan,
+  inWalletNeedsVerdict,
   walletHoldsOwnKey,
 } from '@/services/secure/foundAccountsCount';
 import {
@@ -66,8 +67,7 @@ const notCheckedRowText = (row: Extract<FoundRow, { kind: 'in-wallet' }>) =>
 
 /** A row the needs-auth state lists: what the next scan will check. */
 const needsScan = (row: FoundRow) =>
-  row.kind === 'unscanned' ||
-  (row.kind === 'in-wallet' && row.walletKeyUsable === undefined);
+  row.kind === 'unscanned' || inWalletNeedsVerdict(row);
 
 function authAlert(error: FreshAuthError, what: string) {
   // A cancel shows nothing; other auth failures say so without detail.
@@ -374,7 +374,8 @@ export default function FoundAccountsScreen() {
           </>
         ) : (
           <Text style={styles.label}>
-            {row.walletKeyUsable === undefined
+            {/* A keyless type is the only copy whatever the verdict says. */}
+            {inWalletNeedsVerdict(row)
               ? notCheckedRowText(row)
               : onlyCopyRowText(row)}
           </Text>

@@ -36,7 +36,8 @@ import {
   removeFoundAccount,
   scanFoundAccounts,
 } from '../foundAccounts';
-import { idsNeedingScan } from '../foundAccountsCount';
+import { idsNeedingScan, walletHoldsOwnKey } from '../foundAccountsCount';
+import { NetworkService } from '@/services/network';
 import {
   CANARY_ADDRESS,
   CANARY_MNEMONIC,
@@ -348,6 +349,7 @@ describe('TASK-478 the delete guard corrects a stale verdict', () => {
     });
     await scanAll();
     mockPlatform.__secure.set(SECRET(account.id), '{"not":"a key"}');
+    const before = mockPlatform.__secure.get(SECRET(formatA.id));
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     mockPlatform.__state.fault = (op, key) =>
       op === 'kv.set' && key === SCAN_KEY ? 'reject' : undefined;
@@ -357,14 +359,16 @@ describe('TASK-478 the delete guard corrects a stale verdict', () => {
     mockPlatform.__state.fault = undefined;
     expect(warn).toHaveBeenCalled();
     expect(readRegistry()).toContain(formatA.id);
+    expect(mockPlatform.__secure.get(SECRET(formatA.id))).toBe(before);
   });
 
-  it.each([AccountType.WATCH, AccountType.LEDGER])(
+  it.each([AccountType.WATCH, AccountType.LEDGER, AccountType.REMOTE_SIGNER])(
     'a %s owner is refused before any slot read',
     async (type) => {
       const { formatA } = await pinDeviceWithTwoOrphans();
       unregister = installPrompter(true).unregister;
       await scanAll();
+      const scanBefore = readScanMap();
       const inspect = jest.spyOn(AccountSecureStorage, 'inspectSecretSlot');
       const reads = spyDecryptors();
       await expect(
@@ -374,10 +378,166 @@ describe('TASK-478 the delete guard corrects a stale verdict', () => {
       ).rejects.toBeInstanceOf(FoundAccountOnlyCopyError);
       expect(inspect).not.toHaveBeenCalled();
       expect(reads.total()).toBe(0);
+      // Nothing recorded either: the type alone decides.
+      expect(readScanMap()).toEqual(scanBefore);
       expect(typeof mockPlatform.__secure.get(SECRET(formatA.id))).toBe(
         'string'
       );
       expect(readRegistry()).toContain(formatA.id);
     }
   );
+});
+
+/** Two found copies of CANARY_ADDRESS and the STANDARD wallet account for it. */
+async function twoCopiesInWallet() {
+  await addWatch();
+  await AccountSecureStorage.setupPin(PIN, 'pin');
+  unlock();
+  const q1 = await writeUnboundKey('copy-1', CANARY_MNEMONIC);
+  const q2 = await writeUnboundKey('copy-2', CANARY_MNEMONIC);
+  await boot();
+  unlock();
+  unregister = installPrompter(true).unregister;
+  const account = await MultiAccountWalletService.importStandardAccount({
+    type: AccountType.STANDARD,
+    mnemonic: CANARY_MNEMONIC,
+    label: 'Imported',
+  });
+  await scanAll();
+  const holds = { ownerId: account.id, keyUsable: true };
+  expect(readScanMap()).toEqual({
+    [q1.id]: { address: CANARY_ADDRESS, wallet: holds },
+    [q2.id]: { address: CANARY_ADDRESS, wallet: holds },
+  });
+  return { q1, q2, account };
+}
+
+describe('TASK-478 copies of one address share one verdict', () => {
+  it('a refused Remove on one copy marks every copy as the only usable key', async () => {
+    const { q1, q2, account } = await twoCopiesInWallet();
+    mockPlatform.__secure.set(SECRET(account.id), '{"not":"a key"}');
+    await expect(remove(q1.id)).rejects.toBeInstanceOf(
+      FoundAccountOnlyCopyError
+    );
+    const onlyCopy = { ownerId: account.id, keyUsable: false };
+    expect(readScanMap()).toEqual({
+      [q1.id]: { address: CANARY_ADDRESS, wallet: onlyCopy },
+      [q2.id]: { address: CANARY_ADDRESS, wallet: onlyCopy },
+    });
+    const summary = await readFoundAccountsSummary();
+    for (const id of [q1.id, q2.id])
+      expect(summary.rows.find((r) => r.id === id)).toMatchObject({
+        kind: 'in-wallet',
+        walletKeyUsable: false,
+      });
+    expect(actionableOf(summary).ids.sort()).toEqual([q1.id, q2.id].sort());
+  });
+
+  it("a scan of one copy updates the other copy's verdict", async () => {
+    const { q1, q2, account } = await twoCopiesInWallet();
+    mockPlatform.__secure.set(SECRET(account.id), '{"not":"a key"}');
+    await authed('scan_found_accounts', (cap) =>
+      scanFoundAccounts([q2.id], cap)
+    );
+    const onlyCopy = { ownerId: account.id, keyUsable: false };
+    expect(readScanMap()).toEqual({
+      [q1.id]: { address: CANARY_ADDRESS, wallet: onlyCopy },
+      [q2.id]: { address: CANARY_ADDRESS, wallet: onlyCopy },
+    });
+  });
+
+  it('a scan of one copy that learns nothing clears the other copy too', async () => {
+    const { q1, q2 } = await twoCopiesInWallet();
+    jest
+      .spyOn(
+        AccountSecureStorage as unknown as {
+          inspectSlotUnderOneVaultState: () => Promise<unknown>;
+        },
+        'inspectSlotUnderOneVaultState'
+      )
+      .mockResolvedValueOnce({ state: 'occupied-unreadable', vault: 'locked' });
+    await authed('scan_found_accounts', (cap) =>
+      scanFoundAccounts([q2.id], cap)
+    );
+    expect(readScanMap()).toEqual({
+      [q1.id]: { address: CANARY_ADDRESS },
+      [q2.id]: { address: CANARY_ADDRESS },
+    });
+    expect(idsNeedingScan(await readFoundAccountsSummary()).sort()).toEqual(
+      [q1.id, q2.id].sort()
+    );
+  });
+});
+
+describe("TASK-478 deleting a wallet account's slot clears verdicts naming it", () => {
+  async function canaryInWalletScanned() {
+    const { formatA } = await pinDeviceWithTwoOrphans({
+      formatAMnemonic: CANARY_MNEMONIC,
+    });
+    unregister = installPrompter(true).unregister;
+    const account = await MultiAccountWalletService.importStandardAccount({
+      type: AccountType.STANDARD,
+      mnemonic: CANARY_MNEMONIC,
+      label: 'Imported',
+    });
+    await scanAll();
+    expect(readScanMap()?.[formatA.id]).toEqual({
+      address: CANARY_ADDRESS,
+      wallet: { ownerId: account.id, keyUsable: true },
+    });
+    return { formatA, account };
+  }
+
+  it('converting the owner to a remote signer: the found key is no duplicate, and counts', async () => {
+    const { formatA, account } = await canaryInWalletScanned();
+    // The custody check asks the network whether the account is rekeyed.
+    jest.spyOn(NetworkService, 'getInstance').mockReturnValue({
+      getAccountRekeyInfo: async () => ({ isRekeyed: false }),
+    } as never);
+    await MultiAccountWalletService.convertStandardToRemoteSigner(
+      account.id,
+      'signer-device'
+    );
+    const converted =
+      (await MultiAccountWalletService.readWalletStrict())!.accounts.find(
+        (a) => a.id === account.id
+      );
+    expect(converted?.type).toBe(AccountType.REMOTE_SIGNER);
+    expect(mockPlatform.__secure.has(SECRET(account.id))).toBe(false);
+    expect(readScanMap()?.[formatA.id]).toEqual({ address: CANARY_ADDRESS });
+
+    const summary = await readFoundAccountsSummary();
+    const row = summary.rows.find((r) => r.id === formatA.id);
+    expect(row).toMatchObject({
+      kind: 'in-wallet',
+      walletType: AccountType.REMOTE_SIGNER,
+    });
+    expect(row && row.kind === 'in-wallet' && walletHoldsOwnKey(row)).toBe(
+      false
+    );
+    expect(actionableOf(summary).ids).toContain(formatA.id);
+    // A remote signer can't hold the key: nothing to scan for it.
+    expect(idsNeedingScan(summary)).not.toContain(formatA.id);
+  });
+
+  it('deleteAccount of a STANDARD owner still in the wallet: the verdict is cleared and the id queued', async () => {
+    const { formatA, account } = await canaryInWalletScanned();
+    const listed = await MultiAccountWalletService.readWalletStrict();
+    await AccountSecureStorage.deleteAccount(account.id);
+    expect(mockPlatform.__secure.has(SECRET(account.id))).toBe(false);
+    // The wallet record still names the account, as STANDARD.
+    jest
+      .spyOn(MultiAccountWalletService, 'readWalletStrict')
+      .mockResolvedValue(listed as never);
+    expect(readScanMap()?.[formatA.id]).toEqual({ address: CANARY_ADDRESS });
+    const summary = await readFoundAccountsSummary();
+    const row = summary.rows.find((r) => r.id === formatA.id);
+    expect(row).toMatchObject({
+      kind: 'in-wallet',
+      walletType: AccountType.STANDARD,
+    });
+    expect(row).not.toHaveProperty('walletKeyUsable');
+    expect(actionableOf(summary).ids).toContain(formatA.id);
+    expect(idsNeedingScan(summary)).toContain(formatA.id);
+  });
 });
