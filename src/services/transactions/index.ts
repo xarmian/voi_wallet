@@ -36,7 +36,7 @@ import { ledgerTransportService } from '@/services/ledger/transport';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { useWalletStore } from '@/store/walletStore';
 import { redactError } from '@/utils/logRedaction';
-import { wipeEpoch } from '@/services/wipe/gate';
+import { registerWipeReset, wipeEpoch, wipedSince } from '@/services/wipe/gate';
 
 export interface TransactionParams {
   preparedArc200Group?: Arc200TransactionGroup;
@@ -130,10 +130,17 @@ export class TransactionService {
     return cached.txn;
   }
 
+  /**
+   * `epoch` is the wipe epoch the preparation took when it started: one that
+   * straddled a wipe, or started during one, built from the previous wallet's
+   * state, so its result is returned but not cached (TASK-469).
+   */
   private static cacheTransaction(
     cacheKey: string,
-    txn: UnsignedTransaction | UnsignedTransactionGroup
+    txn: UnsignedTransaction | UnsignedTransactionGroup,
+    epoch: number
   ) {
+    if (wipedSince(epoch)) return;
     // Prune expired entries first
     TransactionService.pruneExpiredEntries();
     // Evict LRU/oldest entries if over limit
@@ -151,6 +158,11 @@ export class TransactionService {
       timestamp: Date.now(),
       txn,
     });
+  }
+
+  /** TASK-469: forget every prepared transaction (the wipe reset). */
+  static resetForWipe(): void {
+    TransactionService.transactionCache.clear();
   }
 
   private static clearCachedTransaction(cacheKey: string) {
@@ -180,8 +192,8 @@ export class TransactionService {
 
   private static cacheAndReturn<
     T extends UnsignedTransaction | UnsignedTransactionGroup,
-  >(cacheKey: string, txn: T): T {
-    TransactionService.cacheTransaction(cacheKey, txn);
+  >(cacheKey: string, txn: T, epoch: number): T {
+    TransactionService.cacheTransaction(cacheKey, txn, epoch);
     return txn;
   }
 
@@ -247,6 +259,7 @@ export class TransactionService {
   static async buildTransaction(
     params: TransactionParams
   ): Promise<UnsignedTransaction | UnsignedTransactionGroup> {
+    const epoch = wipeEpoch();
     if (TransactionService.determineAssetType(params) === 'arc200') {
       return TransactionService.buildArc200Transaction(params);
     }
@@ -262,22 +275,26 @@ export class TransactionService {
       case 'voi':
         return TransactionService.cacheAndReturn(
           cacheKey,
-          await TransactionService.buildVoiTransaction(params)
+          await TransactionService.buildVoiTransaction(params),
+          epoch
         );
       case 'asa':
         return TransactionService.cacheAndReturn(
           cacheKey,
-          await TransactionService.buildAsaTransaction(params)
+          await TransactionService.buildAsaTransaction(params),
+          epoch
         );
       case 'arc200':
         return TransactionService.cacheAndReturn(
           cacheKey,
-          await TransactionService.buildArc200Transaction(params)
+          await TransactionService.buildArc200Transaction(params),
+          epoch
         );
       case 'arc72':
         return TransactionService.cacheAndReturn(
           cacheKey,
-          await TransactionService.buildArc72Transaction(params)
+          await TransactionService.buildArc72Transaction(params),
+          epoch
         );
       default:
         throw new Error('Unknown asset type');
@@ -1225,6 +1242,7 @@ export class TransactionService {
     note?: string;
     networkId?: NetworkId;
   }): Promise<UnsignedTransaction> {
+    const epoch = wipeEpoch();
     await TransactionService.assertSignsAfterRekey(params.rekeyToAddress);
     const cacheKey = TransactionService.getRekeyCacheKey({
       fromAddress: params.fromAddress,
@@ -1272,7 +1290,7 @@ export class TransactionService {
         txn,
         txnBytes,
       };
-      TransactionService.cacheTransaction(cacheKey, result);
+      TransactionService.cacheTransaction(cacheKey, result, epoch);
       return result;
     } catch (error) {
       console.error('Failed to build rekey transaction:', redactError(error));
@@ -1292,6 +1310,7 @@ export class TransactionService {
     note?: string;
     networkId?: NetworkId;
   }): Promise<UnsignedTransaction> {
+    const epoch = wipeEpoch();
     await TransactionService.assertSignsAfterRekey(params.fromAddress);
     const cacheKey = TransactionService.getRekeyCacheKey({
       fromAddress: params.fromAddress,
@@ -1332,7 +1351,7 @@ export class TransactionService {
         txn,
         txnBytes,
       };
-      TransactionService.cacheTransaction(cacheKey, result);
+      TransactionService.cacheTransaction(cacheKey, result, epoch);
       return result;
     } catch (error) {
       console.error(
@@ -1885,3 +1904,7 @@ export class TransactionService {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
+
+// TASK-469: the cache holds the previous wallet's unsigned transactions and
+// addresses; a wipe empties it.
+registerWipeReset('transaction-cache', () => TransactionService.resetForWipe());
