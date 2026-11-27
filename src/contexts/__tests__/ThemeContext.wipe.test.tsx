@@ -3,7 +3,7 @@
  * load or an NFT pick that began before or during a wipe does not show it (or
  * save it) after the wipe's reset.
  */
-import React from 'react';
+import React, { useEffect } from 'react';
 import { act, render } from '@testing-library/react-native';
 
 jest.mock('@react-native-async-storage/async-storage', () =>
@@ -49,8 +49,14 @@ const STORED = {
 };
 
 let context: ReturnType<typeof useTheme> | undefined;
-function Probe() {
-  context = useTheme();
+const seeContext = (value: ReturnType<typeof useTheme>) => {
+  context = value;
+};
+function Probe({ onContext }: { onContext: typeof seeContext }) {
+  const value = useTheme();
+  useEffect(() => {
+    onContext(value);
+  });
   return null;
 }
 const flush = async () => {
@@ -78,7 +84,7 @@ test('a theme load in flight when the wipe resets does not show the picked NFT',
   );
   const view = await render(
     <ThemeProvider>
-      <Probe />
+      <Probe onContext={seeContext} />
     </ThemeProvider>
   );
   await flush();
@@ -95,7 +101,7 @@ test('with no wipe the same load shows the picked NFT', async () => {
   mockLoadNFTTheme.mockResolvedValueOnce(STORED);
   const view = await render(
     <ThemeProvider>
-      <Probe />
+      <Probe onContext={seeContext} />
     </ThemeProvider>
   );
   await flush();
@@ -107,7 +113,7 @@ test('an NFT pick that started before the wipe is neither saved nor shown', asyn
   mockLoadNFTTheme.mockResolvedValue(null);
   const view = await render(
     <ThemeProvider>
-      <Probe />
+      <Probe onContext={seeContext} />
     </ThemeProvider>
   );
   await flush();
