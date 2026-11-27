@@ -278,6 +278,11 @@ describe('TASK-561 — a throwing listener does not cut an unlock short', () => 
         method === 'PIN' ? TEST_PIN : BIOMETRIC_SECRET
       );
       expect(laterSawUnlocked).toHaveBeenCalled();
+      // The throwing branch was reached, and contained by the notifier.
+      expect(warnSpy).toHaveBeenCalledWith(
+        `[${source}] listener failed`,
+        'Error'
+      );
     }
   );
 });

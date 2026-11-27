@@ -40,21 +40,21 @@ describe('AppLockSignal.setUnlocked listener isolation', () => {
     expect(later).toHaveBeenCalledTimes(1);
   });
 
-  it('logs the listener failure as a redacted string, never the Error object', () => {
+  it('logs only the error kind, never the message or the Error object', () => {
+    // A bare PIN is not a pattern redaction recognises, so it must not be
+    // logged at all.
     subscribe(() => {
-      throw new Error('listener failed for wc:abc@2?symKey=deadbeef');
+      throw new TypeError('listener failed with pin 482913');
     });
 
     AppLockSignal.setUnlocked(true);
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    const args = warnSpy.mock.calls[0];
-    args.forEach((arg: unknown) => {
-      expect(typeof arg).toBe('string');
-    });
-    const logged = args.join(' ');
-    expect(logged).toContain('listener failed');
-    expect(logged).not.toContain('deadbeef');
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[AppLockSignal] listener failed',
+      'TypeError'
+    );
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('482913');
   });
 
   it('notifies a snapshot: a listener added during notification is not called in the same round', () => {

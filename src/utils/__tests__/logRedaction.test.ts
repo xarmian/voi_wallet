@@ -8,6 +8,7 @@ import {
   redactAddress,
   redactSensitiveForLog,
   redactError,
+  errorKind,
 } from '../logRedaction';
 
 // Throwaway vectors — not real keys or accounts.
@@ -173,5 +174,32 @@ describe('redactError never throws (final review, TASK-290)', () => {
       },
     };
     expect(redactError(hostile)).toBe('[unloggable error]');
+  });
+});
+
+describe('errorKind (TASK-561)', () => {
+  it('returns the class name of an Error, never its message', () => {
+    expect(errorKind(new TypeError('pin 482913'))).toBe('TypeError');
+    class VaultListenerError extends Error {}
+    expect(errorKind(new VaultListenerError('pin 482913'))).toBe(
+      'VaultListenerError'
+    );
+  });
+
+  it('returns typeof for a non-Error throw, never its value', () => {
+    expect(errorKind('pin 482913')).toBe('string');
+    expect(errorKind({ message: 'pin 482913' })).toBe('object');
+    expect(errorKind(undefined)).toBe('undefined');
+  });
+
+  it('never throws', () => {
+    const hostile = Object.create(Error.prototype, {
+      constructor: {
+        get() {
+          throw new Error('boom');
+        },
+      },
+    });
+    expect(errorKind(hostile)).toBe('[unloggable error]');
   });
 });

@@ -97,3 +97,21 @@ export const redactError = (error: unknown): string => {
     return '[unloggable error]';
   }
 };
+
+/**
+ * The error's kind only (its class name, or its typeof for a non-Error throw),
+ * never its message. For catch sites next to session credentials: pattern
+ * redaction can't recognise an arbitrary PIN or passphrase, so a message that
+ * might carry one is not logged at all. Total, like redactError.
+ */
+export const errorKind = (error: unknown): string => {
+  try {
+    if (error instanceof Error) {
+      const name = error.constructor?.name;
+      return typeof name === 'string' && name.length > 0 ? name : 'Error';
+    }
+    return typeof error;
+  } catch {
+    return '[unloggable error]';
+  }
+};

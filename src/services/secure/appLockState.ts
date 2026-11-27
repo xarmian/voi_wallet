@@ -18,11 +18,12 @@
  *
  * LISTENER ISOLATION (TASK-561): the state is set before any listener runs, and
  * each listener runs in its own try/catch over a snapshot of the set. A throwing
- * listener is logged (redacted) and never escapes into the writer, so it cannot
- * cut an unlock or lock short.
+ * listener is logged by error kind only (never its message, which could carry a
+ * session credential that redaction can't recognise) and never escapes into the
+ * writer, so it cannot cut an unlock or lock short.
  */
 
-import { redactError } from '@/utils/logRedaction';
+import { errorKind } from '@/utils/logRedaction';
 
 let unlocked = false;
 const listeners = new Set<() => void>();
@@ -35,7 +36,7 @@ export const AppLockSignal = {
       try {
         listener();
       } catch (error) {
-        console.warn('[AppLockSignal] listener failed', redactError(error));
+        console.warn('[AppLockSignal] listener failed', errorKind(error));
       }
     }
   },

@@ -27,9 +27,9 @@ import { clearMessagingKeyCache } from '../messaging/keyDerivation';
 
 /**
  * Run every step even if an earlier one throws, then rethrow the first error.
- * The vault and the lock signal notify listeners after changing their own
- * state, and a throwing listener must never leave a later cache holding key
- * material (TASK-557).
+ * A failing step (a cache clear) must never leave a later cache holding key
+ * material (TASK-557). Listener throws no longer reach here: the vault and the
+ * lock signal contain them in their own notifiers (TASK-561).
  */
 function runAllThenRethrow(steps: (() => void)[]): void {
   let failed = false;
@@ -64,8 +64,9 @@ export function clearSessionSecurity(): void {
  *      before the lock and resolves during teardown then refuses to repopulate
  *      the ~30 min messaging cache.
  *   2. Run the cache teardown (vault + 60 s + messaging).
- * Step 2 runs even if a lock listener throws in step 1; the first error is
- * rethrown after every step has run.
+ * Every step runs even if an earlier one throws; the first error is rethrown
+ * after every step has run. (A lock listener's throw is contained by
+ * AppLockSignal itself, so step 1 does not throw for that reason.)
  *
  * AuthContext.lock() calls this on every real lock (i.e. only when a PIN is set;
  * lock() leaves a no-PIN wallet unlocked, so its signal is left untouched). Every

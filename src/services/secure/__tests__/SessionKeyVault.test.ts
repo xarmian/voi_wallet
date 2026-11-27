@@ -212,22 +212,25 @@ describe('SessionKeyVault listener isolation (TASK-561)', () => {
     warnSpy.mockRestore();
   });
 
-  /** Assert one redacted-string log per listener failure, never the Error. */
-  function expectRedactedStringLogs(count: number): void {
+  /** Assert one log per listener failure carrying the error kind only: never
+   *  the Error object, and never its message (which here holds the secret). */
+  function expectKindOnlyLogs(count: number): void {
     expect(warnSpy).toHaveBeenCalledTimes(count);
     warnSpy.mock.calls.forEach((args: unknown[]) => {
-      args.forEach((arg) => {
-        expect(typeof arg).toBe('string');
-      });
-      expect(args.join(' ')).not.toContain('deadbeef');
+      expect(args).toEqual(['[SessionKeyVault] listener failed', 'Error']);
     });
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('marker-7f3c');
   }
 
+  // A listener can read the live secret; this one puts it in its message, so a
+  // logged message would leak it (redaction can't recognise a bare PIN).
   const throwing = (): void => {
-    throw new Error('listener failed for wc:abc@2?symKey=deadbeef');
+    throw new Error(
+      `listener failed marker-7f3c secret=${SessionKeyVault.getSecret()}`
+    );
   };
 
-  it('set(): a throwing listener does not escape; state applied; later listener notified; logged redacted', () => {
+  it('set(): a throwing listener does not escape; state applied; later listener notified; logs the error kind only', () => {
     const later = jest.fn();
     subscribe(throwing);
     subscribe(later);
@@ -238,10 +241,10 @@ describe('SessionKeyVault listener isolation (TASK-561)', () => {
     expect(SessionKeyVault.getSecret()).toBe('123456');
     expect(SessionKeyVault.currentEpoch()).toBe(before + 1);
     expect(later).toHaveBeenCalledTimes(1);
-    expectRedactedStringLogs(1);
+    expectKindOnlyLogs(1);
   });
 
-  it('rotate(): a throwing listener does not escape; state applied; later listener notified; logged redacted', () => {
+  it('rotate(): a throwing listener does not escape; state applied; later listener notified; logs the error kind only', () => {
     SessionKeyVault.set('111111', 'pin');
     const later = jest.fn();
     subscribe(throwing);
@@ -255,10 +258,10 @@ describe('SessionKeyVault listener isolation (TASK-561)', () => {
     expect(SessionKeyVault.getSecretSource()).toBe('passphrase');
     expect(SessionKeyVault.currentEpoch()).toBe(before + 1);
     expect(later).toHaveBeenCalledTimes(1);
-    expectRedactedStringLogs(1);
+    expectKindOnlyLogs(1);
   });
 
-  it('clear(): a throwing listener does not escape; state applied; later listener notified; logged redacted', () => {
+  it('clear(): a throwing listener does not escape; state applied; later listener notified; logs the error kind only', () => {
     SessionKeyVault.set('123456', 'pin');
     const later = jest.fn();
     subscribe(throwing);
@@ -270,7 +273,7 @@ describe('SessionKeyVault listener isolation (TASK-561)', () => {
     expect(SessionKeyVault.getSecret()).toBeNull();
     expect(SessionKeyVault.currentEpoch()).toBe(before + 1);
     expect(later).toHaveBeenCalledTimes(1);
-    expectRedactedStringLogs(1);
+    expectKindOnlyLogs(1);
   });
 
   it('notifies a snapshot: a listener added during notification is not called in the same round', () => {

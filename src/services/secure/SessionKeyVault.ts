@@ -33,11 +33,13 @@
  *
  * LISTENER ISOLATION (TASK-561): set / rotate / clear apply their state before
  * notifying, and each listener runs in its own try/catch over a snapshot of the
- * set. A throwing listener is logged (redacted) and never escapes into the
- * caller, so it cannot cut an unlock or lock short.
+ * set. A throwing listener is logged by error kind only (a listener can read the
+ * secret, and redaction can't recognise an arbitrary PIN or passphrase in a
+ * message) and never escapes into the caller, so it cannot cut an unlock or
+ * lock short.
  */
 
-import { redactError } from '@/utils/logRedaction';
+import { errorKind } from '@/utils/logRedaction';
 import { deriveWrapKey, AT_REST_KDF_PARAMS } from './envelopeV2';
 import type { ScryptKdfParams } from '../backup/types';
 
@@ -235,7 +237,7 @@ class SessionKeyVaultImpl {
       try {
         listener();
       } catch (error) {
-        console.warn('[SessionKeyVault] listener failed', redactError(error));
+        console.warn('[SessionKeyVault] listener failed', errorKind(error));
       }
     }
   }
