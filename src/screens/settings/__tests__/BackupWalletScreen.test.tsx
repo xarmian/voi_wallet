@@ -8,7 +8,8 @@ import {
 } from '@/services/backup/backupReport';
 import type { BackupLeftOutReason } from '@/services/backup/types';
 import BackupWalletScreen from '../BackupWalletScreen';
-import { BackupService, BackupResult } from '@/services/backup';
+import { BackupService, BackupResult, BackupError } from '@/services/backup';
+import { AppLockSignal } from '@/services/secure/appLockState';
 
 const mockScrollTo = jest.fn();
 const mockExportButtons: { disabled: boolean; onPress: () => Promise<void> }[] =
@@ -105,6 +106,7 @@ jest.mock('@/services/secure/freshAuth', () => {
 });
 
 beforeEach(() => {
+  AppLockSignal.setUnlocked(true);
   mockAccounts = [{ type: 'rekeyed' }];
   mockAuthFailure = null;
   mockAuthCalls.length = 0;
@@ -154,23 +156,78 @@ it('a cancelled prompt creates no backup and shows no error', async () => {
   alert.mockRestore();
 });
 
-it.each(['unavailable', 'failed', 'timeout', 'busy'])(
-  'a %s prompt creates no backup and reports the failure',
-  async (code) => {
+const TIMED_OUT = [
+  'Authentication Timed Out',
+  'No backup was made. Tap Create Backup to try again.',
+] as const;
+const AUTH_ERROR = [
+  'Authentication Error',
+  'Could not authenticate to create a backup.',
+] as const;
+const WALLET_LOCKED = [
+  'Wallet Locked',
+  'The wallet locked before the backup was made. Unlock it, then tap Create Backup again.',
+] as const;
+
+it.each([
+  ['timeout', TIMED_OUT],
+  ['failed', AUTH_ERROR],
+  ['unavailable', AUTH_ERROR],
+  ['busy', AUTH_ERROR],
+] as const)(
+  'a %s prompt on an unlocked wallet creates no backup and says what stopped it',
+  async (code, [title, message]) => {
     mockAuthFailure = code;
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     const view = await render(<BackupWalletScreen />);
     await fireEvent.press(view.getByText('Create Backup'));
     await fireEvent.press(view.getByText(/confirm password/i));
     expect(BackupService.createBackup).not.toHaveBeenCalled();
-    expect(alert).toHaveBeenCalledWith(
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith(title, message, [{ text: 'OK' }]);
+    expect(alert).not.toHaveBeenCalledWith(
       'Backup Failed',
-      expect.any(String),
-      expect.any(Array)
+      expect.anything(),
+      expect.anything()
     );
     alert.mockRestore();
   }
 );
+
+it.each(['timeout', 'failed', 'unavailable', 'busy'])(
+  'a %s prompt after the wallet locked says the wallet locked',
+  async (code) => {
+    mockAuthFailure = code;
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const view = await render(<BackupWalletScreen />);
+    await fireEvent.press(view.getByText('Create Backup'));
+    AppLockSignal.setUnlocked(false);
+    await fireEvent.press(view.getByText(/confirm password/i));
+    expect(BackupService.createBackup).not.toHaveBeenCalled();
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith(...WALLET_LOCKED, [{ text: 'OK' }]);
+    alert.mockRestore();
+  }
+);
+
+it('a backup error still shows Backup Failed with its message', async () => {
+  jest
+    .mocked(BackupService.createBackup)
+    .mockRejectedValue(
+      new BackupError('No accounts to back up', 'COLLECTION_FAILED')
+    );
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const view = await render(<BackupWalletScreen />);
+  await fireEvent.press(view.getByText('Create Backup'));
+  await fireEvent.press(view.getByText(/confirm password/i));
+  expect(alert).toHaveBeenCalledTimes(1);
+  expect(alert).toHaveBeenCalledWith(
+    'Backup Failed',
+    'No accounts to back up',
+    [{ text: 'OK' }]
+  );
+  alert.mockRestore();
+});
 
 it.each([0, 1, 2])(
   'warns before save/share exactly when %s REKEYED keys were included',

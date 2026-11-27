@@ -307,3 +307,18 @@ it.each(['inactive', 'background'] as const)(
     expect(view.getByText('Confirm restore')).toBeTruthy();
   }
 );
+
+it('a finished restore drops the file: a later cover does not reopen the password step', async () => {
+  const view = await render(<RestoreWalletScreen />);
+  await fireEvent.press(view.getByText('Select Backup File'));
+  await fireEvent.press(view.getByText('Confirm password'));
+  await fireEvent.press(view.getByText('Confirm restore'));
+  expect(BackupService.restoreBackup).toHaveBeenCalledTimes(1);
+  expect(jest.mocked(Alert.alert).mock.calls[0][0]).not.toBe('Restore Failed');
+  expect(view.queryByText('Confirm password')).toBeNull();
+  mockCovered = true;
+  await view.rerender(<RestoreWalletScreen />);
+  mockCovered = false;
+  await view.rerender(<RestoreWalletScreen />);
+  expect(view.queryByText('Confirm password')).toBeNull();
+});

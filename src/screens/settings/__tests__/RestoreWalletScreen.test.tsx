@@ -8,7 +8,7 @@ import { Alert, AppState } from 'react-native';
 import algosdk from 'algosdk';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import RestoreWalletScreen from '../RestoreWalletScreen';
-import { BackupService } from '@/services/backup';
+import { BackupError, BackupService } from '@/services/backup';
 import {
   NOT_FRESH_LINE,
   RESTORE_ADDS_TEXT,
@@ -525,6 +525,35 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
       expect(mockRecheck).toHaveBeenCalledTimes(1);
     });
 
+    it('a session that ends while Restore Failed is up drops the file, so OK opens no password step', async () => {
+      const view = await verified();
+      jest
+        .mocked(BackupService.validateBackupFile)
+        .mockResolvedValue({ accountCount: 1 } as never);
+      jest
+        .mocked(BackupService.restoreBackup)
+        .mockRejectedValue(
+          new BackupError(
+            'Unlock the wallet to restore accounts',
+            'AUTHENTICATION_REQUIRED'
+          )
+        );
+      const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+      await fireEvent.press(await view.findByText('Select Backup File'));
+      await fireEvent.press(await view.findByText('Confirm password'));
+      await fireEvent.press(await view.findByText('Confirm restore'));
+      await waitFor(() => expect(alert).toHaveBeenCalledTimes(1));
+      expect(alert.mock.calls[0][0]).toBe('Restore Failed');
+      // The app leaves the foreground while the alert is up: the session ends
+      // and the chosen file goes with it.
+      await act(async () => handler('background'));
+      expect(await view.findByText(NORMAL)).toBeTruthy();
+      const buttons = alert.mock.calls[0][2] as { onPress?: () => void }[];
+      await act(async () => buttons[0].onPress?.());
+      expect(view.queryByText('Confirm password')).toBeNull();
+      expect(view.queryByText('Confirm restore')).toBeNull();
+    });
+
     it('a background event before any PIN is verified clears nothing and changes nothing', async () => {
       const view = await openOnboardingWithPin();
       await view.findByText(NORMAL);
@@ -921,5 +950,57 @@ describe('TASK-522: a Settings restore onto a wallet with no PIN', () => {
     });
     expect(mockHasPinAfterRestore).not.toHaveBeenCalled();
     expect(mockRecheck).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a failed restore goes back to the password step for the same file', () => {
+  async function failOnce() {
+    jest
+      .mocked(BackupService.validateBackupFile)
+      .mockResolvedValue({ accountCount: 1 } as never);
+    jest
+      .mocked(BackupService.restoreBackup)
+      .mockRejectedValueOnce(
+        new BackupError(
+          'Unlock the wallet to restore accounts',
+          'AUTHENTICATION_REQUIRED'
+        )
+      )
+      .mockResolvedValue(restoreResult(false) as never);
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    mockAccountCount = 2;
+    const view = await render(<RestoreWalletScreen />);
+    await fireEvent.press(await view.findByText('Select Backup File'));
+    await fireEvent.press(await view.findByText('Confirm password'));
+    expect(view.getByText(/account\(s\)/)).toBeTruthy();
+    await fireEvent.press(await view.findByText('Confirm restore'));
+    await waitFor(() => expect(alert).toHaveBeenCalledTimes(1));
+    return { view, alert };
+  }
+
+  it('Restore Failed keeps its message, and OK reopens the password step; a second try restores the same file', async () => {
+    const { view, alert } = await failOnce();
+    expect(alert).toHaveBeenCalledWith(
+      'Restore Failed',
+      'Unlock the wallet to restore accounts',
+      [expect.objectContaining({ text: 'OK' })]
+    );
+    expect(view.queryByText('Confirm password')).toBeNull();
+    const buttons = alert.mock.calls[0][2] as { onPress?: () => void }[];
+    await act(async () => buttons[0].onPress?.());
+    await fireEvent.press(await view.findByText('Confirm password'));
+    await fireEvent.press(await view.findByText('Confirm restore'));
+    await waitFor(() => expect(alert).toHaveBeenCalledTimes(2));
+    expect(BackupService.restoreBackup).toHaveBeenCalledTimes(2);
+    expect(jest.mocked(BackupService.restoreBackup).mock.calls[1]).toEqual([
+      'file:///b.voibackup',
+      'pw',
+      {},
+    ]);
+  });
+
+  it('the stale file card is gone after the failure', async () => {
+    const { view } = await failOnce();
+    expect(view.queryByText(/account\(s\)/)).toBeNull();
   });
 });
