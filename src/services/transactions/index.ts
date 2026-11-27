@@ -512,7 +512,8 @@ export class TransactionService {
     account: Pick<WalletAccount, 'address'>,
     pin?: string,
     callbacks?: SignProgressCallbacks,
-    networkId?: NetworkId
+    networkId?: NetworkId,
+    signal?: AbortSignal
   ): Promise<Uint8Array | Uint8Array[]> {
     try {
       // Determine if this is a Ledger signing flow by probing readiness
@@ -527,6 +528,8 @@ export class TransactionService {
         const total = unsignedTxn.transactions.length;
         for (let i = 0; i < total; i += 1) {
           const txn = unsignedTxn.transactions[i];
+          // After Cancel, no entry of the group reaches the device.
+          TransactionService.throwIfAborted(signal);
           if (ledgerInfo) {
             callbacks?.onLedgerPrompt?.({ index: i + 1, total });
           }
@@ -576,8 +579,8 @@ export class TransactionService {
         redactError(error)
       );
 
-      // Propagate known domain errors unchanged
-      if (error instanceof LedgerDeviceNotConnectedError) {
+      // Propagate known domain errors and a cancellation unchanged
+      if (error instanceof LedgerDeviceNotConnectedError || signal?.aborted) {
         throw error;
       }
       throw new Error(
@@ -596,7 +599,8 @@ export class TransactionService {
     pin?: string,
     maxRetries: number = 2,
     callbacks?: SignProgressCallbacks,
-    networkId?: NetworkId
+    networkId?: NetworkId,
+    signal?: AbortSignal
   ): Promise<Uint8Array | Uint8Array[]> {
     let attempt = 0;
     let lastError: unknown;
@@ -604,6 +608,7 @@ export class TransactionService {
 
     while (attempt <= maxRetries) {
       try {
+        TransactionService.throwIfAborted(signal);
         if (attempt > 0) {
           // On retries, ensure connection/app are ready
           const signingInfo = await SecureKeyManager.getSigningInfo(
@@ -671,14 +676,18 @@ export class TransactionService {
           await TransactionService.delay(delayMs);
         }
 
+        TransactionService.throwIfAborted(signal);
         return await TransactionService.signTransaction(
           unsignedTxn,
           account,
           pin,
           callbacks,
-          networkId
+          networkId,
+          signal
         );
       } catch (err) {
+        // A cancellation is never relabelled as a retryable Ledger error.
+        if (signal?.aborted) throw err;
         lastError = err;
         // Software-key auth failures (PIN required / invalid PIN) are NOT Ledger
         // errors and are NOT recoverable by reconnecting/verifying hardware.
@@ -731,10 +740,12 @@ export class TransactionService {
     params: TransactionParams,
     account: Pick<WalletAccount, 'address' | 'type'>,
     pin?: string,
-    callbacks?: SignProgressCallbacks
+    callbacks?: SignProgressCallbacks,
+    options?: { signal?: AbortSignal }
   ): Promise<{ txId: string; confirmed: boolean }> {
     // TASK-492: a send that straddles a wipe is not recorded after it.
     const wipeEpochAtStart = wipeEpoch();
+    let submitted = false;
     try {
       const cacheKey = TransactionService.getTransactionCacheKey(params);
 
@@ -749,9 +760,13 @@ export class TransactionService {
           pin,
           2,
           callbacks,
-          params.networkId
+          params.networkId,
+          options?.signal
         );
 
+      // Cancel stops the send up to here, never after it is issued.
+      TransactionService.throwIfAborted(options?.signal);
+      submitted = true;
       // Submit to network with basic retry
       callbacks?.onNetworkSubmit?.();
       // submitWithRetries returns { txId, confirmed }; propagate `confirmed` so
@@ -781,6 +796,8 @@ export class TransactionService {
 
       return { txId, confirmed };
     } catch (error) {
+      // A failure after Cancel, before the send, is the cancellation's.
+      if (!submitted && options?.signal?.aborted) throw error;
       const userRejected = TransactionService.isLedgerUserRejected(error);
       console.error('Failed to send transaction:', redactError(error));
       if (!userRejected) {
@@ -1628,10 +1645,12 @@ export class TransactionService {
     },
     account: Pick<WalletAccount, 'address'>,
     pin?: string,
-    callbacks?: SignProgressCallbacks
+    callbacks?: SignProgressCallbacks,
+    options?: { signal?: AbortSignal }
   ): Promise<{ txId: string; confirmed: boolean }> {
     // TASK-492: a send that straddles a wipe is not recorded after it.
     const wipeEpochAtStart = wipeEpoch();
+    let submitted = false;
     try {
       const cacheKey = TransactionService.getRekeyCacheKey({
         fromAddress: params.fromAddress,
@@ -1651,10 +1670,14 @@ export class TransactionService {
           pin,
           2,
           callbacks,
-          params.networkId
+          params.networkId,
+          options?.signal
         );
 
       await TransactionService.assertSignsAfterRekey(params.rekeyToAddress);
+      // Cancel stops the send up to here, never after it is issued.
+      TransactionService.throwIfAborted(options?.signal);
+      submitted = true;
       // Submit to network with basic retry
       callbacks?.onNetworkSubmit?.();
       // submitWithRetries returns { txId, confirmed }; propagate `confirmed` so
@@ -1686,6 +1709,8 @@ export class TransactionService {
 
       return { txId, confirmed };
     } catch (error) {
+      // A failure after Cancel, before the send, is the cancellation's.
+      if (!submitted && options?.signal?.aborted) throw error;
       const userRejected = TransactionService.isLedgerUserRejected(error);
       console.error('Failed to send rekey transaction:', redactError(error));
       if (!userRejected) {
@@ -1782,10 +1807,12 @@ export class TransactionService {
     },
     account: Pick<WalletAccount, 'address'>,
     pin?: string,
-    callbacks?: SignProgressCallbacks
+    callbacks?: SignProgressCallbacks,
+    options?: { signal?: AbortSignal }
   ): Promise<{ txId: string; confirmed: boolean }> {
     // TASK-492: a send that straddles a wipe is not recorded after it.
     const wipeEpochAtStart = wipeEpoch();
+    let submitted = false;
     try {
       const cacheKey = TransactionService.getRekeyCacheKey({
         fromAddress: params.fromAddress,
@@ -1805,10 +1832,14 @@ export class TransactionService {
           pin,
           2,
           callbacks,
-          params.networkId
+          params.networkId,
+          options?.signal
         );
 
       await TransactionService.assertSignsAfterRekey(params.fromAddress);
+      // Cancel stops the send up to here, never after it is issued.
+      TransactionService.throwIfAborted(options?.signal);
+      submitted = true;
       // Submit to network with basic retry
       callbacks?.onNetworkSubmit?.();
       // submitWithRetries returns { txId, confirmed }; propagate `confirmed` so
@@ -1840,6 +1871,8 @@ export class TransactionService {
 
       return { txId, confirmed };
     } catch (error) {
+      // A failure after Cancel, before the send, is the cancellation's.
+      if (!submitted && options?.signal?.aborted) throw error;
       const userRejected = TransactionService.isLedgerUserRejected(error);
       console.error(
         'Failed to send reverse rekey transaction:',
@@ -1898,6 +1931,11 @@ export class TransactionService {
       ? NetworkService.getInstance(networkId)
       : defaultNetworkService;
     return networkService.submitTransaction(signedTxnBlob);
+  }
+
+  /** The batch signer's cancellation text, so every path reports it alike. */
+  private static throwIfAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) throw new Error('Signing cancelled');
   }
 
   private static delay(ms: number): Promise<void> {

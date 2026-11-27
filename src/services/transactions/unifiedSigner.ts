@@ -163,6 +163,12 @@ export interface UnifiedSigningResult {
    * Every consumer that submits must guard the `null`s rather than submit them.
    */
   signedTransactions?: Uint8Array | Uint8Array[] | (string | null)[];
+  /**
+   * TASK-531: the flow-lapse epoch captured when a watched batch (no review
+   * grant, signed one entry at a time) started signing. The caller that sends
+   * checks it with `flowLapsedSince` right before the send. Unset when unwatched.
+   */
+  lapseEpoch?: number;
 }
 
 /**
@@ -330,12 +336,20 @@ export class UnifiedTransactionSigner {
         case 'asa_transfer':
         case 'arc200_transfer':
         case 'arc72_transfer':
-          result = await this.signStandardTransfer(request, callbacks);
+          result = await this.signStandardTransfer(
+            request,
+            callbacks,
+            options?.signal
+          );
           break;
 
         case 'rekey':
         case 'rekey_reverse':
-          result = await this.signRekeyTransaction(request, callbacks);
+          result = await this.signRekeyTransaction(
+            request,
+            callbacks,
+            options?.signal
+          );
           break;
 
         case 'batch_transaction':
@@ -348,11 +362,19 @@ export class UnifiedTransactionSigner {
           break;
 
         case 'keyreg':
-          result = await this.signKeyregTransaction(request, callbacks);
+          result = await this.signKeyregTransaction(
+            request,
+            callbacks,
+            options?.signal
+          );
           break;
 
         case 'appl':
-          result = await this.signApplTransaction(request, callbacks);
+          result = await this.signApplTransaction(
+            request,
+            callbacks,
+            options?.signal
+          );
           break;
 
         default:
@@ -381,7 +403,8 @@ export class UnifiedTransactionSigner {
    */
   private async signStandardTransfer(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
     if (!request.transferParams) {
       throw new Error('Transfer parameters required for standard transfers');
@@ -399,7 +422,8 @@ export class UnifiedTransactionSigner {
           onLedgerRejected: callbacks?.onLedgerRejected,
           onNetworkSubmit: callbacks?.onNetworkSubmit,
           onNetworkConfirmed: callbacks?.onNetworkConfirmed,
-        }
+        },
+        { signal }
       );
 
       return {
@@ -417,7 +441,8 @@ export class UnifiedTransactionSigner {
    */
   private async signRekeyTransaction(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
     if (!request.rekeyParams) {
       throw new Error('Rekey parameters required for rekey transactions');
@@ -444,7 +469,8 @@ export class UnifiedTransactionSigner {
               onLedgerRejected: callbacks?.onLedgerRejected,
               onNetworkSubmit: callbacks?.onNetworkSubmit,
               onNetworkConfirmed: callbacks?.onNetworkConfirmed,
-            }
+            },
+            { signal }
           ));
       } else {
         // Standard rekey to another account
@@ -467,7 +493,8 @@ export class UnifiedTransactionSigner {
             onLedgerRejected: callbacks?.onLedgerRejected,
             onNetworkSubmit: callbacks?.onNetworkSubmit,
             onNetworkConfirmed: callbacks?.onNetworkConfirmed,
-          }
+          },
+          { signal }
         ));
       }
 
@@ -516,12 +543,12 @@ export class UnifiedTransactionSigner {
         // Sequential signing for Ledger
         for (let i = 0; i < plans.length; i++) {
           // After Cancel, no entry starts after the one the loop has entered. After
-          // a lapse the same holds only for a request that holds a review
-          // capability: the controller watches the grant only then, so a request
-          // with no grant is not aborted by a lock or background. The entered entry
-          // can still reach the device; its signature is discarded. After Cancel,
-          // only the device keeps asking. After a lapse, the modal keeps showing the
-          // entered entry until the device resolves.
+          // a lapse the same holds: the controller watches the grant of a request
+          // that holds one, and a lock or background for a batch with no grant
+          // (TASK-531). The entered entry can still reach the device; its
+          // signature is discarded. After Cancel, only the device keeps asking.
+          // After a lapse, the modal keeps showing the entered entry until the
+          // device resolves.
           if (signal?.aborted) {
             return { success: false, error: new Error('Signing cancelled') };
           }
@@ -1214,7 +1241,8 @@ export class UnifiedTransactionSigner {
    */
   private async signKeyregTransaction(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
     if (!request.keyregParams) {
       throw new Error('Keyreg parameters required');
@@ -1287,6 +1315,8 @@ export class UnifiedTransactionSigner {
       );
 
       callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
+      // Cancel stops the send up to here, never after it is issued.
+      if (signal?.aborted) throw new Error('Signing cancelled');
       callbacks?.onNetworkSubmit?.();
 
       const txId = await submitAndConfirm(networkService, signedTxnBlob);
@@ -1307,7 +1337,8 @@ export class UnifiedTransactionSigner {
    */
   private async signApplTransaction(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
     if (!request.applParams) {
       throw new Error('Application parameters required');
@@ -1353,6 +1384,8 @@ export class UnifiedTransactionSigner {
       );
 
       callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
+      // Cancel stops the send up to here, never after it is issued.
+      if (signal?.aborted) throw new Error('Signing cancelled');
       callbacks?.onNetworkSubmit?.();
 
       const txId = await submitAndConfirm(networkService, signedTxnBlob);

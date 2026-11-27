@@ -15,6 +15,14 @@ import {
   reviewGrant,
   walletConnectReviewDigest,
 } from '@/services/auth/reviewGrant';
+import {
+  FLOW_LAPSE_TITLE,
+  FLOW_STOPPED_BEFORE_SIGNED_MESSAGE,
+  FLOW_WITHHELD_BEFORE_SEND_MESSAGE,
+  flowLapsedSince,
+  lapseEpoch,
+  subscribeFlowLapse,
+} from '@/services/auth/flowLapse';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import { clearSessionSecurity } from '@/services/secure/sessionTeardown';
 import { isSoftwareAuthError } from '@/services/secure/authErrors';
@@ -1712,6 +1720,30 @@ export class TransactionAuthController {
     const lockedReview = !!reviewKey && reviewGrant.isLockedSitting(reviewKey);
     const isWalletConnect = !!request.walletConnectParams?.sessionBinding;
     const signedThenLapsedBatchMessage = SIGNED_THEN_LAPSED_BATCH_MESSAGE;
+    // A batch that signs one entry at a time and holds no review grant is
+    // watched for a lock or background (TASK-531). The epoch is captured before
+    // the first await, so a lapse before the watch is installed still counts.
+    const flowWatched =
+      !reviewKey &&
+      signsSequentially(request) &&
+      (request.type === 'batch_transaction' ||
+        request.type === 'walletconnect_batch');
+    const epochAtStart = flowWatched ? lapseEpoch() : undefined;
+    let flowLapsed = false;
+    let flowLapseError: ReviewEndedError | null = null;
+    // "Signed" here is the batch signer's onNetworkSubmit: every entry signed and
+    // nothing sent. A WalletConnect batch keeps its existing texts.
+    const flowLapseOutcome = () =>
+      (flowLapseError ??= new ReviewEndedError(
+        this.hasSubmittedToNetwork
+          ? isWalletConnect
+            ? signedThenLapsedBatchMessage
+            : FLOW_WITHHELD_BEFORE_SEND_MESSAGE
+          : isWalletConnect
+            ? 'Your approval ended before signing finished. Try again in the dApp.'
+            : FLOW_STOPPED_BEFORE_SIGNED_MESSAGE,
+        FLOW_LAPSE_TITLE
+      ));
 
     if (reviewKey && this.reviewSigningStarted) return;
     if (this.refuseWhileSignerAlive()) return;
@@ -1938,6 +1970,14 @@ export class TransactionAuthController {
             });
             return;
           }
+          if (flowLapsed) {
+            this.updateState({
+              state: 'error',
+              result: null,
+              error: flowLapseOutcome(),
+            });
+            return;
+          }
           if (lockedReview) {
             this.updateState({ state: 'error', result: null, error });
             return;
@@ -2087,6 +2127,16 @@ export class TransactionAuthController {
             return;
           }
           this.isSigningInProgress = false;
+          if (flowLapsed) {
+            // A watched flow that lapsed delivers nothing; its caller sends nothing.
+            this.updateState({
+              state: 'error',
+              result: null,
+              signingProgress: null,
+              error: flowLapseOutcome(),
+            });
+            return;
+          }
           if (__DEV__) {
             console.log('Signing onComplete', {
               success: result.success,
@@ -2134,7 +2184,11 @@ export class TransactionAuthController {
           }
           this.settleReviewCapability();
           this.updateState({
-            result,
+            // The caller checks this epoch right before it sends (TASK-531).
+            result:
+              flowWatched && result.success
+                ? { ...result, lapseEpoch: epochAtStart }
+                : result,
             state: result.success ? 'completed' : 'error',
             ledgerStatus:
               this.currentState.isLedgerFlow && result.success
@@ -2162,8 +2216,9 @@ export class TransactionAuthController {
         }
         this.reviewSigningStarted = true;
         // This block runs only for a request that holds a review capability. Cancel
-        // and a lapse abort the Ledger loop before its next entry. A request with
-        // no grant has no watch, so a lock or background does not abort it.
+        // and a lapse abort the Ledger loop before its next entry. A batch with no
+        // grant is watched by the flow-lapse block below; a non-batch request
+        // with no grant has no watch, so a lock or background does not abort it.
         // For software, the pre-parallel check sees Cancel and cleanup, not a lapse.
         // A software lapse only withholds delivery via onComplete's grant re-check;
         // the window between pauseIdle and the parallel branch is not covered.
@@ -2179,6 +2234,18 @@ export class TransactionAuthController {
             }
           });
         }
+      }
+      if (flowWatched) {
+        // Same slot as the grant watch, so every exit that ends one ends this.
+        // Abort without bumping the generation, as the grant watch does: the
+        // outcome callback stays live and publishes the lapse's own text.
+        const abortController = this.signingAbortController;
+        const markLapsed = () => {
+          flowLapsed = true;
+          if (!abortController.signal.aborted) abortController.abort();
+        };
+        this.reviewLapseUnsubscribe = subscribeFlowLapse(markLapsed);
+        if (flowLapsedSince(epochAtStart)) markLapsed();
       }
       this.signerRunToken = runToken;
       try {
@@ -2218,6 +2285,15 @@ export class TransactionAuthController {
                 : 'Unlock to review this request again.',
             this.hasEnteredSigner() ? 'Request ended' : 'Approval ended'
           ),
+        });
+        return;
+      }
+      if (flowLapsed) {
+        // A watched flow that lapsed ends here; it never re-arms a start.
+        this.updateState({
+          state: 'error',
+          result: null,
+          error: flowLapseOutcome(),
         });
         return;
       }
@@ -2268,6 +2344,15 @@ export class TransactionAuthController {
         options: { restartDiscovery?: boolean } = {}
       ) => {
         if (this.ledgerCancelRequested || this.userExplicitlyRejected) {
+          return;
+        }
+        // A send already issued is never signed again. End in 'error', as
+        // onError does after a submit, so the flow does not sit on a spinner.
+        if (this.hasSubmittedToNetwork) {
+          this.updateState({
+            state: 'error',
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
           return;
         }
         // Allow the flow to resume once the device becomes ready again
@@ -2386,6 +2471,8 @@ export class TransactionAuthController {
     if (this.currentRequest?.reviewGrantKey && !this.reviewAuthorized) return;
     if (this.currentState.ledgerStatus !== 'ready') return;
     if (this.hasStartedSigning) return;
+    // A send already issued is never signed again; a new flow resets the flag.
+    if (this.hasSubmittedToNetwork) return;
 
     // CRITICAL: Don't restart signing if user cancelled or rejected
     if (this.ledgerCancelRequested || this.userExplicitlyRejected) {

@@ -1,6 +1,6 @@
 import { RequestQueue } from '../requestQueue';
 import { getHeadSession } from '@/components/wcHost/headSession';
-import { Alert } from 'react-native';
+import { Alert, AppState, type AppStateStatus } from 'react-native';
 import type { WalletTransaction } from '@/services/walletconnect';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Toast from 'react-native-toast-message';
@@ -13,6 +13,8 @@ import {
 import { HandledStore } from '../handledStore';
 import { requestRefFor } from '../requestRefs';
 import { reviewGrant } from '@/services/auth/reviewGrant';
+import { lapseEpoch } from '@/services/auth/flowLapse';
+import { AppLockSignal } from '@/services/secure/appLockState';
 import { SIGNED_THEN_LAPSED_BATCH_MESSAGE } from '@/services/auth/transactionAuthController';
 import type {
   CallbackNavigation,
@@ -990,4 +992,79 @@ describe('admission running (a request the coordinator has not opened yet)', () 
     loaded.resolve();
     await flush();
   });
+});
+
+// Q8: a request with no review grant that locks or goes to the background after
+// the approval is recorded and before the response is published sends none.
+describe('flow lapse before the response', () => {
+  let appListeners: Set<(state: AppStateStatus) => void>;
+  const lapse = (reason: 'lock' | 'background') => {
+    if (reason === 'lock') AppLockSignal.setUnlocked(false);
+    else [...appListeners].forEach((cb) => cb('background'));
+  };
+  beforeEach(() => {
+    appListeners = new Set();
+    jest.spyOn(AppState, 'addEventListener').mockImplementation((_e, cb) => {
+      appListeners.add(cb);
+      return { remove: () => appListeners.delete(cb) } as never;
+    });
+    AppLockSignal.setUnlocked(true);
+  });
+  afterEach(() => AppLockSignal.setUnlocked(false));
+
+  it.each(['lock', 'background'] as const)(
+    'noGrantLapseAfterDecideWithholdsResponse:%s',
+    async (reason) => {
+      const h = await handOff();
+      const gate = deferred<void>();
+      const decide = coordinator.decide.bind(coordinator);
+      jest.spyOn(coordinator, 'decide').mockImplementation(async (...args) => {
+        await gate.promise;
+        return decide(...args);
+      });
+      const approving = mockCallbacks.onSuccess({
+        ...signed,
+        lapseEpoch: lapseEpoch(),
+      });
+      lapse(reason);
+      gate.resolve();
+      await approving;
+      expect(mockRespond).not.toHaveBeenCalled();
+      expect(coordinator.sendError).toHaveBeenCalledTimes(1);
+      expect(coordinator.sendError).toHaveBeenCalledWith(ref, 'lapsed');
+      expectAnswer('lapsed');
+      expect(Alert.alert).toHaveBeenCalledTimes(1);
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Request ended',
+        SIGNED_THEN_LAPSED_BATCH_MESSAGE
+      );
+      expect(Toast.show).not.toHaveBeenCalled();
+      expect(h.surface.takeNext).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each(['lock', 'background'] as const)(
+    'noGrantLapseAfterResponseIssuedFinishes:%s',
+    async (reason) => {
+      const h = await handOff();
+      const sent = deferred<void>();
+      mockRespond.mockImplementationOnce(() => sent.promise);
+      const approving = mockCallbacks.onSuccess({
+        ...signed,
+        lapseEpoch: lapseEpoch(),
+      });
+      await flush();
+      expect(mockRespond).toHaveBeenCalledTimes(1);
+      lapse(reason);
+      sent.resolve();
+      await approving;
+      expect(mockRespond).toHaveBeenCalledTimes(1);
+      expect(coordinator.sendError).not.toHaveBeenCalled();
+      expect(Alert.alert).not.toHaveBeenCalled();
+      expect(Toast.show).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'walletConnectSuccess' })
+      );
+      expect(h.surface.takeNext).toHaveBeenCalledTimes(1);
+    }
+  );
 });

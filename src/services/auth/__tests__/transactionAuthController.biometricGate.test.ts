@@ -572,6 +572,16 @@ describe('remote batch submission ownership (TASK-418)', () => {
     expect(controller.hasReceivedSignature()).toBe(false);
   });
 
+  const {
+    flowLapsedSince,
+    FLOW_LAPSE_TITLE,
+    FLOW_WITHHELD_BEFORE_SEND_MESSAGE,
+  } = require('@/services/auth/flowLapse');
+  const flowLapseScope = {
+    flowLapsedSince,
+    FLOW_LAPSE_TITLE,
+    FLOW_WITHHELD_BEFORE_SEND_MESSAGE,
+  };
   function scope() {
     const noop = jest.fn();
     return {
@@ -598,6 +608,8 @@ describe('remote batch submission ownership (TASK-418)', () => {
       // The claim callbacks' pending rendering (TASK-447 / TASK-451).
       toUnsettledTransactionAlert,
       PENDING_TRANSACTION_ALERT,
+      // The callbacks' flow-lapse withhold check (TASK-531).
+      ...flowLapseScope,
       Toast: { show: noop },
       redactError: (e: unknown) => e,
       setIsSwapping: noop,

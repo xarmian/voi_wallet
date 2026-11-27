@@ -2668,3 +2668,82 @@ it.each(['success', 'throw'] as const)(
     expect(mockClearCache).toHaveBeenCalled();
   }
 );
+
+// ===========================================================================
+// Cancel signal on the non-batch paths
+// ===========================================================================
+
+describe('signTransaction — cancel signal on non-batch paths', () => {
+  const transferParams = {
+    toAddress: 'ignored-by-mock',
+    amount: 1000,
+  } as unknown as UnifiedTransactionRequest['transferParams'];
+
+  it.each([
+    ['voi_transfer', 'sendTransaction'],
+    ['asa_transfer', 'sendTransaction'],
+    ['arc200_transfer', 'sendTransaction'],
+    ['arc72_transfer', 'sendTransaction'],
+    ['rekey', 'sendRekeyTransaction'],
+    ['rekey_reverse', 'sendRekeyReverseTransaction'],
+  ] as const)('threadsSignalToNonBatchPaths:%s', async (type, method) => {
+    const account = accountOf(`signal-${type}`, AccountType.LEDGER);
+    const target = makeAccount(`signal-target-${type}`).addr;
+    const controller = new AbortController();
+    const result = await signer.signTransaction(
+      {
+        type,
+        account,
+        transferParams,
+        rekeyParams: {
+          fromAddress: account.address,
+          rekeyToAddress: target,
+        },
+      },
+      undefined,
+      { signal: controller.signal }
+    );
+    expect(result.success).toBe(true);
+    expect(mockTxService[method]).toHaveBeenCalledTimes(1);
+    expect(mockTxService[method].mock.calls[0][4]?.signal).toBe(
+      controller.signal
+    );
+  });
+
+  it.each(['keyreg', 'appl'] as const)(
+    'keyregApplAbortAfterSignDoesNotSubmit:%s',
+    async (type) => {
+      const account = accountOf(`signal-${type}`, AccountType.LEDGER);
+      const sendRaw = jest.fn(async () => ({
+        txId: 'TXID_SIGNAL',
+        confirmed: true,
+      }));
+      mockGetInstance.mockReturnValue(
+        makeAlgod({ submitTransaction: sendRaw })
+      );
+      const controller = new AbortController();
+      mockSignTransaction.mockImplementationOnce(
+        async (txn: algosdk.Transaction, address: string) => {
+          controller.abort();
+          return realSign(txn, address);
+        }
+      );
+      const { cb, fns } = makeCallbacks();
+      const result = await signer.signTransaction(
+        {
+          type,
+          account,
+          keyregParams: { address: account.address, goOffline: true },
+          applParams: { senderAddress: account.address, appId: 67890 },
+        },
+        cb,
+        { signal: controller.signal }
+      );
+      expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toBe('Signing cancelled');
+      expect(sendRaw).not.toHaveBeenCalled();
+      expect(fns.onNetworkSubmit).not.toHaveBeenCalled();
+    }
+  );
+});
