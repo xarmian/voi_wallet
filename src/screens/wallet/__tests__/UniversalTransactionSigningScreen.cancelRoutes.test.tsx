@@ -112,19 +112,19 @@ it.each(
       finishes.forEach((finish) => finish(new Uint8Array([1])));
       await Promise.all(h.signerRuns);
     });
-    // TASK-526: non-batch submit has no AbortSignal. Even a cleanup cannot
-    // recall an entry already inside TransactionService.sendTransaction.
-    expect(h.submit).toHaveBeenCalledTimes(
-      route === 'deviceReject' && ledger ? 0 : 1
-    );
+    // Cleanup and replacement abort the signal, so a signature that arrives
+    // later is not submitted (TASK-526). A request with no grant is not aborted
+    // by a lapse, so its send still goes out.
+    expect(h.submit).toHaveBeenCalledTimes(discarded ? 0 : 1);
     expect(h.onSuccess).toHaveBeenCalledTimes(discarded ? 0 : 1);
     expect(h.alert).not.toHaveBeenCalled();
     expect(SessionKeyVault.isUnlocked()).toBe(true);
   }
 );
 
-// REGRESSION: pin the pre-existing error/app-required window, including the
-// submit that continues after the modal closes (TASK-526).
+// REGRESSION: pin the error/app-required window. Cancel there aborts the
+// signal, so the signature that arrives after the modal closes is not
+// submitted (TASK-526).
 it.each(
   types.flatMap((type) =>
     ['error', 'app_required'].flatMap((status) =>
@@ -155,7 +155,7 @@ it.each(
       release(new Uint8Array([1]));
       await Promise.all(h.signerRuns);
     });
-    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submit).not.toHaveBeenCalled();
     expect(h.onSuccess).not.toHaveBeenCalled();
     expect(h.alert).not.toHaveBeenCalled();
     expect(SessionKeyVault.isUnlocked()).toBe(true);
