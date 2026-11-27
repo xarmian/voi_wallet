@@ -3833,15 +3833,17 @@ export class AccountSecureStorage {
       // the loop leaves the breadcrumb set and no PIN, which is the legitimate
       // resume state: SecuritySetup, and setupPin is run again. What remains on
       // recovery is the gap between the confirmed clear and the credential
-      // write (one storage remove, one secure write). If that write fails and a
-      // strict read-back shows no credential, a breadcrumb this attempt removed
-      // is set again (TASK-511), so recovery now remains only for a kill between the
-      // confirmed clear and the end of that read-back and re-mark.
+      // write (one storage remove, one secure write). If the attempt throws
+      // after the clear started and a strict read-back shows no credential, a
+      // breadcrumb that was set before it is set again (TASK-511). Recovery then
+      // remains for a kill between the clear and the end of that read-back and
+      // re-mark, and for a store that cannot answer: the breadcrumb read before
+      // the clear, the read-back or the re-mark itself throws.
       //
       // If removal cannot be CONFIRMED (a wedged/unhealthy store), the commit is
-      // ABORTED and the pre-commit rollback drops this attempt's new blobs, so
-      // the accounts still read through their device-key copy and no credential
-      // exists; the caller simply retries.
+      // ABORTED and the pre-commit rollback drops this attempt's new blobs and
+      // sets the breadcrumb again as above, so the accounts still read through
+      // their device-key copy and no credential exists; the caller retries.
       //
       // Acquire the GLOBAL key-mutation mutex, then run the atomic rewrap+commit
       // under it (P1-3: no verify/commit races). setupPin has no current secret
@@ -4395,7 +4397,7 @@ export class AccountSecureStorage {
     }
     const ctxs = new Map<string, RewrapCtx>();
     let committed = false;
-    let breadcrumbCleared = false;
+    let breadcrumbMayBeRemoved = false;
 
     try {
       // PHASE 1 — UNWRAP every key-bearing account under the OLD secret. Uses the
@@ -4506,9 +4508,10 @@ export class AccountSecureStorage {
 
       // PHASE 3b (setupPin, TASK-508): the breadcrumb is gone, CONFIRMED, before
       // the credential exists. An unconfirmed removal throws here, pre-commit, so
-      // the rollback below drops the unproven new blobs. If the credential write
-      // then fails and a strict read-back shows no credential, the rollback sets
-      // the breadcrumb again, only if one was there to remove (TASK-511).
+      // the rollback below drops the unproven new blobs. If that removal or the
+      // credential write then throws and a strict read-back shows no
+      // credential, the rollback sets the breadcrumb again, only if one was
+      // there to remove (TASK-511).
       if (opts.clearBreadcrumbBeforeCommit) {
         // TASK-504 (DOC-507 5.4, B): a kill inside the forgotten-PIN step's
         // credential removal can leave the credential gone and a stale throttle
@@ -4527,21 +4530,21 @@ export class AccountSecureStorage {
           await this.clearThrottleConfirmed();
         }
         // TASK-511: remember whether a breadcrumb was actually there, so the
-        // rollback only ever restores one it removed (clearPinSetupPending
-        // also confirms when there was nothing to clear). A read that throws
-        // counts as absent: no re-mark, the safe direction.
-        let breadcrumbWasSet = false;
+        // rollback only ever restores one it may have removed
+        // (clearPinSetupPending also confirms when there was nothing to clear).
+        // It is recorded BEFORE the clear: an unconfirmed clear may still have
+        // removed it, and that throw takes the same rollback. A read that
+        // throws counts as absent: no re-mark, the safe direction.
         try {
-          breadcrumbWasSet = await readPinSetupPendingStrict();
+          breadcrumbMayBeRemoved = await readPinSetupPendingStrict();
         } catch {
-          breadcrumbWasSet = false;
+          breadcrumbMayBeRemoved = false;
         }
         if (!(await clearPinSetupPending())) {
           throw new AccountStorageError(
             'Could not clear the restore setup marker before establishing the PIN'
           );
         }
-        breadcrumbCleared = breadcrumbWasSet;
       }
 
       // PHASE 4 — COMMIT: flip the PIN credential in ONE folded write (§5.2).
@@ -4587,11 +4590,12 @@ export class AccountSecureStorage {
       // appended to; never write a stale snapshot (P1-B). Old credential + old
       // copies remain intact → nothing stranded → retried on the next attempt.
       if (!committed) {
-        // TASK-511: the breadcrumb was cleared and the credential write failed.
-        // Set it again ONLY when a strict read RESOLVES false (no credential
+        // TASK-511: a set breadcrumb may have been removed (a confirmed or an
+        // unconfirmed clear) and the attempt then threw before the commit. Set
+        // it again ONLY when a strict read RESOLVES false (no credential
         // exists); a credential that landed, or a read that throws (unknown
         // outcome), must never coexist with a live breadcrumb.
-        if (breadcrumbCleared) {
+        if (breadcrumbMayBeRemoved) {
           let credentialAbsent = false;
           try {
             credentialAbsent = !(await this.hasPinStrict());

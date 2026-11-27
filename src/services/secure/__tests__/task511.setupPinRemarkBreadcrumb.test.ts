@@ -17,6 +17,9 @@ jest.mock('@/platform', () => {
     pinReadThrows: false,
     markFails: false,
     clearFails: false,
+    pendingReadThrows: false,
+    pendingVerifyThrows: false,
+    removedPending: false,
   };
   return {
     __secure: secure,
@@ -32,6 +35,9 @@ jest.mock('@/platform', () => {
       ctl.pinReadThrows = false;
       ctl.markFails = false;
       ctl.clearFails = false;
+      ctl.pendingReadThrows = false;
+      ctl.pendingVerifyThrows = false;
+      ctl.removedPending = false;
     },
     crypto: {
       getRandomBytes: async (n: number): Promise<Uint8Array> =>
@@ -71,7 +77,15 @@ jest.mock('@/platform', () => {
         secure.has(k) ? secure.get(k)! : null,
     },
     storage: {
-      getItem: async (k: string) => (kv.has(k) ? kv.get(k)! : null),
+      getItem: async (k: string) => {
+        if (k === 'pin_setup_pending') {
+          if (ctl.pendingReadThrows) throw new Error('storage read failed');
+          if (ctl.pendingVerifyThrows && ctl.removedPending) {
+            throw new Error('storage read timed out');
+          }
+        }
+        return kv.has(k) ? kv.get(k)! : null;
+      },
       setItem: async (k: string, v: string) => {
         if (k === 'pin_setup_pending') {
           events.push({ e: 'mark' });
@@ -83,6 +97,7 @@ jest.mock('@/platform', () => {
         if (k === 'pin_setup_pending') {
           if (ctl.clearFails) throw new Error('storage remove failed');
           events.push({ e: 'clear' });
+          ctl.removedPending = true;
         }
         kv.delete(k);
       },
@@ -119,6 +134,9 @@ const mockPlatform = platform as unknown as {
     pinReadThrows: boolean;
     markFails: boolean;
     clearFails: boolean;
+    pendingReadThrows: boolean;
+    pendingVerifyThrows: boolean;
+    removedPending: boolean;
   };
   __reset: () => void;
 };
@@ -271,15 +289,46 @@ describe('TASK-511: a definite first-PIN write failure re-marks the breadcrumb',
     expect(await readPinSetupPendingStrict()).toBe(true);
   });
 
-  it('(d2) a clear that cannot be confirmed never marks', async () => {
+  it('(d2) a clear whose removal never lands: no credential write, the breadcrumb ends set', async () => {
     mockPlatform.__ctl.clearFails = true;
     await expect(AccountSecureStorage.setupPin(PIN_1, 'pin')).rejects.toThrow(
       'restore setup marker'
     );
 
     expect(mockPlatform.__events.some((x) => x.e === 'cred')).toBe(false);
-    expect(marks()).toHaveLength(0);
+    expect(await AccountSecureStorage.hasPinStrict()).toBe(false);
     expect(await readPinSetupPendingStrict()).toBe(true);
+  });
+
+  it('(h) a clear whose removal lands but cannot be confirmed: the breadcrumb is set again, no credential write', async () => {
+    mockPlatform.__ctl.pendingVerifyThrows = true;
+    await expect(AccountSecureStorage.setupPin(PIN_1, 'pin')).rejects.toThrow(
+      'restore setup marker'
+    );
+
+    const order = mockPlatform.__events
+      .map((x) => x.e)
+      .filter((e) => e === 'clear' || e === 'cred' || e === 'mark');
+    expect(order[0]).toBe('clear');
+    expect(order).not.toContain('cred');
+    expect(order[order.length - 1]).toBe('mark');
+    mockPlatform.__ctl.pendingVerifyThrows = false;
+    expect(await AccountSecureStorage.hasPinStrict()).toBe(false);
+    expect(await readPinSetupPendingStrict()).toBe(true);
+    for (const key of [SLOT_A, SLOT_B]) {
+      expect(slot(key).blobs ?? []).toHaveLength(0);
+      expect(slot(key).encryptedPrivateKey).toBeTruthy();
+    }
+  });
+
+  it('(i) the breadcrumb read before the clear throws: counted as absent, never marks', async () => {
+    mockPlatform.__ctl.pendingReadThrows = true;
+    await expect(AccountSecureStorage.setupPin(PIN_1, 'pin')).rejects.toThrow(
+      'restore setup marker'
+    );
+
+    expect(mockPlatform.__events.some((x) => x.e === 'cred')).toBe(false);
+    expect(marks()).toHaveLength(0);
   });
 
   it('(e) a throwing re-mark is swallowed: the rejection still carries the original credential-write error', async () => {
