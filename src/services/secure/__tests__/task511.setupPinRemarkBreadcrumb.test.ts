@@ -199,6 +199,12 @@ describe('TASK-511: a definite first-PIN write failure re-marks the breadcrumb',
       'credential write failed'
     );
 
+    // The breadcrumb was cleared, the credential write failed, and only then
+    // was the breadcrumb set again.
+    const order = mockPlatform.__events
+      .map((x) => x.e)
+      .filter((e) => e === 'clear' || e === 'cred' || e === 'mark');
+    expect(order).toEqual(['clear', 'cred', 'mark']);
     expect(await AccountSecureStorage.hasPinStrict()).toBe(false);
     expect(mockPlatform.__kv.get('pin_setup_pending')).toBe('true');
     expect(await readPinSetupPendingStrict()).toBe(true);
@@ -289,7 +295,22 @@ describe('TASK-511: a definite first-PIN write failure re-marks the breadcrumb',
     const ev = mockPlatform.__events;
     const cred = ev.findIndex((x) => x.e === 'cred');
     expect(ev.slice(cred + 1).some((x) => x.e === 'mark')).toBe(true);
-    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Could not restore the PIN setup marker after a failed PIN write',
+      expect.anything()
+    );
+    expect(await readPinSetupPendingStrict()).toBe(false);
+  });
+
+  it('(g) no breadcrumb before setupPin (create flow): a failed credential write never creates one', async () => {
+    mockPlatform.__kv.delete('pin_setup_pending');
+    mockPlatform.__ctl.credWrite = 'throw';
+    await expect(AccountSecureStorage.setupPin(PIN_1, 'pin')).rejects.toThrow(
+      'credential write failed'
+    );
+
+    expect(mockPlatform.__events.some((x) => x.e === 'cred')).toBe(true);
+    expect(marks()).toHaveLength(0);
     expect(await readPinSetupPendingStrict()).toBe(false);
   });
 

@@ -3834,8 +3834,8 @@ export class AccountSecureStorage {
       // resume state: SecuritySetup, and setupPin is run again. What remains on
       // recovery is the gap between the confirmed clear and the credential
       // write (one storage remove, one secure write). If that write fails and a
-      // strict read-back shows no credential, the breadcrumb is set again
-      // (TASK-511), so recovery now remains only for a kill between the
+      // strict read-back shows no credential, a breadcrumb this attempt removed
+      // is set again (TASK-511), so recovery now remains only for a kill between the
       // confirmed clear and the end of that read-back and re-mark.
       //
       // If removal cannot be CONFIRMED (a wedged/unhealthy store), the commit is
@@ -4508,7 +4508,7 @@ export class AccountSecureStorage {
       // the credential exists. An unconfirmed removal throws here, pre-commit, so
       // the rollback below drops the unproven new blobs. If the credential write
       // then fails and a strict read-back shows no credential, the rollback sets
-      // the breadcrumb again (TASK-511).
+      // the breadcrumb again, only if one was there to remove (TASK-511).
       if (opts.clearBreadcrumbBeforeCommit) {
         // TASK-504 (DOC-507 5.4, B): a kill inside the forgotten-PIN step's
         // credential removal can leave the credential gone and a stale throttle
@@ -4526,12 +4526,22 @@ export class AccountSecureStorage {
         if (!credentialExists) {
           await this.clearThrottleConfirmed();
         }
+        // TASK-511: remember whether a breadcrumb was actually there, so the
+        // rollback only ever restores one it removed (clearPinSetupPending
+        // also confirms when there was nothing to clear). A read that throws
+        // counts as absent: no re-mark, the safe direction.
+        let breadcrumbWasSet = false;
+        try {
+          breadcrumbWasSet = await readPinSetupPendingStrict();
+        } catch {
+          breadcrumbWasSet = false;
+        }
         if (!(await clearPinSetupPending())) {
           throw new AccountStorageError(
             'Could not clear the restore setup marker before establishing the PIN'
           );
         }
-        breadcrumbCleared = true;
+        breadcrumbCleared = breadcrumbWasSet;
       }
 
       // PHASE 4 — COMMIT: flip the PIN credential in ONE folded write (§5.2).
