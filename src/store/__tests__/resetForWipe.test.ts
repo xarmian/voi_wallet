@@ -27,7 +27,11 @@ jest.mock('@/services/envoi', () => ({
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MessagingService from '@/services/messaging';
-import { runWipeResets } from '@/services/wipe/gate';
+import {
+  closeWipeWindow,
+  openWipeWindow,
+  runWipeResets,
+} from '@/services/wipe/gate';
 import { useMessagesStore } from '../messagesStore';
 import { useClaimableStore } from '../claimableStore';
 import {
@@ -104,6 +108,42 @@ describe('claimable', () => {
     expect(state.hiddenApprovals.size).toBe(0);
     expect(state.currentAccountAddress).toBeNull();
     expect(state.lastFetchedAt).toEqual({});
+  });
+
+  test('hiding an approval during a wipe writes nothing; after the wipe it persists', async () => {
+    useClaimableStore.setState({
+      currentAccountAddress: ADDRESS,
+      hiddenApprovals: new Set<string>(),
+    });
+    const setItem = jest.spyOn(AsyncStorage, 'setItem');
+    openWipeWindow();
+    try {
+      runWipeResets();
+      // A screen still mounted puts the account back while the wipe runs.
+      useClaimableStore.setState({ currentAccountAddress: ADDRESS });
+      await useClaimableStore.getState().hideApproval('x');
+      await useClaimableStore.getState().unhideApproval('y');
+      expect(setItem).not.toHaveBeenCalled();
+    } finally {
+      closeWipeWindow();
+    }
+    await useClaimableStore.getState().hideApproval('z');
+    expect(setItem).toHaveBeenCalledWith(
+      `@claimable/hidden/${ADDRESS}`,
+      expect.stringContaining('z')
+    );
+    setItem.mockRestore();
+  });
+
+  test('a fetch that starts during a wipe does not claim the store for its account', async () => {
+    openWipeWindow();
+    try {
+      runWipeResets();
+      await useClaimableStore.getState().fetchApprovals(ADDRESS);
+      expect(useClaimableStore.getState().currentAccountAddress).toBeNull();
+    } finally {
+      closeWipeWindow();
+    }
   });
 });
 

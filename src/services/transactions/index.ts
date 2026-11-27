@@ -36,6 +36,7 @@ import { ledgerTransportService } from '@/services/ledger/transport';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { useWalletStore } from '@/store/walletStore';
 import { redactError } from '@/utils/logRedaction';
+import { wipeEpoch } from '@/services/wipe/gate';
 
 export interface TransactionParams {
   preparedArc200Group?: Arc200TransactionGroup;
@@ -715,6 +716,8 @@ export class TransactionService {
     pin?: string,
     callbacks?: SignProgressCallbacks
   ): Promise<{ txId: string; confirmed: boolean }> {
+    // TASK-492: a send that straddles a wipe is not recorded after it.
+    const wipeEpochAtStart = wipeEpoch();
     try {
       const cacheKey = TransactionService.getTransactionCacheKey(params);
 
@@ -750,7 +753,8 @@ export class TransactionService {
         txId,
         params.from,
         params.to,
-        params.amount.toString()
+        params.amount.toString(),
+        wipeEpochAtStart
       );
 
       // Trigger balance refresh for affected accounts after successful transaction
@@ -1607,6 +1611,8 @@ export class TransactionService {
     pin?: string,
     callbacks?: SignProgressCallbacks
   ): Promise<{ txId: string; confirmed: boolean }> {
+    // TASK-492: a send that straddles a wipe is not recorded after it.
+    const wipeEpochAtStart = wipeEpoch();
     try {
       const cacheKey = TransactionService.getRekeyCacheKey({
         fromAddress: params.fromAddress,
@@ -1647,7 +1653,8 @@ export class TransactionService {
         txId,
         params.fromAddress,
         params.fromAddress, // Rekey transactions are to self
-        '0' // Zero amount
+        '0', // Zero amount
+        wipeEpochAtStart
       );
 
       // Trigger balance refresh
@@ -1758,6 +1765,8 @@ export class TransactionService {
     pin?: string,
     callbacks?: SignProgressCallbacks
   ): Promise<{ txId: string; confirmed: boolean }> {
+    // TASK-492: a send that straddles a wipe is not recorded after it.
+    const wipeEpochAtStart = wipeEpoch();
     try {
       const cacheKey = TransactionService.getRekeyCacheKey({
         fromAddress: params.fromAddress,
@@ -1798,7 +1807,8 @@ export class TransactionService {
         txId,
         params.fromAddress,
         params.fromAddress, // Reverse rekey transactions are to self
-        '0' // Zero amount
+        '0', // Zero amount
+        wipeEpochAtStart
       );
 
       // Trigger balance refresh

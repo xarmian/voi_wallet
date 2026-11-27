@@ -41,6 +41,7 @@ import {
   WC_V1_SESSION_STORAGE_KEY,
 } from './config';
 import { redactError } from '@/utils/logRedaction';
+import { wipeEpoch, wipedSince } from '@/services/wipe/gate';
 import { describePeerMethod } from './peerLabels';
 import {
   readSessionKey,
@@ -785,6 +786,9 @@ export class WalletConnectV1Client extends EventEmitter {
 
     let priorSlot: string | null = null;
     let secureWritten = false;
+    // TASK-469: a store begun before or during a wipe writes nothing after
+    // it; a key it already wrote is deleted, not rolled back to the old slot.
+    const epoch = wipeEpoch();
 
     try {
       // Capture the prior slot for rollback. An unreadable slot (Android
@@ -796,9 +800,14 @@ export class WalletConnectV1Client extends EventEmitter {
         priorSlot = null;
       }
 
+      if (wipedSince(epoch)) return;
       await writeSessionKey(topic, sessionKey);
       secureWritten = true;
 
+      if (wipedSince(epoch)) {
+        await restoreSessionKeySlot(null);
+        return;
+      }
       await AsyncStorage.setItem(storageKey, JSON.stringify(persisted));
       await this.removeStaleSessions(storageKey, topic);
     } catch {
@@ -845,6 +854,9 @@ export class WalletConnectV1Client extends EventEmitter {
    * Load stored session
    */
   async loadSession(topic: string): Promise<WalletConnectV1SessionData | null> {
+    // TASK-469: a load begun before or during a wipe returns nothing it read
+    // and writes nothing back.
+    const epoch = wipeEpoch();
     try {
       const stored = await AsyncStorage.getItem(
         `${WC_V1_SESSION_STORAGE_KEY}:${topic}`
@@ -908,6 +920,8 @@ export class WalletConnectV1Client extends EventEmitter {
         return null;
       }
 
+      if (wipedSince(epoch)) return null;
+
       const hasInlineKey =
         persisted.key !== undefined &&
         persisted.key !== null &&
@@ -948,7 +962,7 @@ export class WalletConnectV1Client extends EventEmitter {
 
       // Same rule as boot restore: drain whenever the row still carries a key
       // AND the secure copy is confirmed — never strip the only copy.
-      if (hasInlineKey && secureKeyConfirmed) {
+      if (hasInlineKey && secureKeyConfirmed && !wipedSince(epoch)) {
         try {
           const { key: _dropped, ...keyless } = persisted;
           await AsyncStorage.setItem(storageKey, JSON.stringify(keyless));
@@ -957,6 +971,7 @@ export class WalletConnectV1Client extends EventEmitter {
         }
       }
 
+      if (wipedSince(epoch)) return null;
       return { ...persisted, key: sessionKey };
     } catch {
       console.error('WC v1 Client: Failed to load session');

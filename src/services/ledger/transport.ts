@@ -10,7 +10,11 @@ import {
   LedgerAccountError,
 } from '@/types/wallet';
 import { ledgerDeviceStorage, LedgerDeviceStorage } from './storage';
-import { registerWipeReset } from '@/services/wipe/gate';
+import {
+  registerWipeReset,
+  wipeEpoch,
+  wipedSince,
+} from '@/services/wipe/gate';
 import { isLedgerSigningInProgress } from '@/services/ledger/signingState';
 import { isPermissionDeniedError } from '@/utils/errorMapping';
 import { redactError } from '@/utils/logRedaction';
@@ -1367,8 +1371,12 @@ export class LedgerTransportService {
    * Load previously discovered devices from storage
    */
   private async loadPersistedDevices(): Promise<void> {
+    const epoch = wipeEpoch();
     try {
       const persistedDevices = await ledgerDeviceStorage.loadDevices();
+      // TASK-492: begun before or during a wipe, the list is the previous
+      // wallet's; the reset already emptied the map.
+      if (wipedSince(epoch)) return;
       console.log(`Loaded ${persistedDevices.length} persisted Ledger devices`);
 
       // Convert persisted devices to device records and add to memory

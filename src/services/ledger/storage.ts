@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { LedgerDeviceInfo } from './transport';
 import type { DeviceModelId } from '@ledgerhq/devices';
 import { redactError } from '@/utils/logRedaction';
+import { wipeEpoch, wipedSince } from '@/services/wipe/gate';
 
 export interface PersistedLedgerDevice {
   id: string;
@@ -98,8 +99,12 @@ export class LedgerDeviceStorage {
    * Save device information to storage
    */
   async saveDevice(deviceInfo: LedgerDeviceInfo): Promise<void> {
+    const epoch = wipeEpoch();
     try {
       const devices = await this.loadDevices();
+      // TASK-492: begun before or during a wipe, it would write the previous
+      // wallet's device list back. No await between this check and the write.
+      if (wipedSince(epoch)) return;
 
       // Convert LedgerDeviceInfo to PersistedLedgerDevice
       const persistedDevice: PersistedLedgerDevice = {
@@ -137,8 +142,10 @@ export class LedgerDeviceStorage {
    * Remove a device from storage
    */
   async removeDevice(deviceId: string): Promise<void> {
+    const epoch = wipeEpoch();
     try {
       const devices = await this.loadDevices();
+      if (wipedSince(epoch)) return;
       const filtered = devices.filter((d) => d.id !== deviceId);
 
       await AsyncStorage.setItem(
@@ -173,8 +180,10 @@ export class LedgerDeviceStorage {
    * Update the last connected timestamp for a device
    */
   async updateLastConnected(deviceId: string): Promise<void> {
+    const epoch = wipeEpoch();
     try {
       const devices = await this.loadDevices();
+      if (wipedSince(epoch)) return;
       const deviceIndex = devices.findIndex((d) => d.id === deviceId);
 
       if (deviceIndex >= 0) {

@@ -42,6 +42,7 @@ import {
   RestoreRecordResult,
 } from './types';
 import { redactAddress, redactError } from '@/utils/logRedaction';
+import { wipeEpoch, wipedSince } from '@/services/wipe/gate';
 
 // Storage keys for various settings
 const STORAGE_KEYS = {
@@ -1314,6 +1315,10 @@ export async function performFullRestore(
   // the storage operations below are awaiting completion.
   const stagedAccounts = accounts.map((account) => ({ ...account }));
   validateRetainedKeys(stagedAccounts);
+  // TASK-492: a restore that straddles a wipe writes none of the file's
+  // settings, friends or flags after it (the accounts step has its own reset
+  // check).
+  const epoch = wipeEpoch();
 
   // Decide "fresh" BEFORE any account is added, from strict reads: a read
   // error stops the restore here, with nothing written. The decision runs
@@ -1339,6 +1344,12 @@ export async function performFullRestore(
   // boot into the fail-closed recovery screen (whose Reset WIPES this
   // just-restored wallet); the breadcrumb lets checkInitialAuthState route to
   // SecuritySetup (resume PIN setup) instead. setupPin clears it on success.
+  if (wipedSince(epoch)) {
+    throw new BackupError(
+      'Failed to restore accounts: the wallet was deleted during the restore',
+      'RESTORE_FAILED'
+    );
+  }
   if (!hasPin) {
     await markPinSetupPending();
   }
@@ -1349,7 +1360,8 @@ export async function performFullRestore(
   // account on the wallet before our commit, it is not fresh now, and the file
   // changes accounts only. A stale "fresh" can only affect display settings: a
   // fresh restore never sets a PIN or protection state from the file.
-  fresh = fresh && !accountCounts.deviceHadAccountsAtCommit;
+  fresh =
+    fresh && !accountCounts.deviceHadAccountsAtCommit && !wipedSince(epoch);
 
   let remoteSignerSettingsRestored = false;
   let friendsCount = 0;

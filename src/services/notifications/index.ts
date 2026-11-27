@@ -15,6 +15,7 @@ import * as Device from 'expo-device';
 import { Platform, AppState, AppStateStatus } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { wipeEpoch, wipedSince } from '@/services/wipe/gate';
 import algosdk from 'algosdk';
 import {
   getSupabaseClient,
@@ -107,6 +108,9 @@ class NotificationService {
    * Call this early in app startup
    */
   async initialize(): Promise<void> {
+    // TASK-492: the last-handled id below is wiped data; a start that
+    // straddles a wipe does not write it back.
+    const epoch = wipeEpoch();
     // Configure notification handler lazily to avoid iOS simulator crashes
     // This must happen before any notification operations
     configureNotificationHandler();
@@ -144,10 +148,11 @@ class NotificationService {
           );
 
           // Mark as handled BEFORE processing
-          await AsyncStorage.setItem(
-            LAST_HANDLED_NOTIFICATION_KEY,
-            notificationId
-          );
+          if (!wipedSince(epoch))
+            await AsyncStorage.setItem(
+              LAST_HANDLED_NOTIFICATION_KEY,
+              notificationId
+            );
 
           if (this.onNotificationTap) {
             this.onNotificationTap(data, notificationId);
