@@ -20,6 +20,15 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 jest.mock('@/store/walletStore', () => ({
   removePersistedBalanceCaches: jest.fn(async () => {}),
 }));
+// The PIN and device-key KDFs run on node's native crypto, as they run on a
+// device through react-native-quick-crypto. Each backend must pass its
+// known-answer check before it is used, so the bytes are the same as the
+// pure-JS fallback's; only the CPU time differs. On the fallback every case
+// here spent 2-2.5 s in key derivation, which pushed the slowest past 5 s on CI.
+jest.mock('react-native-quick-crypto', () => {
+  const nodeCrypto = require('crypto');
+  return { pbkdf2: nodeCrypto.pbkdf2, scrypt: nodeCrypto.scrypt };
+});
 
 import algosdk from 'algosdk';
 import nacl from 'tweetnacl';
@@ -28,6 +37,7 @@ import {
   FoundAccountMismatchError,
 } from '@/services/secure/AccountSecureStorage';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
+import { WriteOutcomeUnknownError } from '@/services/secure/boundedWrites';
 import * as freshAuth from '@/services/secure/freshAuth';
 import type { FreshAuthCapability } from '@/services/secure/freshAuth';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -275,6 +285,49 @@ describe('TASK-478 restore a found account', () => {
     });
     expect(mockPlatform.__secure.get(SECRET(formatA.id))).toBe(before);
     expect(readRegistry()).toContain(formatA.id);
+  });
+
+  it('a commit failure after the wallet write reports restored-unconfirmed', async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans();
+    await scanAll();
+    const before = mockPlatform.__secure.get(SECRET(formatA.id));
+    jest
+      .spyOn(AccountSecureStorage, 'commitPendingCreate')
+      .mockRejectedValueOnce(new Error('journal commit failed'));
+
+    expect(await restore(formatA)).toEqual({
+      kind: 'restored-unconfirmed',
+      address: formatA.address,
+    });
+    const account = await walletAccountAt(formatA.address);
+    expect(account?.type).toBe('standard');
+    expect(await slotState(account!.id, formatA.address)).toBe('key-matches');
+    expect(mockPlatform.__secure.get(SECRET(formatA.id))).toBe(before);
+    expect(readRegistry()).toContain(formatA.id);
+  });
+
+  it('an unknown outcome at release reports restored-unconfirmed', async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans();
+    await scanAll();
+    jest
+      .spyOn(AccountSecureStorage, 'releaseRestoredOrphan')
+      .mockRejectedValueOnce(new WriteOutcomeUnknownError(true));
+
+    expect(await restore(formatA)).toEqual({
+      kind: 'restored-unconfirmed',
+      address: formatA.address,
+    });
+    expect((await walletAccountAt(formatA.address))?.type).toBe('standard');
+  });
+
+  it('a failure before the wallet write still throws', async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans();
+    await scanAll();
+    jest
+      .spyOn(wallet, 'addAccountToWallet')
+      .mockRejectedValueOnce(new Error('blob write failed'));
+    await expect(restore(formatA)).rejects.toThrow('blob write failed');
+    expect(await walletAccountAt(formatA.address)).toBeUndefined();
   });
 
   describe('interruption leaves the key reachable', () => {

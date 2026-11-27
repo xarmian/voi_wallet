@@ -175,7 +175,7 @@ describe('TASK-478 found accounts: secret reads', () => {
     unregister = installPrompter(true).unregister;
     await expect(
       withFreshAuth('remove_found_account', (cap) =>
-        removeFoundAccount(formatA.id, cap)
+        removeFoundAccount([formatA.id], cap)
       )
     ).rejects.toThrow();
     expect(typeof mockPlatform.__secure.get(SECRET(formatA.id))).toBe('string');

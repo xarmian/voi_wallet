@@ -175,6 +175,17 @@ export class FoundAccountMismatchError extends Error {
   }
 }
 
+/**
+ * TASK-478: the found key's address is a wallet account whose own slot does not
+ * read that key back, so the found copy may be the only usable one. Kept.
+ */
+export class FoundAccountOnlyCopyError extends Error {
+  constructor() {
+    super('This key is the only usable copy on this device');
+    this.name = 'FoundAccountOnlyCopyError';
+  }
+}
+
 /** TASK-478: the id is not (or no longer) a quarantined key. */
 export class FoundAccountNotQuarantinedError extends Error {
   constructor() {
@@ -2944,12 +2955,31 @@ export class AccountSecureStorage {
   /**
    * Delete a quarantined key from this device (the caller has a fresh
    * authentication). Refused while a storage write for its slot is unresolved.
-   * A delete failure throws and the id stays in the registry.
+   * When the key's scanned address is one of `walletAccounts`, the delete runs
+   * only if that account's own slot reads the key back (checked in this task,
+   * without side effects); otherwise FoundAccountOnlyCopyError and nothing is
+   * deleted. A delete failure throws and the id stays in the registry.
    */
-  static async deleteQuarantinedOrphan(accountId: string): Promise<void> {
+  static async deleteQuarantinedOrphan(
+    accountId: string,
+    walletAccounts: readonly { id: string; address: string }[]
+  ): Promise<void> {
     return this.runKeyMutationExclusive(async () => {
       if (!(await this.readQuarantinedIdsSalvaged()).includes(accountId)) {
         throw new FoundAccountNotQuarantinedError();
+      }
+      const entry = (await this.readQuarantineScanTolerant())[accountId];
+      const address = entry && 'address' in entry ? entry.address : undefined;
+      const owner =
+        address === undefined
+          ? undefined
+          : walletAccounts.find((account) => account.address === address);
+      if (owner && address !== undefined) {
+        const slot = await this.inspectSlotUnderOneVaultState(
+          owner.id,
+          address
+        );
+        if (slot.state !== 'key-matches') throw new FoundAccountOnlyCopyError();
       }
       const primaryKey = this.secretKey(accountId);
       const legacyKey = `${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`;

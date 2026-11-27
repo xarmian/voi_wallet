@@ -18,7 +18,10 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useWalletStore } from '@/store/walletStore';
 import { FreshAuthError, withFreshAuth } from '@/services/secure/freshAuth';
-import { FoundAccountMismatchError } from '@/services/secure/AccountSecureStorage';
+import {
+  FoundAccountMismatchError,
+  FoundAccountOnlyCopyError,
+} from '@/services/secure/AccountSecureStorage';
 import {
   readFoundAccountsSummary,
   removeFoundAccount,
@@ -41,13 +44,14 @@ type ScreenState =
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-const TYPE_NAMES: Record<AccountType, string> = {
-  [AccountType.STANDARD]: 'standard',
-  [AccountType.WATCH]: 'watch-only',
-  [AccountType.REKEYED]: 'rekeyed',
-  [AccountType.LEDGER]: 'Ledger',
-  [AccountType.REMOTE_SIGNER]: 'remote signer',
-};
+const onlyCopyText = (address: string) =>
+  `This key is the only usable copy for ${formatAddress(address)} on this device. It's kept here.`;
+
+/** Remove is offered only when the wallet account holds a key of its own. */
+const walletKeepsKey = (row: Extract<FoundRow, { kind: 'in-wallet' }>) =>
+  row.walletHasKey &&
+  row.walletType !== AccountType.WATCH &&
+  row.walletType !== AccountType.LEDGER;
 
 function authAlert(error: FreshAuthError, what: string) {
   // A cancel shows nothing; other auth failures say so without detail.
@@ -70,7 +74,10 @@ export default function FoundAccountsScreen() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const generationRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  // The automatic scan runs on the first load after mount only, never from a
+  // reload after a restore, remove or rescan.
   const autoScannedRef = useRef(false);
+  const mountedRef = useRef(false);
 
   const nextSignal = () => {
     abortRef.current?.abort();
@@ -82,6 +89,8 @@ export default function FoundAccountsScreen() {
   /** 'ok' also covers a scan that stopped part way: what it read is kept. */
   const runScan = useCallback(
     async (ids: string[]): Promise<'ok' | 'auth-failed'> => {
+      // Never open a prompt for a screen that has gone.
+      if (!mountedRef.current) return 'auth-failed';
       try {
         await withFreshAuth(
           'scan_found_accounts',
@@ -101,6 +110,7 @@ export default function FoundAccountsScreen() {
   );
 
   const load = useCallback(async () => {
+    if (!mountedRef.current) return;
     const generation = ++generationRef.current;
     const current = () => generation === generationRef.current;
     // At most two passes: a scan on the first visit, then the list it left.
@@ -142,9 +152,11 @@ export default function FoundAccountsScreen() {
   }, [runScan]);
 
   useEffect(() => {
+    mountedRef.current = true;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load() sets state only after awaiting the storage read.
     void load();
     return () => {
+      mountedRef.current = false;
       generationRef.current += 1;
       abortRef.current?.abort();
     };
@@ -164,19 +176,20 @@ export default function FoundAccountsScreen() {
 
   const rescan = async (ids: string[]) => {
     if (busyId) return;
+    autoScannedRef.current = true;
     setBusyId('scan');
     setState({ kind: 'scanning' });
     try {
       await runScan(ids);
     } finally {
       setBusyId(null);
-      autoScannedRef.current = true;
       void load();
     }
   };
 
   const restore = async (row: Extract<FoundRow, { kind: 'ready' }>) => {
     if (busyId) return;
+    autoScannedRef.current = true;
     setBusyId(row.id);
     // Set only when the prompt failed, so nothing was read or written.
     let authFailed = false;
@@ -186,12 +199,18 @@ export default function FoundAccountsScreen() {
         (cap) => restoreFoundAccount(row.id, row.address, cap),
         { signal: nextSignal() }
       );
-      Alert.alert(
-        'Account restored',
-        result.kind === 'restored'
-          ? undefined
-          : 'The found copy is still on this device; you can remove it here.'
-      );
+      if (result.kind === 'restored-unconfirmed')
+        Alert.alert(
+          'Restore Account',
+          "The account was added to your wallet, but this step didn't finish. The found key may still be on this device; check this screen again after restarting the app."
+        );
+      else
+        Alert.alert(
+          'Account restored',
+          result.kind === 'restored'
+            ? undefined
+            : 'The found copy is still on this device; you can remove it here.'
+        );
     } catch (error) {
       if (error instanceof FreshAuthError) {
         authFailed = true;
@@ -224,17 +243,20 @@ export default function FoundAccountsScreen() {
     );
   };
 
-  const remove = async (id: string) => {
+  const remove = async (ids: string[], address: string) => {
     if (busyId) return;
-    setBusyId(id);
+    autoScannedRef.current = true;
+    setBusyId(ids[0]);
     try {
       await withFreshAuth(
         'remove_found_account',
-        (cap) => removeFoundAccount(id, cap),
+        (cap) => removeFoundAccount(ids, cap),
         { signal: nextSignal() }
       );
     } catch (error) {
       if (error instanceof FreshAuthError) authAlert(error, 'remove this key');
+      else if (error instanceof FoundAccountOnlyCopyError)
+        Alert.alert('Remove Key', onlyCopyText(address));
       else Alert.alert('Remove Key', "Couldn't remove this key.");
     } finally {
       setBusyId(null);
@@ -242,7 +264,7 @@ export default function FoundAccountsScreen() {
     }
   };
 
-  const confirmRemove = (id: string, address: string) => {
+  const confirmRemove = (ids: string[], address: string) => {
     Alert.alert(
       'Remove this key?',
       `This deletes this key from this device. If you don't have this account's recovery phrase, restore it first and back the phrase up. Without it, funds at ${formatAddress(address)} may not be reachable from this device.`,
@@ -251,7 +273,7 @@ export default function FoundAccountsScreen() {
         {
           text: 'Remove',
           style: 'destructive',
-          onPress: () => void remove(id),
+          onPress: () => void remove(ids, address),
         },
       ]
     );
@@ -293,7 +315,7 @@ export default function FoundAccountsScreen() {
             {button('Restore', () => confirmRestore(row))}
             {button(
               'Remove',
-              () => confirmRemove(row.id, row.address),
+              () => confirmRemove(row.ids, row.address),
               'danger'
             )}
           </View>
@@ -305,14 +327,22 @@ export default function FoundAccountsScreen() {
     return (
       <View key={row.id} style={styles.card}>
         <Text style={styles.address}>{formatAddress(row.address)}</Text>
-        <Text style={styles.label}>
-          {row.keyed
-            ? `Already in your wallet as ${row.walletLabel}`
-            : `Your wallet has this address as a ${TYPE_NAMES[row.walletType] ?? 'different'} account, so it can't be restored here`}
-        </Text>
-        <View style={styles.actions}>
-          {button('Remove', () => confirmRemove(row.id, row.address), 'danger')}
-        </View>
+        {walletKeepsKey(row) ? (
+          <>
+            <Text style={styles.label}>
+              {`Already in your wallet as ${row.walletLabel}`}
+            </Text>
+            <View style={styles.actions}>
+              {button(
+                'Remove',
+                () => confirmRemove([row.id], row.address),
+                'danger'
+              )}
+            </View>
+          </>
+        ) : (
+          <Text style={styles.label}>{onlyCopyText(row.address)}</Text>
+        )}
       </View>
     );
   };

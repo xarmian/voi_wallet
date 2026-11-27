@@ -42,8 +42,14 @@ jest.mock('react-native-reanimated', () => {
 import FoundAccountsNoticeHost from '../FoundAccountsNoticeHost';
 import { useFoundAccountsSummary } from '@/hooks/useFoundAccountsSummary';
 import { refocus } from '@/__tests__/fixtures/navigationFocus';
+import * as found from '@/services/secure/foundAccounts';
+import type { FoundSummary } from '@/services/secure/foundAccounts';
+import { AccountType } from '@/types/wallet';
+import { formatAddress } from '@/utils/address';
 import {
+  SEEN_KEY,
   boot,
+  mockPlatform,
   pinDeviceWithTwoOrphans,
   resetAll,
   spyDecryptors,
@@ -116,5 +122,83 @@ describe('FoundAccountsNoticeHost', () => {
       });
     await view.findByText('found 2');
     expect(reads.total()).toBe(0);
+  });
+});
+
+describe('FoundAccountsNoticeHost counts what can be acted on', () => {
+  const READY = 'AAAAREADYADDRESSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const WALLET = 'BBBBWALLETADDRESSBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+  const inWallet = {
+    kind: 'in-wallet' as const,
+    id: 'w1',
+    address: WALLET,
+    walletLabel: 'Main',
+    walletType: AccountType.STANDARD,
+    walletHasKey: true,
+  };
+  const given = (summary: Partial<FoundSummary>) =>
+    jest.spyOn(found, 'readFoundAccountsSummary').mockResolvedValue({
+      hasPin: true,
+      presentCount: 0,
+      rows: [],
+      unreadableIds: [],
+      unscannedIds: [],
+      ...summary,
+    });
+  const settle = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+  it('one ready address with two copies, plus an in-wallet copy, is one account', async () => {
+    given({
+      presentCount: 3,
+      rows: [
+        { kind: 'ready', id: 'r1', ids: ['r1', 'r2'], address: READY },
+        inWallet,
+      ],
+    });
+    const view = await render(<FoundAccountsNoticeHost onReview={jest.fn()} />);
+    await view.findByText('1 account found on this device');
+    expect(view.getByText(formatAddress(READY))).toBeTruthy();
+    await act(async () => {
+      fireEvent.press(view.getByText('Not now'));
+    });
+    // The seen list still records every present id.
+    await waitFor(() =>
+      expect(
+        JSON.parse(mockPlatform.__kv.get(SEEN_KEY) ?? '[]').sort()
+      ).toEqual(['r1', 'r2', 'w1'])
+    );
+  });
+
+  it('only in-wallet copies show no notice', async () => {
+    given({ presentCount: 2, rows: [inWallet, { ...inWallet, id: 'w2' }] });
+    const view = await render(<FoundAccountsNoticeHost onReview={jest.fn()} />);
+    await settle();
+    expect(view.queryByText(/^\d+ accounts? found on this device$/)).toBeNull();
+  });
+
+  it('counts unscanned rows and unreadable ids, and names no address for two', async () => {
+    given({
+      presentCount: 3,
+      rows: [{ kind: 'unscanned', id: 'u1', hintAddress: READY }, inWallet],
+      unscannedIds: ['u1'],
+      unreadableIds: ['x1'],
+    });
+    const view = await render(<FoundAccountsNoticeHost onReview={jest.fn()} />);
+    await view.findByText('2 accounts found on this device');
+    expect(view.queryByText(formatAddress(READY))).toBeNull();
+  });
+
+  it('a single unscanned row with a hint names its address', async () => {
+    given({
+      presentCount: 2,
+      rows: [{ kind: 'unscanned', id: 'u1', hintAddress: READY }, inWallet],
+      unscannedIds: ['u1'],
+    });
+    const view = await render(<FoundAccountsNoticeHost onReview={jest.fn()} />);
+    await view.findByText('1 account found on this device');
+    expect(view.getByText(formatAddress(READY))).toBeTruthy();
   });
 });

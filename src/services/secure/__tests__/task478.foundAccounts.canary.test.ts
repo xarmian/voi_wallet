@@ -145,7 +145,7 @@ it('no secret text anywhere', async () => {
     );
     await run(() =>
       authed('remove_found_account', (cap) =>
-        removeFoundAccount('orphan-canary-2', cap)
+        removeFoundAccount(['orphan-canary-2'], cap)
       )
     );
     expect(

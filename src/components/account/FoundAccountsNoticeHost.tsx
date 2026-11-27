@@ -7,11 +7,33 @@ import {
   type FoundSummary,
 } from '@/services/secure/foundAccounts';
 
-function singleAddress(summary: FoundSummary): string | undefined {
-  if (summary.rows.length !== 1 || summary.unreadableIds.length > 0)
-    return undefined;
-  const row = summary.rows[0];
-  return row.kind === 'unscanned' ? row.hintAddress : row.address;
+/**
+ * What the notice announces: keys the user can act on. A ready address counts
+ * once however many copies it has; unscanned rows and unreadable ids count;
+ * in-wallet copies do not.
+ */
+function actionable(summary: FoundSummary): {
+  count: number;
+  ids: string[];
+  address?: string;
+} {
+  const rows = summary.rows.filter(
+    (row) => row.kind === 'ready' || row.kind === 'unscanned'
+  );
+  const count = rows.length + summary.unreadableIds.length;
+  const ids = [
+    ...rows.flatMap((row) => (row.kind === 'ready' ? row.ids : [row.id])),
+    ...summary.unreadableIds,
+  ];
+  const addresses = rows.flatMap((row) => {
+    const address = row.kind === 'ready' ? row.address : row.hintAddress;
+    return address ? [address] : [];
+  });
+  return {
+    count,
+    ids,
+    ...(count === 1 && addresses.length === 1 ? { address: addresses[0] } : {}),
+  };
 }
 
 /**
@@ -48,8 +70,11 @@ export default function FoundAccountsNoticeHost({
 
   if (!summary || summary.presentCount === 0 || seen?.summary !== summary)
     return null;
+  const shown = actionable(summary);
+  if (shown.count === 0 || shown.ids.every((id) => seen.ids.has(id)))
+    return null;
+  // Every present id is recorded, in-wallet copies included.
   const ids = presentIdsOf(summary);
-  if (ids.every((id) => seen.ids.has(id))) return null;
 
   const markSeen = () => {
     setSeen({ summary, ids: new Set([...seen.ids, ...ids]) });
@@ -60,8 +85,8 @@ export default function FoundAccountsNoticeHost({
 
   return (
     <FoundAccountsNotice
-      count={summary.presentCount}
-      address={singleAddress(summary)}
+      count={shown.count}
+      address={shown.address}
       onReview={() => {
         markSeen();
         onReview();

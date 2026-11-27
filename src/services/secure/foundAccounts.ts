@@ -16,7 +16,11 @@ import {
 } from './AccountSecureStorage';
 import { consumeFreshAuth, type FreshAuthCapability } from './freshAuth';
 import { MultiAccountWalletService } from '@/services/wallet';
-import { AccountStorageError, AccountType } from '@/types/wallet';
+import {
+  AccountStorageError,
+  AccountType,
+  FoundRestoreUnconfirmedError,
+} from '@/types/wallet';
 
 export type FoundRow =
   | {
@@ -32,7 +36,8 @@ export type FoundRow =
       address: string;
       walletLabel: string;
       walletType: AccountType;
-      keyed: boolean;
+      /** The wallet account's own slot holds something (the presence probe). */
+      walletHasKey: boolean;
     }
   | { kind: 'unscanned'; id: string; hintAddress?: string; hintLabel?: string };
 
@@ -92,10 +97,11 @@ export async function readFoundAccountsSummary(): Promise<FoundSummary> {
         address: scan.address,
         walletLabel: inWallet.label ?? '',
         walletType: inWallet.type,
-        keyed:
-          inWallet.type === AccountType.STANDARD ||
-          (inWallet.type === AccountType.REKEYED &&
-            (inWallet as { originalOwner?: boolean }).originalOwner === true),
+        // Presence only, never a decrypt: the account type and originalOwner
+        // do not prove the wallet account still holds its key.
+        walletHasKey: await AccountSecureStorage.probeSecretPresenceStrict(
+          inWallet.id
+        ),
       });
       continue;
     }
@@ -144,11 +150,18 @@ async function walletOwns(id: string): Promise<boolean> {
   return !!wallet?.accounts.some((account) => account.id === id);
 }
 
+/**
+ * 'restored-unconfirmed': the account was added to the wallet, then a later
+ * step failed; the found copy may still be on this device.
+ */
+export type FoundRestoreOutcome =
+  'restored' | 'restored-copy-kept' | 'restored-unconfirmed';
+
 export async function restoreFoundAccount(
   id: string,
   listedAddress: string,
   cap: FreshAuthCapability
-): Promise<{ kind: 'restored' | 'restored-copy-kept'; address: string }> {
+): Promise<{ kind: FoundRestoreOutcome; address: string }> {
   consumeFreshAuth(cap, 'restore_found_account');
   // A key-bearing account on a device with no PIN boots to recovery.
   if (!(await AccountSecureStorage.hasPinStrict())) {
@@ -172,28 +185,58 @@ export async function restoreFoundAccount(
         hintLabel,
         creationGen
       ));
+  } catch (error) {
+    if (error instanceof FoundRestoreUnconfirmedError) {
+      console.warn(
+        '[foundAccounts] restore step after the wallet write failed'
+      );
+      return { kind: 'restored-unconfirmed', address: listedAddress };
+    }
+    throw error;
   } finally {
     key.fill(0);
   }
-  if (await walletOwns(id)) {
-    return { kind: 'restored-copy-kept', address: listedAddress };
+  // The account is in the wallet from here on: no failure below may read as
+  // "nothing happened".
+  try {
+    if (await walletOwns(id)) {
+      return { kind: 'restored-copy-kept', address: listedAddress };
+    }
+    const released = await AccountSecureStorage.releaseRestoredOrphan(
+      id,
+      newId,
+      listedAddress
+    );
+    return {
+      kind: released === 'released' ? 'restored' : 'restored-copy-kept',
+      address: listedAddress,
+    };
+  } catch {
+    console.warn('[foundAccounts] restore step after the wallet write failed');
+    return { kind: 'restored-unconfirmed', address: listedAddress };
   }
-  const released = await AccountSecureStorage.releaseRestoredOrphan(
-    id,
-    newId,
-    listedAddress
-  );
-  return {
-    kind: released === 'released' ? 'restored' : 'restored-copy-kept',
-    address: listedAddress,
-  };
 }
 
+/**
+ * Removes each id in turn under one fresh authentication (a ready row's
+ * copies), stopping at the first failure. An id whose address is a wallet
+ * account is removed only while that account's slot reads the key back
+ * (FoundAccountOnlyCopyError otherwise).
+ */
 export async function removeFoundAccount(
-  id: string,
+  ids: string[],
   cap: FreshAuthCapability
 ): Promise<void> {
   consumeFreshAuth(cap, 'remove_found_account');
-  if (await walletOwns(id)) throw new FoundAccountNotQuarantinedError();
-  await AccountSecureStorage.deleteQuarantinedOrphan(id);
+  for (const id of ids) {
+    const wallet = await MultiAccountWalletService.readWalletStrict();
+    const accounts = (wallet?.accounts ?? []).map((account) => ({
+      id: account.id,
+      address: account.address,
+    }));
+    // A wallet account's id is never treated as found.
+    if (accounts.some((account) => account.id === id))
+      throw new FoundAccountNotQuarantinedError();
+    await AccountSecureStorage.deleteQuarantinedOrphan(id, accounts);
+  }
 }

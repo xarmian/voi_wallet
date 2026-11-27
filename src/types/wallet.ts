@@ -506,6 +506,18 @@ export class AccountStorageError extends AccountError {
   }
 }
 
+/**
+ * TASK-478: a found-key restore whose wallet write committed, after which a
+ * later step failed. The account is in the wallet; whether the found copy was
+ * removed is not known. `cause` is the failure, kept for the caller only.
+ */
+export class FoundRestoreUnconfirmedError extends AccountStorageError {
+  constructor(readonly cause: unknown) {
+    super('The account was added, but the restore did not finish');
+    this.name = 'FoundRestoreUnconfirmedError';
+  }
+}
+
 export class WipeIncompleteError extends AccountStorageError {
   /** Storage key NAMES (and opaque account ids inside them) that are unresolved. Never values. */
   readonly keys: string[];

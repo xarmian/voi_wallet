@@ -25,6 +25,7 @@ import {
   AccountDeletionPreconditionError,
   AccountDeletionExpectation,
   AccountExistsError,
+  FoundRestoreUnconfirmedError,
   InvalidAddressError,
   InvalidMnemonicError,
   LedgerAccountError,
@@ -296,7 +297,10 @@ export class MultiAccountWalletService {
     secretKey: Uint8Array,
     // Captured by the caller BEFORE the key was obtained, when it was not
     // obtained here (a found-key restore).
-    creationGen: number = AccountSecureStorage.getResetGeneration()
+    creationGen: number = AccountSecureStorage.getResetGeneration(),
+    // Called once the wallet metadata write has committed, so a caller can
+    // tell a later failure from one that left nothing behind.
+    onMetadataCommitted?: () => void
   ): Promise<void> {
     let token: string | undefined;
     let metadataCommitted = false;
@@ -308,6 +312,7 @@ export class MultiAccountWalletService {
       );
       await this.addAccountToWallet(accountMetadata, creationGen);
       metadataCommitted = true;
+      onMetadataCommitted?.();
       await AccountSecureStorage.commitPendingCreate(accountMetadata.id, token);
     } catch (error) {
       if (token !== undefined && !metadataCommitted) {
@@ -364,7 +369,21 @@ export class MultiAccountWalletService {
       hasBackup: false,
       backupVerified: false,
     };
-    await this.persistNewKeyedAccount(accountMetadata, secretKey, creationGen);
+    let committed = false;
+    try {
+      await this.persistNewKeyedAccount(
+        accountMetadata,
+        secretKey,
+        creationGen,
+        () => {
+          committed = true;
+        }
+      );
+    } catch (error) {
+      // After the wallet write the account exists: say so, not "failed".
+      if (committed) throw new FoundRestoreUnconfirmedError(error);
+      throw error;
+    }
     return { id: accountMetadata.id, address };
   }
 
