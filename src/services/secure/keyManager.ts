@@ -690,16 +690,4 @@ export class SecureKeyManager {
       );
     }
   }
-
-  /**
-   * Clear all data
-   */
-  static async clearAll(): Promise<void> {
-    try {
-      await AccountSecureStorage.clearAll();
-    } catch (error) {
-      console.error('Failed to clear secure storage:', redactError(error));
-      throw error;
-    }
-  }
 }

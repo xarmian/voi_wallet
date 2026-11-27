@@ -389,7 +389,7 @@ export default function LockScreen() {
   const handleReset = () => {
     showAlert(
       'Reset Application',
-      'This will permanently delete all wallet data, accounts, and settings. This action cannot be undone.\n\nAre you sure you want to continue?',
+      'This deletes all accounts, keys, contacts, messages and connections from this device. App settings like theme and network are kept.',
       [
         {
           text: 'Cancel',

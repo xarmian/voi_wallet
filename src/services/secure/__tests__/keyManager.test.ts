@@ -55,7 +55,6 @@ jest.mock('../AccountSecureStorage', () => ({
     getPrivateKey: (...args: unknown[]) => mockSecureGetPrivateKey(...args),
     probeSecretPresenceStrict: (...args: unknown[]) =>
       mockProbeSecretPresence(...args),
-    clearAll: jest.fn(async () => {}),
   },
 }));
 
@@ -1268,15 +1267,6 @@ describe('SecureKeyManager.hasEncryptedMnemonic', () => {
     setWallet([]);
     await expect(SecureKeyManager.hasEncryptedMnemonic()).resolves.toBe(false);
   });
-});
-
-it('clearAll propagates secure storage failure', async () => {
-  const { AccountSecureStorage } = require('../AccountSecureStorage');
-  const failure = new Error('disk I/O failure');
-  AccountSecureStorage.clearAll.mockRejectedValueOnce(failure);
-  const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-  await expect(SecureKeyManager.clearAll()).rejects.toBe(failure);
-  errorSpy.mockRestore();
 });
 
 describe('SecureKeyManager — retained REKEYED key as a rekey authority (TASK-425 U3)', () => {

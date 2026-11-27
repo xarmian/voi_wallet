@@ -142,3 +142,13 @@ test('the user can run Delete Everything again after an incomplete wipe', async 
   expect(mockWipe).toHaveBeenCalledTimes(2);
   expect(mockShowComplete).toHaveBeenCalledTimes(1);
 });
+
+test('the first dialog states what is deleted and what is kept; the final button is still "Delete Everything"', async () => {
+  const alertSpy = autoConfirm();
+  await pressDeleteEverything();
+  expect(alertSpy.mock.calls[0][1]).toBe(
+    'This deletes all accounts, keys, contacts, messages and connections from this device. App settings like theme and network are kept.'
+  );
+  const finalButtons = alertSpy.mock.calls[1][2] ?? [];
+  expect(finalButtons.map((b) => b.text)).toContain('Delete Everything');
+});

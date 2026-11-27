@@ -15,7 +15,10 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { redactError } from '@/utils/logRedaction';
 import { wipeAllLocalData } from '@/services/wipe';
-import { showWipeCompleteNotice } from '@/services/wipe/notices';
+import {
+  showWipeCompleteNotice,
+  showWipeIncompleteNotice,
+} from '@/services/wipe/notices';
 
 // Cross-platform confirm dialog (mirrors LockScreen.showAlert): on web there is
 // no native Alert, so fall back to window.confirm for the multi-button
@@ -158,8 +161,9 @@ export default function SecureStorageUnavailableScreen({
         await withTimeout(
           // TASK-415 / TASK-469: reset fails closed when key material can't be
           // verifiably erased. wipeAllLocalData records the wipe request first, then
-          // erases secure storage and the wallet blob, and clears the request only
-          // when all of it is complete; an incomplete wipe is finished by the next
+          // erases secure storage, the wallet blob and every other local record
+          // not on the allow-list, and clears the request only when all of it is
+          // complete; an incomplete wipe is finished by the next
           // launch. A keychain that fails every read can't support wallet setup
           // either; wiping metadata here would recreate TASK-413's orphan-PIN state.
           wipeAllLocalData(),
@@ -172,6 +176,8 @@ export default function SecureStorageUnavailableScreen({
             "Couldn't erase all wallet data from secure storage. Restart your device and try again. If your device is low on storage, free some up first."
           );
         }
+        // The same message as the lock screen; the user stays on this screen.
+        showWipeIncompleteNotice();
         throw error;
       }
       // Only after the wipe reported complete.
@@ -201,7 +207,8 @@ export default function SecureStorageUnavailableScreen({
     if (busy || !canReset) return;
     showAlert(
       'Reset and start over?',
-      'This permanently erases ALL local wallet data on this device. Only accounts backed by a recovery phrase you personally hold can be restored — each from its own phrase. Watch-only, Ledger, and remote-signer accounts must be re-added manually. This cannot be undone.',
+      'This deletes all accounts, keys, contacts, messages and connections from this device. App settings like theme and network are kept.\n\n' +
+        'Only accounts backed by a recovery phrase you personally hold can be restored — each from its own phrase. Watch-only, Ledger, and remote-signer accounts must be re-added manually. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {

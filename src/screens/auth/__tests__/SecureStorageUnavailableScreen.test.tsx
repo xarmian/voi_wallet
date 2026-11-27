@@ -15,6 +15,10 @@ import { render, fireEvent, act } from '@testing-library/react-native';
 import SecureStorageUnavailableScreen from '../SecureStorageUnavailableScreen';
 import { AccountSecureStorage } from '@/services/secure';
 import { MultiAccountWalletService } from '@/services/wallet';
+import {
+  WIPE_COMPLETE_NOTICE,
+  WIPE_INCOMPLETE_NOTICE,
+} from '@/services/wipe/notices';
 
 jest.mock('@/services/secure', () => ({
   AccountSecureStorage: { clearAll: jest.fn(async () => {}) },
@@ -222,8 +226,12 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
 
     const messages = alertSpy.mock.calls.map((c) => String(c[1]));
     const combined = messages.join('\n');
-    // Erases ALL local data — not just "a wallet" restorable from one phrase.
-    expect(combined).toMatch(/erases ALL local wallet data/i);
+    // TASK-469: the first dialog opens with the exact statement of what is
+    // deleted and what is kept, then the recovery-phrase guidance on its own.
+    expect(messages[0]).toBe(
+      'This deletes all accounts, keys, contacts, messages and connections from this device. App settings like theme and network are kept.\n\n' +
+        'Only accounts backed by a recovery phrase you personally hold can be restored — each from its own phrase. Watch-only, Ledger, and remote-signer accounts must be re-added manually. This cannot be undone.'
+    );
     // Names the account kinds a single seed does NOT restore.
     expect(combined).toMatch(/watch-only/i);
     expect(combined).toMatch(/ledger/i);
@@ -232,6 +240,31 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
     expect(combined).toMatch(/each from its own phrase/i);
     expect(combined).toMatch(/every recovery phrase/i);
 
+    alertSpy.mockRestore();
+  });
+
+  it('an incomplete wipe shows the same "didn\'t finish" notice as the lock screen, and the user stays here', async () => {
+    const alertSpy = autoConfirmAlerts();
+    mockClearAll.mockRejectedValueOnce(new Error('disk I/O failure'));
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const onRetry = jest.fn(async () => {});
+    const { getByLabelText, getByPlaceholderText } = await render(
+      <SecureStorageUnavailableScreen onRetry={onRetry} />
+    );
+    await fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
+    await act(async () => {
+      await fireEvent.press(
+        getByLabelText('Reset app and restore from recovery phrase')
+      );
+    });
+    const titles = alertSpy.mock.calls.map((c) => c[0]);
+    expect(titles).toContain(WIPE_INCOMPLETE_NOTICE.title);
+    expect(titles).not.toContain(WIPE_COMPLETE_NOTICE.title);
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(
+      getByLabelText('Reset app and restore from recovery phrase')
+    ).toBeTruthy();
+    errorSpy.mockRestore();
     alertSpy.mockRestore();
   });
 
