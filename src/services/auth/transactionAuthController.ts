@@ -2270,6 +2270,8 @@ export class TransactionAuthController {
         if (this.ledgerCancelRequested || this.userExplicitlyRejected) {
           return;
         }
+        // A send already issued is never signed again.
+        if (this.hasSubmittedToNetwork) return;
         // Allow the flow to resume once the device becomes ready again
         this.pendingStartAfterReady = true;
         this.pendingPinForStart =
@@ -2386,6 +2388,8 @@ export class TransactionAuthController {
     if (this.currentRequest?.reviewGrantKey && !this.reviewAuthorized) return;
     if (this.currentState.ledgerStatus !== 'ready') return;
     if (this.hasStartedSigning) return;
+    // A send already issued is never signed again; a new flow resets the flag.
+    if (this.hasSubmittedToNetwork) return;
 
     // CRITICAL: Don't restart signing if user cancelled or rejected
     if (this.ledgerCancelRequested || this.userExplicitlyRejected) {
