@@ -38,6 +38,32 @@ const mockSubscriptions = new Map([['sub1', { topic: 's1' }]]);
 const mockTopicMapClear = jest.fn();
 const mockPendingSubscriptions = new Map([['s1', { topic: 's1' }]]);
 const mockTransportClose = jest.fn(() => new Promise<void>(() => {}));
+// The sign-client engine's private request pipeline (2.26.0 engine.ts):
+// `sessionRequestQueue` emits the next `session_request` only while idle, and
+// `emittedSessionRequests` (a LimitedSet over a private `set`) skips ids
+// already emitted. `processSessionRequestQueue` below mirrors the SDK's gate;
+// sdkSubscriberShape.test.ts checks that gate in the installed source.
+const mockEngine = {
+  sessionRequestQueue: {
+    state: 'IDLE' as 'IDLE' | 'ACTIVE',
+    queue: [] as { id: number; topic: string }[],
+  },
+  emittedSessionRequests: { set: new Set<number>() },
+  emitted: [] as number[],
+  processSessionRequestQueue() {
+    const q = mockEngine.sessionRequestQueue;
+    if (q.state === 'ACTIVE') return;
+    const request = q.queue[0];
+    if (!request || mockEngine.emittedSessionRequests.set.has(request.id))
+      return;
+    q.state = 'ACTIVE';
+    mockEngine.emittedSessionRequests.set.add(request.id);
+    mockEngine.emitted.push(request.id);
+  },
+};
+const mockAuthRequests = fakeStore([11]);
+const mockAuthPairingTopics = fakeStore(['ap1']);
+const mockAuthKeys = fakeStore(['PUBLIC_KEY']);
 let mockInitialized = true;
 const mockClientInitialize = jest.fn(async () => {});
 const mockCore = {
@@ -94,6 +120,12 @@ jest.mock('../client', () => ({
           session: mockSession,
           proposal: mockProposal,
           pendingRequest: mockPendingRequest,
+          engine: mockEngine,
+          auth: {
+            requests: mockAuthRequests,
+            pairingTopics: mockAuthPairingTopics,
+            authKeys: mockAuthKeys,
+          },
           on: jest.fn(),
         },
       }),
@@ -162,6 +194,46 @@ test('the relay subscriber forgets its pending and cached topics, so a later rec
   await settle();
   expect(mockPendingSubscriptions.size).toBe(0);
   expect(mockCore.relayer.subscriber.cached).toEqual([]);
+});
+
+test('the engine request pipeline goes back to idle and empty, so the next request is shown', async () => {
+  WalletConnectService.getInstance();
+  // A request from the previous wallet is on screen: the engine is waiting
+  // for its answer, and a second one waits behind it.
+  mockEngine.sessionRequestQueue.queue = [
+    { id: 7, topic: 's1' },
+    { id: 9, topic: 's1' },
+  ];
+  mockEngine.processSessionRequestQueue();
+  expect(mockEngine.sessionRequestQueue.state).toBe('ACTIVE');
+  expect(mockEngine.emitted).toEqual([7]);
+
+  await settle();
+  expect(mockEngine.sessionRequestQueue.state).toBe('IDLE');
+  expect(mockEngine.sessionRequestQueue.queue).toEqual([]);
+  expect(mockEngine.emittedSessionRequests.set.size).toBe(0);
+
+  // The new wallet's first request is emitted, not held behind the old one.
+  mockEngine.sessionRequestQueue.queue.push({ id: 21, topic: 'new' });
+  mockEngine.processSessionRequestQueue();
+  expect(mockEngine.emitted).toEqual([7, 21]);
+});
+
+test('the session-authenticate stores are emptied through their store API', async () => {
+  WalletConnectService.getInstance();
+  // Earlier purges in this file emptied the shared stores: fill them again.
+  mockAuthRequests.map.set(12, {});
+  mockAuthPairingTopics.map.set('ap2', {});
+  mockAuthKeys.map.set('PUBLIC_KEY', {});
+  mockAuthKeys.delete.mockClear();
+  await settle();
+  expect(mockAuthRequests.keys).toEqual([]);
+  expect(mockAuthPairingTopics.keys).toEqual([]);
+  expect(mockAuthKeys.keys).toEqual([]);
+  expect(mockAuthKeys.delete).toHaveBeenCalledWith(
+    'PUBLIC_KEY',
+    expect.anything()
+  );
 });
 
 describe('an initialize() and a wipe at the same time', () => {

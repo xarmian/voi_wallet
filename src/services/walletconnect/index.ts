@@ -238,6 +238,17 @@ export class WalletConnectService extends EventEmitter {
       ...[...core.relayer.messages.messages.keys()].map((topic) =>
         core.relayer.messages.del(topic)
       ),
+      // Session-authenticate (one-click auth) stores: requests, the pairing
+      // topics they arrived on, and the wallet's auth public key.
+      ...signClient.auth.requests.keys.map((id) =>
+        signClient.auth.requests.delete(id, reason)
+      ),
+      ...signClient.auth.pairingTopics.keys.map((topic) =>
+        signClient.auth.pairingTopics.delete(topic, reason)
+      ),
+      ...signClient.auth.authKeys.keys.map((key) =>
+        signClient.auth.authKeys.delete(key, reason)
+      ),
     ];
     for (const key of core.expirer.keys) core.expirer.del(key);
     for (const topic of new Set(core.history.values.map((r) => r.topic)))
@@ -251,6 +262,22 @@ export class WalletConnectService extends EventEmitter {
     // SDK empties it only after a reconnect, so an offline wipe must empty it
     // here. A plain field write; no SDK method (none that avoids the network).
     (subscriber as unknown as { cached: unknown[] }).cached = [];
+    // Private in @walletconnect/sign-client's Engine. `sessionRequestQueue`
+    // emits the next `session_request` only while idle and goes back to idle
+    // only through the engine's own respond, delete and expiry paths, which
+    // the deletes above bypass; left active, every later request would wait
+    // behind the wiped one. `emittedSessionRequests` (a LimitedSet over a
+    // private `set`) holds the ids already emitted. Plain field writes, no SDK
+    // method; sdkSubscriberShape.test.ts fails if the fields move.
+    const engine = signClient.engine as unknown as {
+      sessionRequestQueue?: { state: string; queue: unknown[] };
+      emittedSessionRequests?: { set?: Set<unknown> };
+    };
+    if (engine.sessionRequestQueue) {
+      engine.sessionRequestQueue.state = 'IDLE'; // ENGINE_QUEUE_STATES.idle
+      engine.sessionRequestQueue.queue = [];
+    }
+    engine.emittedSessionRequests?.set?.clear();
     return Promise.all(writes).then(() => undefined);
   }
 
