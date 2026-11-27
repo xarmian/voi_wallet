@@ -3899,6 +3899,10 @@ export class AccountSecureStorage {
           'This account now holds its own key, so it wasn’t deleted.'
         );
       }
+      // TASK-478: a found key's verdict that names this account must be gone
+      // before its slot is, or the key would read as a duplicate of a key that
+      // no longer exists. If that can't be saved, nothing is deleted.
+      await this.clearVerdictsNamingLocked(accountId, { strict: true });
       await this.deleteAccountLocked(accountId);
       await this.dropQuarantineRecordsLocked(accountId);
     });
@@ -3956,11 +3960,16 @@ export class AccountSecureStorage {
    * scan entry that names `accountId` as its wallet account. Runs before that
    * account's slot is deleted, so a delete that fails partway never leaves a
    * verdict describing a slot that is gone: a missing verdict is always safe
-   * (the key counts and is scanned again). Best effort: a failure is logged
-   * without detail and never thrown. The caller holds the key-mutation mutex.
+   * (the key counts and is scanned again). Best effort by default: a failure
+   * is logged without detail and never thrown, since the bulk wipe and the
+   * create rollbacks delete ids no verdict names. With `strict` (a wallet
+   * account's delete) a failure throws AccountStorageError before any slot is
+   * touched; a map with nothing to clear is never written, so it can't block.
+   * The caller holds the key-mutation mutex.
    */
   private static async clearVerdictsNamingLocked(
-    accountId: string
+    accountId: string,
+    options: { strict?: boolean } = {}
   ): Promise<void> {
     try {
       const scan = await this.readQuarantineScanTolerant();
@@ -3972,6 +3981,10 @@ export class AccountSecureStorage {
         }
       if (changed) await this.writeQuarantineScanLocked(scan);
     } catch {
+      if (options.strict)
+        throw new AccountStorageError(
+          'Found-account records could not be updated, so nothing was deleted'
+        );
       console.warn('[deleteAccount] found-accounts verdict cleanup failed');
     }
   }

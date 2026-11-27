@@ -19,6 +19,7 @@ jest.mock('@/store/walletStore', () => ({
   removePersistedBalanceCaches: jest.fn(async () => {}),
 }));
 
+import algosdk from 'algosdk';
 import {
   AccountSecureStorage,
   FoundAccountOnlyCopyError,
@@ -567,5 +568,41 @@ describe("TASK-478 deleting a wallet account's slot clears verdicts naming it", 
       walletType: AccountType.STANDARD,
     });
     expect(actionableOf(summary).ids).toContain(formatA.id);
+  });
+
+  it('a verdict that cannot be cleared stops the delete before the slot is touched', async () => {
+    const { formatA, account } = await canaryInWalletScanned();
+    const slotBefore = mockPlatform.__secure.get(SECRET(account.id));
+    // Saving the cleared scan map fails.
+    mockPlatform.__state.fault = (op, key) =>
+      op === 'kv.set' && key === 'voi_reconcile_quarantine_scan'
+        ? 'reject'
+        : undefined;
+    await expect(
+      AccountSecureStorage.deleteAccount(account.id)
+    ).rejects.toThrow();
+    mockPlatform.__state.fault = undefined;
+    // Nothing was deleted, and the verdict still describes a slot that exists.
+    expect(mockPlatform.__secure.get(SECRET(account.id))).toBe(slotBefore);
+    expect(readScanMap()?.[formatA.id]).toEqual({
+      address: CANARY_ADDRESS,
+      wallet: { ownerId: account.id, keyUsable: true },
+    });
+  });
+
+  it('a scan map that cannot be written does not block a delete no verdict names', async () => {
+    await canaryInWalletScanned();
+    const other = await MultiAccountWalletService.importStandardAccount({
+      type: AccountType.STANDARD,
+      mnemonic: algosdk.secretKeyToMnemonic(algosdk.generateAccount().sk),
+      label: 'Other',
+    });
+    mockPlatform.__state.fault = (op, key) =>
+      op === 'kv.set' && key === 'voi_reconcile_quarantine_scan'
+        ? 'reject'
+        : undefined;
+    await AccountSecureStorage.deleteAccount(other.id);
+    mockPlatform.__state.fault = undefined;
+    expect(mockPlatform.__secure.has(SECRET(other.id))).toBe(false);
   });
 });
