@@ -163,6 +163,12 @@ export interface UnifiedSigningResult {
    * Every consumer that submits must guard the `null`s rather than submit them.
    */
   signedTransactions?: Uint8Array | Uint8Array[] | (string | null)[];
+  /**
+   * TASK-531: the flow-lapse epoch captured when a watched batch (no review
+   * grant, signed one entry at a time) started signing. The caller that sends
+   * checks it with `flowLapsedSince` right before the send. Unset when unwatched.
+   */
+  lapseEpoch?: number;
 }
 
 /**
@@ -537,12 +543,12 @@ export class UnifiedTransactionSigner {
         // Sequential signing for Ledger
         for (let i = 0; i < plans.length; i++) {
           // After Cancel, no entry starts after the one the loop has entered. After
-          // a lapse the same holds only for a request that holds a review
-          // capability: the controller watches the grant only then, so a request
-          // with no grant is not aborted by a lock or background. The entered entry
-          // can still reach the device; its signature is discarded. After Cancel,
-          // only the device keeps asking. After a lapse, the modal keeps showing the
-          // entered entry until the device resolves.
+          // a lapse the same holds: the controller watches the grant of a request
+          // that holds one, and a lock or background for a batch with no grant
+          // (TASK-531). The entered entry can still reach the device; its
+          // signature is discarded. After Cancel, only the device keeps asking.
+          // After a lapse, the modal keeps showing the entered entry until the
+          // device resolves.
           if (signal?.aborted) {
             return { success: false, error: new Error('Signing cancelled') };
           }
