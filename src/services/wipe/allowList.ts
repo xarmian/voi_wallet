@@ -32,7 +32,7 @@ export const ALLOWED_KEYS: Readonly<Record<string, string>> = {
   '@voi_wallet_slippage_tolerance': 'swap preference: a number',
   'experimental-features': 'feature toggles, keyed by nothing',
   voi_rate_limits:
-    'one record of send counts and reset times, keyed by nothing; a wipe must not reset the send limits',
+    'one record of send counts and reset times, keyed by nothing identifying',
   voi_device_installation_id:
     'the installation id (extension keeps it in general storage); kept so key derivation stays stable',
   __voi_encryption_key__:
