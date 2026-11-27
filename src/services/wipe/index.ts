@@ -16,7 +16,12 @@ import {
   SECURE_LEFTOVERS_RECORD_KEY,
   WALLET_BLOB_NAME,
 } from './constants';
-import { WipeResetRun, runWipeResets } from './gate';
+import {
+  WipeResetRun,
+  closeWipeWindow,
+  openWipeWindow,
+  runWipeResets,
+} from './gate';
 import { STORAGE_KEYS_NAME, listStorageKeys, sweepStorage } from './sweep';
 
 export {
@@ -161,7 +166,9 @@ async function clearLeftoverRecord(): Promise<void> {
 async function runWipe(): Promise<void> {
   await AccountSecureStorage.beginWipe();
   // Before the first delete: every store forgets the previous wallet, and
-  // writes that captured the epoch earlier skip.
+  // writes that captured the epoch earlier skip. From here until the wipe
+  // settles, a load or write that starts counts as wiped too.
+  openWipeWindow();
   const purges = settleResets(runWipeResets());
   await AccountSecureStorage.clearAll();
   try {
@@ -246,6 +253,7 @@ export function wipeAllLocalData(): Promise<void> {
   if (inFlight) return inFlight;
   const run = runWipe().finally(() => {
     inFlight = null;
+    closeWipeWindow();
   });
   inFlight = run;
   return run;

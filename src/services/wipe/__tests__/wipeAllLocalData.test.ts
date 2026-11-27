@@ -319,6 +319,43 @@ describe('in-memory state', () => {
     expect(useFriendsStore.getState().friends).toEqual([]);
   });
 
+  test('a friends load that starts during the wipe installs nothing, and a write begun after the wipe persists', async () => {
+    seed(WIPED);
+    let release: (() => void) | undefined;
+    const unregister = registerWipeReset(
+      'probe-hold',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+    let wiping: Promise<void> | undefined;
+    try {
+      wiping = wipeAllLocalData();
+      for (let i = 0; i < 1000 && !release; i++) await Promise.resolve();
+      expect(release).toBeDefined();
+      // The resets ran; the sweep has not, so the old list is still stored.
+      expect(mockPlain.has('@friends/list')).toBe(true);
+      await useFriendsStore.getState().initialize();
+      expect(useFriendsStore.getState().friends).toEqual([]);
+      expect(useFriendsStore.getState().isLoading).toBe(false);
+      release?.();
+      await wiping;
+    } finally {
+      release?.();
+      await wiping?.catch(() => undefined);
+      unregister();
+    }
+    expect(mockPlain.has('@friends/list')).toBe(false);
+
+    const adding = useFriendsStore.getState().addFriend('carol');
+    await Promise.resolve();
+    mockEnvoiLookup.resolve?.({ name: 'carol', address: ADDRESS });
+    await adding;
+    expect(mockPlain.get('@friends/list')).toContain('carol');
+    expect(useFriendsStore.getState().friends).toHaveLength(1);
+  });
+
   test('a local purge that fails is unresolved, by name', async () => {
     const unregister = registerWipeReset('probe-purge', () =>
       Promise.reject(new Error('purge failed'))

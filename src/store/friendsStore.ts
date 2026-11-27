@@ -72,12 +72,20 @@ export const useFriendsStore = create<FriendsState>()(
         const friendsJson = await AsyncStorage.getItem(
           STORAGE_KEYS.FRIENDS_LIST
         );
-        if (wipedSince(epoch)) return;
+        // Started before or during a wipe: install nothing it read.
+        if (wipedSince(epoch)) {
+          set({ isLoading: false });
+          return;
+        }
         const friends = friendsJson ? JSON.parse(friendsJson) : [];
 
         set({ friends, isInitialized: true, isLoading: false });
       } catch (error) {
         console.error('Failed to initialize friends store:', error);
+        if (wipedSince(epoch)) {
+          set({ isLoading: false });
+          return;
+        }
         set({
           lastError: 'Failed to load friends',
           isLoading: false,

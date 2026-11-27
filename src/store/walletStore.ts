@@ -773,12 +773,13 @@ export const useWalletStore = create<WalletState>()(
       }
 
       let resolveInitialization: () => void = () => {};
-      walletInitializationPromise = new Promise<void>((resolve) => {
+      const thisPass = new Promise<void>((resolve) => {
         resolveInitialization = resolve;
       });
+      walletInitializationPromise = thisPass;
 
-      // A wipe while this pass reads must not see it install the previous
-      // wallet afterwards (TASK-492).
+      // A wipe while this pass reads, or a pass started during a wipe, must
+      // not install the previous wallet (TASK-492).
       const epoch = wipeEpoch();
       try {
         set({ isLoading: true, lastError: null });
@@ -929,6 +930,7 @@ export const useWalletStore = create<WalletState>()(
           });
         }
       } catch (error) {
+        if (wipedSince(epoch)) return;
         set({
           lastError:
             error instanceof Error
@@ -940,8 +942,11 @@ export const useWalletStore = create<WalletState>()(
           walletLoadFailures: get().walletLoadFailures + 1,
         });
       } finally {
-        set({ isLoading: false });
-        walletInitializationPromise = null;
+        // A wipe dropped this pass: a newer one may own the store now.
+        if (walletInitializationPromise === thisPass) {
+          set({ isLoading: false });
+          walletInitializationPromise = null;
+        }
         resolveInitialization();
       }
     },
@@ -1406,6 +1411,8 @@ export const useWalletStore = create<WalletState>()(
 
     // Balance and transaction management
     loadAccountBalance: async (accountId: string, forceRefresh = false) => {
+      // TASK-492: none starts during a wipe (the account is the previous wallet's).
+      if (wipedSince(wipeEpoch())) return;
       // TASK-458: a load begun before a wipe/reset never writes display status.
       const rekeyEpoch = getRekeyStatusEpoch();
       const { accountStates } = get();
@@ -1622,6 +1629,8 @@ export const useWalletStore = create<WalletState>()(
     },
 
     loadAccountTransactions: async (accountId: string) => {
+      // TASK-492: none starts during a wipe (the account is the previous wallet's).
+      if (wipedSince(wipeEpoch())) return;
       // 0 = not yet issued, so a failure before the request was taken out
       // (e.g. account resolution) still reports against the current view.
       let requestToken = 0;
@@ -1722,6 +1731,8 @@ export const useWalletStore = create<WalletState>()(
       assetId: number,
       isArc200: boolean = false
     ) => {
+      // TASK-492: none starts during a wipe (the account is the previous wallet's).
+      if (wipedSince(wipeEpoch())) return;
       // 0 = not yet issued, so a failure before the request was taken out
       // (e.g. account resolution) still reports against the current view.
       let requestToken = 0;
@@ -1842,6 +1853,8 @@ export const useWalletStore = create<WalletState>()(
       assetId: number,
       isArc200: boolean = false
     ) => {
+      // TASK-492: none starts during a wipe (the account is the previous wallet's).
+      if (wipedSince(wipeEpoch())) return;
       // 0 = not yet issued; see nextTransactionsRequest.
       let requestToken = 0;
       try {
@@ -1973,6 +1986,8 @@ export const useWalletStore = create<WalletState>()(
     },
 
     loadAllTransactions: async (accountId: string) => {
+      // TASK-492: none starts during a wipe (the account is the previous wallet's).
+      if (wipedSince(wipeEpoch())) return;
       // 0 = not yet issued, so a failure before the request was taken out
       // (e.g. account resolution) still reports against the current view.
       let requestToken = 0;
@@ -2076,6 +2091,8 @@ export const useWalletStore = create<WalletState>()(
     },
 
     loadMoreTransactions: async (accountId: string) => {
+      // TASK-492: none starts during a wipe (the account is the previous wallet's).
+      if (wipedSince(wipeEpoch())) return;
       // 0 = not yet issued; see nextTransactionsRequest.
       let requestToken = 0;
       try {
@@ -2302,6 +2319,10 @@ export const useWalletStore = create<WalletState>()(
 
     // Envoi name management
     loadEnvoiName: async (accountId: string) => {
+      // TASK-492: begun before or during a wipe, it names the previous
+      // wallet's account; nothing it reads goes into the reset store.
+      const epoch = wipeEpoch();
+      if (wipedSince(epoch)) return;
       try {
         const { accountStates } = get();
         const accountState =
@@ -2309,6 +2330,7 @@ export const useWalletStore = create<WalletState>()(
 
         // Resolve account fresh from service
         const account = await MultiAccountWalletService.getAccount(accountId);
+        if (wipedSince(epoch)) return;
 
         // Skip if already loading or already has data
         if (accountState.isEnvoiLoading) {
@@ -2333,6 +2355,7 @@ export const useWalletStore = create<WalletState>()(
 
         const envoiService = EnvoiService.getInstance();
         const envoiName = await envoiService.getName(account.address);
+        if (wipedSince(epoch)) return;
 
         const nextAvatarUrl = envoiName?.avatar ?? undefined;
         const shouldUpdateAvatar =
@@ -2387,6 +2410,7 @@ export const useWalletStore = create<WalletState>()(
           await MultiAccountWalletService.updateAccountMetadata(updatedAccount);
         }
       } catch (error) {
+        if (wipedSince(epoch)) return;
         const { accountStates } = get();
         set({
           accountStates: {
@@ -2402,6 +2426,8 @@ export const useWalletStore = create<WalletState>()(
     },
 
     loadEnvoiNamesBatch: async (accountIds: string[]) => {
+      const epoch = wipeEpoch();
+      if (wipedSince(epoch)) return;
       try {
         if (!accountIds.length) return;
 
@@ -2444,6 +2470,7 @@ export const useWalletStore = create<WalletState>()(
           count: accountsToLoad.length,
         });
 
+        if (wipedSince(epoch)) return;
         // Mark all as loading
         const updatedStates = { ...get().accountStates };
         for (const { id } of accountsToLoad) {
@@ -2505,6 +2532,7 @@ export const useWalletStore = create<WalletState>()(
           metadataUpdates.map((update) => [update.accountId, update])
         );
 
+        if (wipedSince(epoch)) return;
         set((state) => {
           const nextAccountStates = { ...state.accountStates, ...finalStates };
 
@@ -2560,6 +2588,7 @@ export const useWalletStore = create<WalletState>()(
         }
       } catch (error) {
         console.error('[WalletStore] loadEnvoiNamesBatch error', error);
+        if (wipedSince(epoch)) return;
 
         // Clear loading states on error
         const errorStates = { ...get().accountStates };
@@ -2824,6 +2853,8 @@ export const useWalletStore = create<WalletState>()(
       accountId: string,
       forceRefresh = false
     ) => {
+      // TASK-492: none starts during a wipe (the account is the previous wallet's).
+      if (wipedSince(wipeEpoch())) return;
       // 0 = not yet issued; see nextMultiNetworkRequest.
       let requestToken = 0;
       try {
@@ -3797,6 +3828,9 @@ const supersedeAll = (seq: Map<string, number>) => {
 // balance, multi-network and transactions load is superseded first, so none
 // can commit (or persist) into the reset store.
 registerWipeReset('wallet', () => {
+  // A call after the wipe starts a fresh pass instead of joining one that
+  // read the previous wallet.
+  walletInitializationPromise = null;
   invalidateBalanceRequests();
   supersedeAll(transactionsRequestSeq);
   supersedeAll(multiNetworkRequestSeq);

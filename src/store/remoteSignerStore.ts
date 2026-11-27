@@ -106,6 +106,9 @@ export async function __drainProcessedPersistChainForTests(): Promise<void> {
  */
 export async function getAppModeEarly(): Promise<AppMode> {
   if (appModePromise) return appModePromise;
+  // TASK-492: during a wipe the stored mode is the previous wallet's; report
+  // the default and cache nothing, so a read after the wipe is fresh.
+  if (wipedSince(wipeEpoch())) return 'wallet';
 
   appModePromise = AsyncStorage.getItem(STORAGE_KEYS.APP_MODE)
     .then((value) => (value === 'signer' ? 'signer' : 'wallet') as AppMode)
@@ -226,9 +229,10 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       }
 
       let resolveInitialization: () => void = () => {};
-      remoteSignerInitializationPromise = new Promise<void>((resolve) => {
+      const thisPass = new Promise<void>((resolve) => {
         resolveInitialization = resolve;
       });
+      remoteSignerInitializationPromise = thisPass;
 
       const epoch = wipeEpoch();
       try {
@@ -293,11 +297,13 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
         get().cleanupProcessedRequests();
       } catch (error) {
         console.error('[RemoteSignerStore] Failed to initialize:', error);
-        set({ isInitialized: true });
+        if (!wipedSince(epoch)) set({ isInitialized: true });
       } finally {
         // Reset the coalescer on settle so a later explicit initialize()
         // re-hydrates, and resolve the shared promise for any coalesced caller.
-        remoteSignerInitializationPromise = null;
+        // A wipe dropped this pass: a newer one may own the coalescer now.
+        if (remoteSignerInitializationPromise === thisPass)
+          remoteSignerInitializationPromise = null;
         resolveInitialization();
       }
     },
@@ -530,6 +536,7 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
 // persisting; the mode goes back to wallet.
 registerWipeReset('remote-signer', () => {
   appModePromise = null;
+  remoteSignerInitializationPromise = null;
   useRemoteSignerStore.setState({
     appMode: 'wallet',
     isInitialized: false,
