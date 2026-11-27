@@ -16,8 +16,16 @@ jest.mock('@/platform', () => {
   const flags = {
     failAtOp: -1 as number,
     failOnTag: null as string | null,
+    // A real kill: once the tagged op fails, every later write fails too, so
+    // no catch/rollback write lands after it.
+    killOnFail: false,
+    dead: false,
   };
   const track = (tag: string) => {
+    if (flags.dead) {
+      ops.push(`DEAD ${tag}`);
+      throw new Error('killed');
+    }
     if (flags.failAtOp >= 0 && ops.length === flags.failAtOp) {
       ops.push(`FAILED ${tag}`);
       flags.failAtOp = -1;
@@ -26,6 +34,7 @@ jest.mock('@/platform', () => {
     if (flags.failOnTag !== null && tag === flags.failOnTag) {
       ops.push(`FAILED ${tag}`);
       flags.failOnTag = null;
+      if (flags.killOnFail) flags.dead = true;
       throw new Error('killed');
     }
     ops.push(tag);
@@ -41,6 +50,8 @@ jest.mock('@/platform', () => {
       ops.length = 0;
       flags.failAtOp = -1;
       flags.failOnTag = null;
+      flags.killOnFail = false;
+      flags.dead = false;
     },
     crypto: {
       getRandomBytes: async (n: number): Promise<Uint8Array> =>
@@ -165,7 +176,12 @@ const mockPlatform = platform as unknown as {
   __secure: Map<string, string>;
   __kv: Map<string, string>;
   __ops: string[];
-  __flags: { failAtOp: number; failOnTag: string | null };
+  __flags: {
+    failAtOp: number;
+    failOnTag: string | null;
+    killOnFail: boolean;
+    dead: boolean;
+  };
   __reset: () => void;
 };
 
@@ -199,6 +215,8 @@ function die() {
   AccountSecureStorage.clearPrivateKeyCache();
   mockPlatform.__flags.failAtOp = -1;
   mockPlatform.__flags.failOnTag = null;
+  mockPlatform.__flags.killOnFail = false;
+  mockPlatform.__flags.dead = false;
 }
 
 // ── Files and records ───────────────────────────────────────────────────────
@@ -507,6 +525,7 @@ describe('TASK-504 5.4 route table: during C and after the blob commit', () => {
     await restoreAccounts(stepFile());
     die();
     mockPlatform.__flags.failOnTag = `secure:set:${PIN_ITEM}`;
+    mockPlatform.__flags.killOnFail = true;
     await expect(
       AccountSecureStorage.setupPin(NEW_PIN, 'pin')
     ).rejects.toThrow();
@@ -522,6 +541,40 @@ describe('TASK-504 5.4 route table: during C and after the blob commit', () => {
       pinSetupResume: false,
       isLocked: true,
       isAuthenticated: false,
+    });
+  });
+
+  it('setupPin credential write fails (no kill), then the process dies: SecuritySetup, the breadcrumb set again (TASK-511)', async () => {
+    await reinstalledDevice();
+    await stepBComplete();
+    await markPinSetupPending();
+    await restoreAccounts(stepFile());
+    die();
+    const opsBefore = mockPlatform.__ops.length;
+    mockPlatform.__flags.failOnTag = `secure:set:${PIN_ITEM}`;
+    await expect(
+      AccountSecureStorage.setupPin(NEW_PIN, 'pin')
+    ).rejects.toThrow();
+    // setupPin cleared the breadcrumb, the credential write failed, and only
+    // then was the breadcrumb set again.
+    const setupOps = mockPlatform.__ops.slice(opsBefore);
+    const cleared = setupOps.indexOf('kv:del:pin_setup_pending');
+    const failedWrite = setupOps.indexOf(`FAILED secure:set:${PIN_ITEM}`);
+    const remarked = setupOps.lastIndexOf('kv:set:pin_setup_pending');
+    expect(cleared).toBeGreaterThan(-1);
+    expect(failedWrite).toBeGreaterThan(cleared);
+    expect(remarked).toBeGreaterThan(failedWrite);
+    die();
+    expect(await readPinSetupPendingStrict()).toBe(true);
+    expect(await AccountSecureStorage.hasPinStrict()).toBe(false);
+
+    const state = await boot();
+
+    expect(routeOf(state)).toBe('SecuritySetup');
+    expect(state).toMatchObject({
+      pinSetupResume: true,
+      hasPin: false,
+      securityUnavailable: false,
     });
   });
 
