@@ -37,6 +37,10 @@ import {
   FoundAccountMismatchError,
 } from '@/services/secure/AccountSecureStorage';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
+import { SecureKeyManager } from '@/services/secure/keyManager';
+import { ledgerAlgorandService } from '@/services/ledger/algorand';
+import { NetworkService } from '@/services/network';
+import { NetworkId } from '@/types/network';
 import { WriteOutcomeUnknownError } from '@/services/secure/boundedWrites';
 import * as freshAuth from '@/services/secure/freshAuth';
 import type { FreshAuthCapability } from '@/services/secure/freshAuth';
@@ -117,24 +121,29 @@ async function walletAccountAt(address: string) {
   return w?.accounts.find((a) => a.address === address);
 }
 
+/** A 0-amount self-payment on fixed params: nothing reaches a network. */
+function selfPayment(address: string) {
+  return algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+    sender: address,
+    receiver: address,
+    amount: 0,
+    suggestedParams: {
+      fee: 1000,
+      minFee: 1000,
+      flatFee: true,
+      firstValid: 1,
+      lastValid: 100,
+      genesisID: 'task478',
+      genesisHash: new Uint8Array(32),
+    },
+  });
+}
+
 /** Signs a payment with the stored key of `id` and checks the signature. */
 async function signsAs(id: string, address: string): Promise<boolean> {
   const sk = await AccountSecureStorage.getPrivateKey(id);
   try {
-    const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
-      sender: address,
-      receiver: address,
-      amount: 0,
-      suggestedParams: {
-        fee: 1000,
-        minFee: 1000,
-        flatFee: true,
-        firstValid: 1,
-        lastValid: 100,
-        genesisID: 'task478',
-        genesisHash: new Uint8Array(32),
-      },
-    });
+    const txn = selfPayment(address);
     const signed = algosdk.signTransaction(txn, sk);
     const decoded = algosdk.decodeSignedTransaction(signed.blob);
     return (
@@ -535,6 +544,55 @@ describe('TASK-478 restore a found account', () => {
       expect(ready).toHaveLength(1);
       expect(ready[0].kind === 'ready' && ready[0].ids.length).toBe(2);
     });
+  });
+});
+
+describe('TASK-478 a restored found key signs through the app signing path', () => {
+  it('SecureKeyManager.signTransaction signs as the listed address after a restore (Format A and v2)', async () => {
+    const { v2, formatA } = await pinDeviceWithTwoOrphans();
+    await scanAll();
+    // The route's one network read is the rekey lookup: not rekeyed. Nothing
+    // else on the route is replaced; the key comes from the real slot read.
+    const rekeyLookup = jest.fn(async () => ({ isRekeyed: false }));
+    const network = jest.spyOn(NetworkService, 'getInstance').mockReturnValue({
+      getAccountRekeyInfo: rekeyLookup,
+    } as unknown as NetworkService);
+    // Spies that call through: they only record which path was taken.
+    const ledgerSign = jest.spyOn(ledgerAlgorandService, 'signTransaction');
+    const keyRead = jest.spyOn(AccountSecureStorage, 'getPrivateKey');
+
+    for (const o of [formatA, v2]) {
+      const outcome = await restore(o);
+      keyRead.mockClear();
+      const txn = selfPayment(o.address);
+
+      const blob = await SecureKeyManager.signTransaction(
+        txn,
+        o.address,
+        undefined,
+        NetworkId.VOI_MAINNET
+      );
+
+      const decoded = algosdk.decodeSignedTransaction(blob);
+      expect(decoded.txn.sender.toString()).toBe(o.address);
+      // Signed by the account's own key, not by a rekey authority.
+      expect(decoded.sgnr).toBeUndefined();
+      expect(
+        nacl.sign.detached.verify(
+          txn.bytesToSign(),
+          decoded.sig!,
+          algosdk.decodeAddress(o.address).publicKey
+        )
+      ).toBe(true);
+      expect(outcome).toEqual({ kind: 'restored', address: o.address });
+      const account = await walletAccountAt(o.address);
+      expect(account?.id).not.toBe(o.id);
+      // The key was read from the restored account's slot.
+      expect(keyRead.mock.calls.map(([id]) => id)).toEqual([account!.id]);
+      expect(network).toHaveBeenLastCalledWith(NetworkId.VOI_MAINNET);
+      expect(rekeyLookup).toHaveBeenLastCalledWith(o.address, true);
+    }
+    expect(ledgerSign).not.toHaveBeenCalled();
   });
 });
 
