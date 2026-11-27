@@ -23,7 +23,9 @@ import {
   AccountSecureStorage,
   FoundAccountOnlyCopyError,
   FoundAccountUncheckedError,
+  FoundAccountWalletKeyUncheckedError,
 } from '@/services/secure/AccountSecureStorage';
+import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { FreshAuthError } from '@/services/secure/freshAuth';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountType } from '@/types/wallet';
@@ -242,5 +244,27 @@ describe('TASK-478 remove keeps the only usable copy', () => {
     expect(mockPlatform.__secure.has(SECRET(formatA.id))).toBe(false);
     expect(readRegistry()).not.toContain(formatA.id);
     expect(typeof mockPlatform.__secure.get(SECRET(account.id))).toBe('string');
+  });
+
+  it("a locked vault can't check the wallet account's key: refused, kept", async () => {
+    const { formatA } = await pinDeviceWithTwoOrphans({
+      formatAMnemonic: CANARY_MNEMONIC,
+    });
+    unregister = installPrompter(true).unregister;
+    await scanAll();
+    await MultiAccountWalletService.importStandardAccount({
+      type: AccountType.STANDARD,
+      mnemonic: CANARY_MNEMONIC,
+      label: 'Imported',
+    });
+    const before = mockPlatform.__secure.get(SECRET(formatA.id));
+    // Auto-lock fires while the remove prompt is open; a PIN is set.
+    SessionKeyVault.clear();
+
+    await expect(remove(formatA.id)).rejects.toBeInstanceOf(
+      FoundAccountWalletKeyUncheckedError
+    );
+    expect(mockPlatform.__secure.get(SECRET(formatA.id))).toBe(before);
+    expect(readRegistry()).toContain(formatA.id);
   });
 });

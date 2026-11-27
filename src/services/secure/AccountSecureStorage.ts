@@ -187,6 +187,18 @@ export class FoundAccountOnlyCopyError extends Error {
 }
 
 /**
+ * TASK-478: the found key's address is a wallet account whose own slot holds
+ * something that can't be opened right now (the vault is locked, for one), so
+ * nothing can say whether that account still holds the key. Kept.
+ */
+export class FoundAccountWalletKeyUncheckedError extends Error {
+  constructor() {
+    super("The wallet account's own key could not be checked right now");
+    this.name = 'FoundAccountWalletKeyUncheckedError';
+  }
+}
+
+/**
  * TASK-478: the found key has no checked address yet, so nothing can say which
  * account a delete would erase or whether a wallet account still holds it. Kept.
  */
@@ -2968,8 +2980,11 @@ export class AccountSecureStorage {
    * authentication). Refused while a storage write for its slot is unresolved.
    * When the key's scanned address is one of `walletAccounts`, the delete runs
    * only if that account's own slot reads the key back (checked in this task,
-   * without side effects); otherwise FoundAccountOnlyCopyError and nothing is
-   * deleted. A delete failure throws and the id stays in the registry.
+   * without side effects). A slot that holds something it can't open now
+   * (occupied-unreadable: with a PIN set and the vault locked, every key reads
+   * so) throws FoundAccountWalletKeyUncheckedError; any other state throws
+   * FoundAccountOnlyCopyError. Either way nothing is deleted. A delete failure
+   * throws and the id stays in the registry.
    */
   static async deleteQuarantinedOrphan(
     accountId: string,
@@ -2990,6 +3005,8 @@ export class AccountSecureStorage {
           owner.id,
           address
         );
+        if (slot.state === 'occupied-unreadable')
+          throw new FoundAccountWalletKeyUncheckedError();
         if (slot.state !== 'key-matches') throw new FoundAccountOnlyCopyError();
       }
       const primaryKey = this.secretKey(accountId);

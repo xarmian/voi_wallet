@@ -60,6 +60,10 @@ export function presentIdsOf(summary: FoundSummary): string[] {
   ];
 }
 
+// The counting rule lives in a module with no storage imports, so a screen
+// can count without loading the wallet service.
+export { actionableCount, actionableOf } from './foundAccountsCount';
+
 /** Reads no key. Any read failure throws, so the caller shows an error. */
 export async function readFoundAccountsSummary(): Promise<FoundSummary> {
   const wallet = await MultiAccountWalletService.readWalletStrict();
@@ -221,7 +225,8 @@ export async function restoreFoundAccount(
  * Removes each id in turn under one fresh authentication (a ready row's
  * copies), stopping at the first failure. An id whose address is a wallet
  * account is removed only while that account's slot reads the key back
- * (FoundAccountOnlyCopyError otherwise).
+ * (FoundAccountWalletKeyUncheckedError when the slot can't be opened right now,
+ * such as with the vault locked; FoundAccountOnlyCopyError otherwise).
  */
 export async function removeFoundAccount(
   ids: string[],

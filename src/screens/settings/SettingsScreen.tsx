@@ -33,6 +33,7 @@ import { isListDeletionProtected } from '@/services/wallet/listDeletionProtectio
 import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
 import { formatAddress } from '@/utils/address';
 import { useFoundAccountsSummary } from '@/hooks/useFoundAccountsSummary';
+import { actionableCount } from '@/services/secure/foundAccountsCount';
 import { AccountMetadata, AccountType, isBackupVerified } from '@/types/wallet';
 import { useIsCurrentNetworkHealthy } from '@/store/networkStore';
 import NetworkIndicator from '@/components/network/NetworkIndicator';
@@ -271,7 +272,10 @@ export default function SettingsScreen() {
   const deleteAccount = useWalletStore((state) => state.deleteAccount);
   // TASK-478: keys found on this device (read on focus; no key is read).
   const foundAccounts = useFoundAccountsSummary();
-  const foundCount = foundAccounts.summary?.presentCount ?? 0;
+  // Counted as Home's notice counts them; in-wallet copies are not counted.
+  const foundCount = foundAccounts.summary
+    ? actionableCount(foundAccounts.summary)
+    : 0;
   const updateAccountLabel = useWalletStore(
     (state) => state.updateAccountLabel
   );

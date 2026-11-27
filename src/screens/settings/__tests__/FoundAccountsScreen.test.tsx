@@ -32,6 +32,7 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: { scanQuarantinedAddresses: jest.fn() },
   FoundAccountMismatchError: class FoundAccountMismatchError extends Error {},
   FoundAccountOnlyCopyError: class FoundAccountOnlyCopyError extends Error {},
+  FoundAccountWalletKeyUncheckedError: class FoundAccountWalletKeyUncheckedError extends Error {},
 }));
 
 import FoundAccountsScreen from '../FoundAccountsScreen';
@@ -40,6 +41,7 @@ import {
   AccountSecureStorage,
   FoundAccountMismatchError,
   FoundAccountOnlyCopyError,
+  FoundAccountWalletKeyUncheckedError,
 } from '@/services/secure/AccountSecureStorage';
 import { registerFreshAuthPrompter } from '@/services/secure/freshAuth';
 import { formatAddress } from '@/utils/address';
@@ -53,6 +55,9 @@ const scanMock = found.scanFoundAccounts as jest.Mock;
 const restoreMock = found.restoreFoundAccount as jest.Mock;
 const removeMock = found.removeFoundAccount as jest.Mock;
 const ONLY_COPY = `This key is the only usable copy for ${formatAddress(WALLET)} on this device. It's kept here.`;
+/** An in-wallet row whose wallet account holds no key says how to recover. */
+const onlyCopyRow = (walletLabel: string) =>
+  `${ONLY_COPY} To use it, remove the account "${walletLabel}" from your wallet, then restore it here.`;
 
 const alertCalls = () => (Alert.alert as jest.Mock).mock.calls;
 
@@ -169,6 +174,29 @@ describe('FoundAccountsScreen', () => {
     expect(view.queryByText('Remove')).toBeNull();
   });
 
+  it('no-pin counts what can be acted on, as Home and Settings do', async () => {
+    prompter(true);
+    summaryMock.mockResolvedValue(
+      summary({
+        hasPin: false,
+        presentCount: 3,
+        rows: [
+          { kind: 'ready', id: 'r1', ids: ['r1', 'r2'], address: READY },
+          {
+            kind: 'in-wallet',
+            id: 'w1',
+            address: WALLET,
+            walletLabel: 'Main',
+            walletType: AccountType.STANDARD,
+            walletHasKey: true,
+          },
+        ],
+      })
+    );
+    const view = await render(<FoundAccountsScreen />);
+    await view.findByText('1 account found on this device');
+  });
+
   it('states: list, unreadable card, in-wallet', async () => {
     prompter(true);
     summaryMock.mockResolvedValue(
@@ -208,7 +236,7 @@ describe('FoundAccountsScreen', () => {
     // The ready row and the in-wallet row whose wallet account has its key.
     expect(view.getAllByText('Remove')).toHaveLength(2);
     expect(view.getByText('Already in your wallet as Savings')).toBeTruthy();
-    expect(view.getByText(ONLY_COPY)).toBeTruthy();
+    expect(view.getByText(onlyCopyRow('Watcher'))).toBeTruthy();
     expect(view.getByText(/2 accounts couldn't be read/)).toBeTruthy();
     expect(view.getByText('Try again')).toBeTruthy();
     expect(prompts).toEqual([]);
@@ -289,7 +317,7 @@ describe('FoundAccountsScreen', () => {
         })
       );
       const view = await render(<FoundAccountsScreen />);
-      await view.findByText(ONLY_COPY);
+      await view.findByText(onlyCopyRow('Savings'));
       expect(view.queryByText('Remove')).toBeNull();
     }
   );
@@ -319,6 +347,38 @@ describe('FoundAccountsScreen', () => {
     expect(removeMock.mock.calls[0][0]).toEqual(['q2']);
     await waitFor(() =>
       expect(alertCalls().some((c) => c[1] === ONLY_COPY)).toBe(true)
+    );
+  });
+
+  it('a remove whose wallet key could not be checked says to unlock and retry', async () => {
+    prompter(true);
+    summaryMock.mockResolvedValue(
+      summary({
+        presentCount: 1,
+        rows: [
+          {
+            kind: 'in-wallet',
+            id: 'q2',
+            address: WALLET,
+            walletLabel: 'Savings',
+            walletType: AccountType.STANDARD,
+            walletHasKey: true,
+          },
+        ],
+      })
+    );
+    removeMock.mockRejectedValueOnce(new FoundAccountWalletKeyUncheckedError());
+    const view = await render(<FoundAccountsScreen />);
+    await fireEvent.press(await view.findByText('Remove'));
+    await pressAlertButton('Remove');
+    await waitFor(() =>
+      expect(
+        alertCalls().some(
+          (c) =>
+            c[1] ===
+            "Couldn't check this account's own key right now. Nothing was removed. Unlock the wallet and try again."
+        )
+      ).toBe(true)
     );
   });
 
@@ -421,4 +481,28 @@ describe('FoundAccountsScreen', () => {
     expect(prompts).toEqual(['restore_found_account']);
     expect(scanMock).not.toHaveBeenCalled();
   });
+
+  it.each(['Restore', 'Remove'])(
+    'a %s confirmation answered after leaving opens no prompt',
+    async (button) => {
+      prompter(true);
+      summaryMock.mockResolvedValue(
+        summary({
+          presentCount: 1,
+          rows: [{ kind: 'ready', id: 'q1', ids: ['q1'], address: READY }],
+        })
+      );
+      const view = await render(<FoundAccountsScreen />);
+      await fireEvent.press(await view.findByText(button));
+      // The confirmation is still open when the screen goes away.
+      await act(async () => {
+        view.unmount();
+      });
+      await pressAlertButton(button);
+      await flush();
+      expect(prompts).toEqual([]);
+      expect(restoreMock).not.toHaveBeenCalled();
+      expect(removeMock).not.toHaveBeenCalled();
+    }
+  );
 });

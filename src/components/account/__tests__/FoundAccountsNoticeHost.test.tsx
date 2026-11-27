@@ -164,12 +164,42 @@ describe('FoundAccountsNoticeHost counts what can be acted on', () => {
     await act(async () => {
       fireEvent.press(view.getByText('Not now'));
     });
-    // The seen list still records every present id.
+    // Only the ids the notice announced are recorded, never an in-wallet copy.
     await waitFor(() =>
       expect(
         JSON.parse(mockPlatform.__kv.get(SEEN_KEY) ?? '[]').sort()
-      ).toEqual(['r1', 'r2', 'w1'])
+      ).toEqual(['r1', 'r2'])
     );
+  });
+
+  it('an in-wallet copy left unseen is announced once it becomes a ready row', async () => {
+    given({
+      presentCount: 3,
+      rows: [
+        { kind: 'ready', id: 'r1', ids: ['r1', 'r2'], address: READY },
+        inWallet,
+      ],
+    });
+    const view = await render(<FoundAccountsNoticeHost onReview={jest.fn()} />);
+    await view.findByText('1 account found on this device');
+    await act(async () => {
+      fireEvent.press(view.getByText('Not now'));
+    });
+    await waitFor(() =>
+      expect(view.queryByText('1 account found on this device')).toBeNull()
+    );
+    // The wallet account at WALLET is deleted: w1 is now the only copy there.
+    given({
+      presentCount: 3,
+      rows: [
+        { kind: 'ready', id: 'r1', ids: ['r1', 'r2'], address: READY },
+        { kind: 'ready', id: 'w1', ids: ['w1'], address: WALLET },
+      ],
+    });
+    await act(async () => {
+      refocus();
+    });
+    await view.findByText('2 accounts found on this device');
   });
 
   it('only in-wallet copies show no notice', async () => {

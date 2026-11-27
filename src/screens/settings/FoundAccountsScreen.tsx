@@ -21,7 +21,9 @@ import { FreshAuthError, withFreshAuth } from '@/services/secure/freshAuth';
 import {
   FoundAccountMismatchError,
   FoundAccountOnlyCopyError,
+  FoundAccountWalletKeyUncheckedError,
 } from '@/services/secure/AccountSecureStorage';
+import { actionableCount } from '@/services/secure/foundAccountsCount';
 import {
   readFoundAccountsSummary,
   removeFoundAccount,
@@ -46,6 +48,10 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 const onlyCopyText = (address: string) =>
   `This key is the only usable copy for ${formatAddress(address)} on this device. It's kept here.`;
+
+/** An in-wallet row whose wallet account can't use the key: how to recover. */
+const onlyCopyRowText = (row: Extract<FoundRow, { kind: 'in-wallet' }>) =>
+  `${onlyCopyText(row.address)} To use it, remove the account "${row.walletLabel}" from your wallet, then restore it here.`;
 
 /** Remove is offered only when the wallet account holds a key of its own. */
 const walletKeepsKey = (row: Extract<FoundRow, { kind: 'in-wallet' }>) =>
@@ -83,6 +89,9 @@ export default function FoundAccountsScreen() {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    // A confirmation answered after the screen went away must not open an
+    // authentication prompt over whatever is showing now.
+    if (!mountedRef.current) controller.abort();
     return controller.signal;
   };
 
@@ -124,7 +133,7 @@ export default function FoundAccountsScreen() {
       }
       if (!current()) return;
       if (!summary.hasPin) {
-        setState({ kind: 'no-pin', count: summary.presentCount });
+        setState({ kind: 'no-pin', count: actionableCount(summary) });
         return;
       }
       if (summary.unscannedIds.length > 0) {
@@ -255,6 +264,11 @@ export default function FoundAccountsScreen() {
       );
     } catch (error) {
       if (error instanceof FreshAuthError) authAlert(error, 'remove this key');
+      else if (error instanceof FoundAccountWalletKeyUncheckedError)
+        Alert.alert(
+          'Remove Key',
+          "Couldn't check this account's own key right now. Nothing was removed. Unlock the wallet and try again."
+        );
       else if (error instanceof FoundAccountOnlyCopyError)
         Alert.alert('Remove Key', onlyCopyText(address));
       else Alert.alert('Remove Key', "Couldn't remove this key.");
@@ -341,7 +355,7 @@ export default function FoundAccountsScreen() {
             </View>
           </>
         ) : (
-          <Text style={styles.label}>{onlyCopyText(row.address)}</Text>
+          <Text style={styles.label}>{onlyCopyRowText(row)}</Text>
         )}
       </View>
     );
