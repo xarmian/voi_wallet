@@ -456,9 +456,13 @@ it('REGRESSION coordinator has no service index, v1 client or navigation imports
   ].map((match) => match[1]);
   expect(
     imports.every((specifier) =>
-      ['@/utils/logRedaction', './handledStore', './requestTiming'].includes(
-        specifier
-      )
+      [
+        '@/utils/logRedaction',
+        // Dependency-free: the wipe reset registry.
+        '@/services/wipe/gate',
+        './handledStore',
+        './requestTiming',
+      ].includes(specifier)
     )
   ).toBe(true);
 });

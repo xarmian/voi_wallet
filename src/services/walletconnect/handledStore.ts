@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 import { redactError } from '@/utils/logRedaction';
+import { registerWipeReset } from '@/services/wipe/gate';
 
 export type HandledKind = 'request' | 'proposal';
 export type HandledOutcome =
@@ -65,6 +66,8 @@ export class HandledStore {
   private loaded = false;
   private loading: Promise<void> | undefined;
   private mutex: Promise<void> = Promise.resolve();
+  /** Moves on each wipe reset: a load or write begun before it is dropped. */
+  private generation = 0;
 
   constructor(
     deps: {
@@ -83,8 +86,23 @@ export class HandledStore {
   }
 
   static getInstance(): HandledStore {
-    if (!this.instance) this.instance = new HandledStore();
+    if (!this.instance) {
+      const instance = new HandledStore();
+      this.instance = instance;
+      registerWipeReset('walletconnect-handled', () => instance.resetForWipe());
+    }
     return this.instance;
+  }
+
+  /**
+   * TASK-469: forget every entry without a write. The store counts as loaded
+   * and empty; the wipe removes the stored copy.
+   */
+  resetForWipe(): void {
+    this.generation += 1;
+    this.entries = new Map();
+    this.loaded = true;
+    this.loading = Promise.resolve();
   }
 
   load(): Promise<void> {
@@ -98,7 +116,9 @@ export class HandledStore {
   }
 
   private async loadStored(): Promise<void> {
+    const generation = this.generation;
     const raw = await this.storage.getItem(STORAGE_KEY);
+    if (generation !== this.generation) return;
     let entries: Entry[] = [];
     if (raw !== null) {
       try {
@@ -159,13 +179,14 @@ export class HandledStore {
   }
 
   async noteSeen(ref: HandledRef): Promise<number> {
+    const generation = this.generation;
     await this.load();
     return this.withLock(async () => {
       const h = identityHash(ref);
       const existing = this.entries.get(h);
       if (existing) return existing.s;
       const s = this.now();
-      await this.write({ h, s });
+      await this.write({ h, s }, generation);
       return s;
     });
   }
@@ -179,13 +200,16 @@ export class HandledStore {
     ref: HandledRef,
     outcome: HandledOutcome
   ): Promise<boolean> {
+    const generation = this.generation;
     await this.load();
     return this.withLock(async () => {
+      // A wipe since this call began: nothing is recorded.
+      if (generation !== this.generation) return false;
       const h = identityHash(ref);
       const existing = this.entries.get(h);
       if (existing?.d !== undefined) return false;
       const d = this.now();
-      await this.write({ h, s: existing?.s ?? d, d, o: outcome });
+      await this.write({ h, s: existing?.s ?? d, d, o: outcome }, generation);
       return true;
     });
   }
@@ -195,7 +219,8 @@ export class HandledStore {
     return this.entries.get(identityHash(ref))?.s ?? null;
   }
 
-  private async write(entry: Entry): Promise<void> {
+  private async write(entry: Entry, generation: number): Promise<void> {
+    if (generation !== this.generation) return;
     const next = new Map(this.entries);
     next.set(entry.h, entry);
     if (next.size > this.maxEntries) {
@@ -222,7 +247,7 @@ export class HandledStore {
       JSON.stringify({ v: 1, e: [...next.values()] })
     );
     // Publish only after durability: a rejection leaves entries and evictions intact.
-    this.entries = next;
+    if (generation === this.generation) this.entries = next;
   }
 
   __resetForTests(): void {

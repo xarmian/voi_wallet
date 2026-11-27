@@ -580,6 +580,25 @@ export class WalletConnectV1Client extends EventEmitter {
   }
 
   /**
+   * TASK-469: forget the session in memory and drop the socket, without
+   * telling the peer or touching storage (the wipe removes the stored session
+   * and its key).
+   */
+  resetForWipe(): void {
+    if (this.socket) {
+      this.socket.destroy();
+      this.socket = null;
+    }
+    this.config = null;
+    this.sessionData = null;
+    this.clientId = null;
+    this.handshakeTopic = null;
+    this.handshakeId = 0;
+    this.connecting = null;
+    this.emit(WalletConnectV1Event.DISCONNECT);
+  }
+
+  /**
    * Get current session data
    */
   getSessionData(): WalletConnectV1SessionData | null {

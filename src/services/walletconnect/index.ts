@@ -40,6 +40,7 @@ import {
   resolveV1Chain,
 } from '@/services/walletconnect/v1/config';
 import { redactSensitiveForLog, redactError } from '@/utils/logRedaction';
+import { registerWipeReset } from '@/services/wipe/gate';
 import {
   readSessionKey,
   writeSessionKey,
@@ -150,9 +151,63 @@ export class WalletConnectService extends EventEmitter {
 
   static getInstance(): WalletConnectService {
     if (!WalletConnectService.instance) {
-      WalletConnectService.instance = new WalletConnectService();
+      const instance = new WalletConnectService();
+      WalletConnectService.instance = instance;
+      registerWipeReset('walletconnect', () => instance.purgeLocalForWipe());
     }
     return WalletConnectService.instance;
+  }
+
+  /**
+   * TASK-469: remove every WalletConnect session, proposal, request, pairing,
+   * key, expiry, history record and relay message from this device, through
+   * the SDK's own stores. Nothing here waits on the network: the dApps are not
+   * told, and the relay close is not awaited.
+   *
+   * The memory side is synchronous (each store drops its entry before it
+   * persists); the returned promise settles when the emptied stores have been
+   * written, so the wipe's storage sweep runs after them.
+   *
+   * Residual: the SDK core stays alive in this process. A relay event that
+   * lands after the wipe's final storage check can write a `wc@2:` record
+   * again; it holds no session (they are gone from memory) and the next
+   * Delete Everything removes it.
+   */
+  purgeLocalForWipe(): Promise<void> {
+    this.activeSessions.clear();
+    WalletConnectV1Client.getInstance().resetForWipe();
+    this.emit('sessions_changed');
+    if (!this.client.isInitialized()) return Promise.resolve();
+    const signClient = this.client.getProvider().client;
+    const core = this.client.getCore();
+    const reason = getSdkError('USER_DISCONNECTED');
+    void core.relayer.transportClose().catch(() => {});
+    const writes: Promise<unknown>[] = [
+      ...signClient.session.keys.map((topic) =>
+        signClient.session.delete(topic, reason)
+      ),
+      ...signClient.proposal.keys.map((id) =>
+        signClient.proposal.delete(id, reason)
+      ),
+      ...signClient.pendingRequest.keys.map((id) =>
+        signClient.pendingRequest.delete(id, reason)
+      ),
+      ...core.pairing.pairings.keys.map((topic) =>
+        core.pairing.pairings.delete(topic, reason)
+      ),
+      ...[...core.crypto.keychain.keychain.keys()].map((tag) =>
+        core.crypto.keychain.del(tag)
+      ),
+      ...[...core.relayer.messages.messages.keys()].map((topic) =>
+        core.relayer.messages.del(topic)
+      ),
+    ];
+    for (const key of core.expirer.keys) core.expirer.del(key);
+    for (const topic of new Set(core.history.values.map((r) => r.topic)))
+      core.history.delete(topic);
+    core.relayer.subscriber.subscriptions.clear();
+    core.relayer.subscriber.topicMap.clear();
+    return Promise.all(writes).then(() => undefined);
   }
 
   constructor() {

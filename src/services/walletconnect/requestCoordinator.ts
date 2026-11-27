@@ -1,5 +1,6 @@
 import { redactError } from '@/utils/logRedaction';
 import { HandledOutcome, HandledRef, HandledStore } from './handledStore';
+import { registerWipeReset } from '@/services/wipe/gate';
 import {
   DeadlineSource,
   isPastDeadline,
@@ -184,7 +185,13 @@ export class RequestCoordinator {
   }
 
   static getInstance(): RequestCoordinator {
-    if (!this.instance) this.instance = new RequestCoordinator();
+    if (!this.instance) {
+      const instance = new RequestCoordinator();
+      this.instance = instance;
+      registerWipeReset('walletconnect-requests', () =>
+        instance.resetForWipe()
+      );
+    }
     return this.instance;
   }
 
@@ -532,6 +539,11 @@ export class RequestCoordinator {
   }
 
   __resetForTests(): void {
+    this.resetForWipe();
+  }
+
+  /** TASK-469: forget every open, released and answered request; no answer is sent. */
+  resetForWipe(): void {
     for (const entry of [...this.open.values(), ...this.released.values()]) {
       this.clearEntry(entry);
       entry.listeners.clear();
