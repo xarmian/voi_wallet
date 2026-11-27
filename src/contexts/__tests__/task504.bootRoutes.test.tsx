@@ -110,7 +110,7 @@ jest.mock('@/store/walletStore', () => ({
 
 // Inert collaborators of the provider: none of them is on the boot verdict path.
 jest.mock('@/services/wipe', () => ({
-  wipeWalletData: jest.fn(async () => {}),
+  wipeAllLocalData: jest.fn(async () => {}),
   isWipeInFlight: jest.fn(() => false),
 }));
 jest.mock('@/services/wipe/notices', () => ({

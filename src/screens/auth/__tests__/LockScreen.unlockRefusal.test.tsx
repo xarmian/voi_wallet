@@ -33,7 +33,7 @@ jest.mock('@/services/secure', () => ({
     getCredentialSource: jest.fn(async () => 'pin'),
   },
 }));
-jest.mock('@/services/wipe', () => ({ wipeWalletData: jest.fn() }));
+jest.mock('@/services/wipe', () => ({ wipeAllLocalData: jest.fn() }));
 jest.mock('@/services/wipe/notices', () => ({
   showWipeCompleteNotice: jest.fn(),
   showWipeIncompleteNotice: jest.fn(),

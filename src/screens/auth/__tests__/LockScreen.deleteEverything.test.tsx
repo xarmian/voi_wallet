@@ -23,7 +23,7 @@ const mockShowIncomplete = jest.fn();
 const mockEvents: string[] = [];
 
 jest.mock('@/services/wipe', () => ({
-  wipeWalletData: (...args: unknown[]) => mockWipe(...args),
+  wipeAllLocalData: (...args: unknown[]) => mockWipe(...args),
 }));
 jest.mock('@/services/wipe/notices', () => ({
   showWipeCompleteNotice: () => {

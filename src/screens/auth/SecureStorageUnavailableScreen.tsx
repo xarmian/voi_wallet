@@ -14,7 +14,7 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { redactError } from '@/utils/logRedaction';
-import { wipeWalletData } from '@/services/wipe';
+import { wipeAllLocalData } from '@/services/wipe';
 import { showWipeCompleteNotice } from '@/services/wipe/notices';
 
 // Cross-platform confirm dialog (mirrors LockScreen.showAlert): on web there is
@@ -157,12 +157,12 @@ export default function SecureStorageUnavailableScreen({
       try {
         await withTimeout(
           // TASK-415 / TASK-469: reset fails closed when key material can't be
-          // verifiably erased. wipeWalletData records the wipe request first, then
+          // verifiably erased. wipeAllLocalData records the wipe request first, then
           // erases secure storage and the wallet blob, and clears the request only
           // when all of it is complete; an incomplete wipe is finished by the next
           // launch. A keychain that fails every read can't support wallet setup
           // either; wiping metadata here would recreate TASK-413's orphan-PIN state.
-          wipeWalletData(),
+          wipeAllLocalData(),
           RESET_STEP_TIMEOUT_MS,
           'wipe'
         );

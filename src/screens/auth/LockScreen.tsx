@@ -28,7 +28,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure';
 import type { PinThrottleState } from '@/services/secure';
 import type { SecretSource } from '@/services/secure/SessionKeyVault';
-import { wipeWalletData } from '@/services/wipe';
+import { wipeAllLocalData } from '@/services/wipe';
 import {
   showWipeCompleteNotice,
   showWipeIncompleteNotice,
@@ -427,7 +427,7 @@ export default function LockScreen() {
     // erased; on any failure the user stays on this screen with a plain message
     // and the wipe request stays recorded, so the next launch finishes it.
     try {
-      await wipeWalletData();
+      await wipeAllLocalData();
     } catch (error) {
       console.error('Reset error:', redactError(error));
       showWipeIncompleteNotice();

@@ -9,12 +9,27 @@ import {
   FriendStorageError,
 } from '@/types/social';
 import EnvoiService from '@/services/envoi';
+import { registerWipeReset, wipeEpoch, wipedSince } from '@/services/wipe/gate';
 
 const STORAGE_KEYS = {
   FRIENDS_LIST: '@friends/list',
 } as const;
 
 const MAX_FRIENDS = 500;
+
+/**
+ * Persist the list, unless a wipe started since `epoch` was read (TASK-492):
+ * the list was built from the previous wallet's friends. Resolves false when
+ * skipped; the caller must then leave the store alone too.
+ */
+async function saveFriends(epoch: number, friends: Friend[]): Promise<boolean> {
+  if (wipedSince(epoch)) return false;
+  await AsyncStorage.setItem(
+    STORAGE_KEYS.FRIENDS_LIST,
+    JSON.stringify(friends)
+  );
+  return true;
+}
 
 interface FriendsState {
   // State
@@ -50,12 +65,14 @@ export const useFriendsStore = create<FriendsState>()(
 
     // Initialize store from AsyncStorage
     initialize: async () => {
+      const epoch = wipeEpoch();
       try {
         set({ isLoading: true, lastError: null });
 
         const friendsJson = await AsyncStorage.getItem(
           STORAGE_KEYS.FRIENDS_LIST
         );
+        if (wipedSince(epoch)) return;
         const friends = friendsJson ? JSON.parse(friendsJson) : [];
 
         set({ friends, isInitialized: true, isLoading: false });
@@ -71,6 +88,7 @@ export const useFriendsStore = create<FriendsState>()(
 
     // Add a new friend by Envoi name
     addFriend: async (envoiName: string) => {
+      const epoch = wipeEpoch();
       const { friends } = get();
 
       // Validate not already a friend
@@ -121,10 +139,9 @@ export const useFriendsStore = create<FriendsState>()(
         const updatedFriends = [...friends, newFriend];
 
         // Save to AsyncStorage
-        await AsyncStorage.setItem(
-          STORAGE_KEYS.FRIENDS_LIST,
-          JSON.stringify(updatedFriends)
-        );
+        if (!(await saveFriends(epoch, updatedFriends))) {
+          throw new FriendStorageError('Friends were deleted');
+        }
 
         set({ friends: updatedFriends, isLoading: false });
 
@@ -132,13 +149,16 @@ export const useFriendsStore = create<FriendsState>()(
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : 'Failed to add friend';
-        set({ lastError: errorMessage, isLoading: false });
+        // A wipe since the start reset the store: leave it reset.
+        if (!wipedSince(epoch))
+          set({ lastError: errorMessage, isLoading: false });
         throw error;
       }
     },
 
     // Remove a friend
     removeFriend: async (envoiName: string) => {
+      const epoch = wipeEpoch();
       const { friends } = get();
 
       const friendIndex = friends.findIndex(
@@ -156,10 +176,7 @@ export const useFriendsStore = create<FriendsState>()(
           (_, index) => index !== friendIndex
         );
 
-        await AsyncStorage.setItem(
-          STORAGE_KEYS.FRIENDS_LIST,
-          JSON.stringify(updatedFriends)
-        );
+        if (!(await saveFriends(epoch, updatedFriends))) return;
 
         set({ friends: updatedFriends, isLoading: false });
       } catch (error) {
@@ -182,6 +199,7 @@ export const useFriendsStore = create<FriendsState>()(
 
     // Toggle favorite status
     toggleFavorite: async (envoiName: string) => {
+      const epoch = wipeEpoch();
       const { friends } = get();
 
       const friendIndex = friends.findIndex(
@@ -199,10 +217,7 @@ export const useFriendsStore = create<FriendsState>()(
           isFavorite: !updatedFriends[friendIndex].isFavorite,
         };
 
-        await AsyncStorage.setItem(
-          STORAGE_KEYS.FRIENDS_LIST,
-          JSON.stringify(updatedFriends)
-        );
+        if (!(await saveFriends(epoch, updatedFriends))) return;
 
         set({ friends: updatedFriends });
       } catch (error) {
@@ -215,6 +230,7 @@ export const useFriendsStore = create<FriendsState>()(
 
     // Update friend notes
     updateFriendNotes: async (envoiName: string, notes: string) => {
+      const epoch = wipeEpoch();
       const { friends } = get();
 
       const friendIndex = friends.findIndex(
@@ -232,10 +248,7 @@ export const useFriendsStore = create<FriendsState>()(
           notes: notes.trim() || undefined,
         };
 
-        await AsyncStorage.setItem(
-          STORAGE_KEYS.FRIENDS_LIST,
-          JSON.stringify(updatedFriends)
-        );
+        if (!(await saveFriends(epoch, updatedFriends))) return;
 
         set({ friends: updatedFriends });
       } catch (error) {
@@ -248,6 +261,7 @@ export const useFriendsStore = create<FriendsState>()(
 
     // Refresh a specific friend's profile
     refreshFriendProfile: async (envoiName: string) => {
+      const epoch = wipeEpoch();
       const { friends } = get();
 
       const friendIndex = friends.findIndex(
@@ -278,10 +292,7 @@ export const useFriendsStore = create<FriendsState>()(
             profileLastUpdated: Date.now(),
           };
 
-          await AsyncStorage.setItem(
-            STORAGE_KEYS.FRIENDS_LIST,
-            JSON.stringify(updatedFriends)
-          );
+          if (!(await saveFriends(epoch, updatedFriends))) return;
 
           set({ friends: updatedFriends });
         }
@@ -293,6 +304,7 @@ export const useFriendsStore = create<FriendsState>()(
 
     // Refresh all friend profiles
     refreshAllProfiles: async () => {
+      const epoch = wipeEpoch();
       const { friends } = get();
 
       set({ isLoading: true });
@@ -326,10 +338,7 @@ export const useFriendsStore = create<FriendsState>()(
 
         envoiService.setEnabled(wasEnabled);
 
-        await AsyncStorage.setItem(
-          STORAGE_KEYS.FRIENDS_LIST,
-          JSON.stringify(updatedFriends)
-        );
+        if (!(await saveFriends(epoch, updatedFriends))) return;
 
         set({ friends: updatedFriends, isLoading: false });
       } catch (error) {
@@ -358,6 +367,7 @@ export const useFriendsStore = create<FriendsState>()(
 
     // Update last interaction timestamp
     updateLastInteraction: async (envoiName: string, timestamp: number) => {
+      const epoch = wipeEpoch();
       const { friends } = get();
 
       const friendIndex = friends.findIndex(
@@ -375,10 +385,7 @@ export const useFriendsStore = create<FriendsState>()(
           lastInteraction: timestamp,
         };
 
-        await AsyncStorage.setItem(
-          STORAGE_KEYS.FRIENDS_LIST,
-          JSON.stringify(updatedFriends)
-        );
+        if (!(await saveFriends(epoch, updatedFriends))) return;
 
         set({ friends: updatedFriends });
       } catch (error) {
@@ -393,6 +400,16 @@ export const useFriendsStore = create<FriendsState>()(
     },
   }))
 );
+
+// TASK-492: forget the previous wallet's friends without persisting.
+registerWipeReset('friends', () => {
+  useFriendsStore.setState({
+    friends: [],
+    isLoading: false,
+    lastError: null,
+    isInitialized: false,
+  });
+});
 
 // Hook to get sorted friends (favorites first, then by name)
 export const useSortedFriends = () => {

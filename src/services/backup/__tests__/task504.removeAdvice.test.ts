@@ -303,7 +303,7 @@ describe('TASK-504 remove advice: removing the last account', () => {
       MultiAccountWalletService,
       'clearAllWallets'
     );
-    const wipeData = jest.spyOn(wipe, 'wipeWalletData');
+    const wipeData = jest.spyOn(wipe, 'wipeAllLocalData');
     const pinBefore = mockPlatform.__secure.get('voi_wallet_pin');
 
     await removeById('dev-w');

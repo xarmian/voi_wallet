@@ -4,7 +4,7 @@ import { Alert, Platform } from 'react-native';
  * TASK-469: the only two messages about a wipe, in one place so the lock screen,
  * the recovery screen and the boot-time finish say the same thing.
  *
- * The "deleted" notice must be shown ONLY after wipeWalletData() has resolved
+ * The "deleted" notice must be shown ONLY after wipeAllLocalData() has resolved
  * (its completeness check passed). Never on an error or timeout path.
  */
 export const WIPE_COMPLETE_NOTICE = {
