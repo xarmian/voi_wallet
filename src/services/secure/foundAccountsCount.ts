@@ -7,16 +7,18 @@ import type { FoundRow, FoundSummary } from './foundAccounts';
 
 /**
  * The one rule for whether an in-wallet copy's wallet account can use a key
- * of its own. The count, the row text and the Remove button all use it. A
- * watch or Ledger account never signs with a stored key, whatever its slot
- * holds. This is presence only, never a decrypt; Remove re-checks the slot
- * under the key-mutation mutex.
+ * of its own. The count, the row text and the Remove button all use it. It
+ * reads the verdict the auth-gated scan recorded (the wallet account's slot
+ * read the key back), never presence and never a slot. A missing verdict is
+ * not "holds its key", so the found key stays reachable. A watch or Ledger
+ * account never signs with a stored key, whatever was recorded. The verdict
+ * can be stale: Remove re-checks the slot under the key-mutation mutex.
  */
 export function walletHoldsOwnKey(
   row: Extract<FoundRow, { kind: 'in-wallet' }>
 ): boolean {
   return (
-    row.walletHasKey &&
+    row.walletKeyUsable === true &&
     row.walletType !== AccountType.WATCH &&
     row.walletType !== AccountType.LEDGER
   );
@@ -24,9 +26,10 @@ export function walletHoldsOwnKey(
 
 /**
  * A row the user can act on: a ready or unscanned key, or an in-wallet copy
- * whose wallet account can't use a key of its own (walletHoldsOwnKey), since
- * the found key is then its only usable copy. A copy whose wallet account
- * already holds a key is a duplicate and is not counted.
+ * whose wallet account is not known to hold a key of its own
+ * (walletHoldsOwnKey), since the found key may then be its only usable copy.
+ * A copy whose wallet account was checked and holds the key is a duplicate and
+ * is not counted.
  */
 function isActionable(row: FoundRow): boolean {
   return (
@@ -39,7 +42,7 @@ function isActionable(row: FoundRow): boolean {
 /**
  * The keys a user can act on, as every surface counts them: a ready address
  * counts once however many copies it has; unscanned rows, unreadable ids and
- * in-wallet copies that are a wallet account's only usable key count. `ids`
+ * in-wallet copies not known to be duplicates (walletHoldsOwnKey) count. `ids`
  * are the ids those entries name, and `address` is set when exactly one entry
  * is counted and its address is known.
  */
@@ -68,4 +71,19 @@ export function actionableOf(summary: FoundSummary): {
 /** The found-key count the Home notice, Settings and the found screen show. */
 export function actionableCount(summary: FoundSummary): number {
   return actionableOf(summary).count;
+}
+
+/**
+ * The ids an auth-gated scan should read: unscanned keys, and in-wallet copies
+ * with no verdict on whether their wallet account still holds its key.
+ */
+export function idsNeedingScan(summary: FoundSummary): string[] {
+  return [
+    ...summary.unscannedIds,
+    ...summary.rows.flatMap((row) =>
+      row.kind === 'in-wallet' && row.walletKeyUsable === undefined
+        ? [row.id]
+        : []
+    ),
+  ];
 }

@@ -25,6 +25,7 @@ import {
 } from '@/services/secure/AccountSecureStorage';
 import {
   actionableCount,
+  idsNeedingScan,
   walletHoldsOwnKey,
 } from '@/services/secure/foundAccountsCount';
 import {
@@ -58,6 +59,15 @@ const walletName = (row: Extract<FoundRow, { kind: 'in-wallet' }>) =>
 /** An in-wallet row whose wallet account can't use the key: how to recover. */
 const onlyCopyRowText = (row: Extract<FoundRow, { kind: 'in-wallet' }>) =>
   `${onlyCopyText(row.address)} To use it, remove the account "${walletName(row)}" from your wallet, then restore it here.`;
+
+/** An in-wallet row the auth-gated scan has not checked yet. */
+const notCheckedRowText = (row: Extract<FoundRow, { kind: 'in-wallet' }>) =>
+  `It hasn't been checked yet whether ${walletName(row)} still holds its key.`;
+
+/** A row the needs-auth state lists: what the next scan will check. */
+const needsScan = (row: FoundRow) =>
+  row.kind === 'unscanned' ||
+  (row.kind === 'in-wallet' && row.walletKeyUsable === undefined);
 
 function authAlert(error: FreshAuthError, what: string) {
   // A cancel shows nothing; other auth failures say so without detail.
@@ -138,14 +148,17 @@ export default function FoundAccountsScreen() {
         setState(count > 0 ? { kind: 'no-pin', count } : { kind: 'empty' });
         return;
       }
-      if (summary.unscannedIds.length > 0) {
+      // Unscanned keys, and in-wallet copies with no verdict on whether their
+      // wallet account still holds its key.
+      const pending = idsNeedingScan(summary);
+      if (pending.length > 0) {
         if (autoScannedRef.current) {
           setState({ kind: 'needs-auth', summary });
           return;
         }
         autoScannedRef.current = true;
         setState({ kind: 'scanning' });
-        const scanned = await runScan(summary.unscannedIds);
+        const scanned = await runScan(pending);
         if (!current()) return;
         if (scanned === 'auth-failed') {
           setState({ kind: 'needs-auth', summary });
@@ -254,7 +267,8 @@ export default function FoundAccountsScreen() {
     );
   };
 
-  const remove = async (ids: string[], address: string) => {
+  /** `onlyCopy`: what a FoundAccountOnlyCopyError says for this row. */
+  const remove = async (ids: string[], onlyCopy: string) => {
     if (busyId) return;
     autoScannedRef.current = true;
     setBusyId(ids[0]);
@@ -272,7 +286,7 @@ export default function FoundAccountsScreen() {
           "Couldn't check this account's own key right now. Nothing was removed. Unlock the wallet and try again."
         );
       else if (error instanceof FoundAccountOnlyCopyError)
-        Alert.alert('Remove Key', onlyCopyText(address));
+        Alert.alert('Remove Key', onlyCopy);
       else Alert.alert('Remove Key', "Couldn't remove this key.");
     } finally {
       setBusyId(null);
@@ -280,7 +294,7 @@ export default function FoundAccountsScreen() {
     }
   };
 
-  const confirmRemove = (ids: string[], address: string) => {
+  const confirmRemove = (ids: string[], address: string, onlyCopy: string) => {
     Alert.alert(
       'Remove this key?',
       `This deletes this key from this device. If you don't have this account's recovery phrase, restore it first and back the phrase up. Without it, funds at ${formatAddress(address)} may not be reachable from this device.`,
@@ -289,7 +303,7 @@ export default function FoundAccountsScreen() {
         {
           text: 'Remove',
           style: 'destructive',
-          onPress: () => void remove(ids, address),
+          onPress: () => void remove(ids, onlyCopy),
         },
       ]
     );
@@ -331,7 +345,8 @@ export default function FoundAccountsScreen() {
             {button('Restore', () => confirmRestore(row))}
             {button(
               'Remove',
-              () => confirmRemove(row.ids, row.address),
+              () =>
+                confirmRemove(row.ids, row.address, onlyCopyText(row.address)),
               'danger'
             )}
           </View>
@@ -351,13 +366,18 @@ export default function FoundAccountsScreen() {
             <View style={styles.actions}>
               {button(
                 'Remove',
-                () => confirmRemove([row.id], row.address),
+                () =>
+                  confirmRemove([row.id], row.address, onlyCopyRowText(row)),
                 'danger'
               )}
             </View>
           </>
         ) : (
-          <Text style={styles.label}>{onlyCopyRowText(row)}</Text>
+          <Text style={styles.label}>
+            {row.walletKeyUsable === undefined
+              ? notCheckedRowText(row)
+              : onlyCopyRowText(row)}
+          </Text>
         )}
       </View>
     );
@@ -385,18 +405,17 @@ export default function FoundAccountsScreen() {
           </View>
         );
       case 'needs-auth': {
-        const n = state.summary.unscannedIds.length;
+        const pending = idsNeedingScan(state.summary);
         return (
           <>
             <Text style={styles.body}>
-              Authenticate to check the accounts found on this device.
+              Authenticate to check the keys found on this device, and whether
+              the wallet accounts they belong to still hold their own keys.
             </Text>
-            {state.summary.rows
-              .filter((row) => row.kind === 'unscanned')
-              .map(renderRow)}
+            {state.summary.rows.filter(needsScan).map(renderRow)}
             {button(
-              `Check ${plural(n, 'account')}`,
-              () => void rescan(state.summary.unscannedIds)
+              `Check ${plural(pending.length, 'account')}`,
+              () => void rescan(pending)
             )}
           </>
         );

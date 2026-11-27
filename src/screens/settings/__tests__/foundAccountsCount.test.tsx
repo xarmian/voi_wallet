@@ -11,6 +11,7 @@ import { AccountMetadata, AccountType } from '@/types/wallet';
 import type { FoundSummary } from '@/services/secure/foundAccounts';
 import {
   actionableOf,
+  idsNeedingScan,
   walletHoldsOwnKey,
 } from '@/services/secure/foundAccountsCount';
 
@@ -27,7 +28,7 @@ const mockSummary: FoundSummary = {
       address: WALLET,
       walletLabel: 'Main',
       walletType: AccountType.STANDARD,
-      walletHasKey: true,
+      walletKeyUsable: true,
     },
   ],
   unreadableIds: [],
@@ -111,7 +112,7 @@ it('an in-wallet copy whose wallet account has no key counts; one with a key doe
         address: READY,
         walletLabel: 'Watched',
         walletType: AccountType.WATCH,
-        walletHasKey: false,
+        walletKeyUsable: false,
       },
       mockSummary.rows[1],
     ],
@@ -133,13 +134,43 @@ it('a watch or Ledger account counts as keyless even when its slot holds somethi
       address: READY,
       walletLabel: 'Watched',
       walletType,
-      walletHasKey: true,
+      walletKeyUsable: true,
     };
     // The row and the count use one rule, so a key the screen calls the
     // only usable copy is also listed in Settings and announced on Home.
     expect(walletHoldsOwnKey(row)).toBe(false);
     expect(actionableOf({ ...mockSummary, rows: [row] }).count).toBe(1);
   }
+});
+
+it('an in-wallet copy with no verdict counts and needs a scan', () => {
+  const unchecked = {
+    kind: 'in-wallet' as const,
+    id: 'w4',
+    address: WALLET,
+    walletLabel: 'Main',
+    walletType: AccountType.STANDARD,
+  };
+  // No verdict is never "the wallet account holds its key": the found key
+  // stays reachable from Settings and Home until a scan says otherwise.
+  expect(walletHoldsOwnKey(unchecked)).toBe(false);
+  const summary: FoundSummary = {
+    ...mockSummary,
+    rows: [unchecked, { kind: 'unscanned', id: 'u1' }],
+    unscannedIds: ['u1'],
+  };
+  expect(actionableOf(summary).ids).toEqual(['w4', 'u1']);
+  expect(idsNeedingScan(summary)).toEqual(['u1', 'w4']);
+  // A recorded verdict, either way, needs no scan.
+  expect(
+    idsNeedingScan({
+      ...mockSummary,
+      rows: [
+        { ...unchecked, walletKeyUsable: true },
+        { ...unchecked, id: 'w5', walletKeyUsable: false },
+      ],
+    })
+  ).toEqual([]);
 });
 
 it('Settings and Home show the same count', async () => {

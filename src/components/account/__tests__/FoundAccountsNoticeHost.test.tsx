@@ -134,7 +134,7 @@ describe('FoundAccountsNoticeHost counts what can be acted on', () => {
     address: WALLET,
     walletLabel: 'Main',
     walletType: AccountType.STANDARD,
-    walletHasKey: true,
+    walletKeyUsable: true,
   };
   const given = (summary: Partial<FoundSummary>) =>
     jest.spyOn(found, 'readFoundAccountsSummary').mockResolvedValue({

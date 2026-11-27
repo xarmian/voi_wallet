@@ -42,8 +42,9 @@ export default function FoundAccountsNoticeHost({
   const shown = actionableOf(summary);
   if (shown.count === 0 || shown.ids.every((id) => seen.ids.has(id)))
     return null;
-  // Only what the notice announced is recorded. An in-wallet copy is not, so
-  // it is announced if it later becomes a ready row (its wallet account gone).
+  // Only what the notice announced is recorded: an in-wallet copy that may be
+  // its wallet account's only usable key is, a duplicate is not (so it is
+  // announced if it later becomes a ready row, its wallet account gone).
   const ids = shown.ids;
 
   const markSeen = () => {

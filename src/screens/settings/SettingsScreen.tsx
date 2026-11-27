@@ -272,7 +272,8 @@ export default function SettingsScreen() {
   const deleteAccount = useWalletStore((state) => state.deleteAccount);
   // TASK-478: keys found on this device (read on focus; no key is read).
   const foundAccounts = useFoundAccountsSummary();
-  // Counted as Home's notice counts them; in-wallet copies are not counted.
+  // Counted as Home's notice counts them: an in-wallet copy counts unless the
+  // scan found its wallet account holds the key itself.
   const foundCount = foundAccounts.summary
     ? actionableCount(foundAccounts.summary)
     : 0;

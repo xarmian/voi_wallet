@@ -21,6 +21,7 @@ jest.mock('@/store/walletStore', () => ({
 }));
 
 import algosdk from 'algosdk';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import {
   readFoundAccountsSummary,
@@ -134,9 +135,63 @@ it('no secret text anywhere', async () => {
     await boot();
     unlock();
     const later = await run(() => readFoundAccountsSummary());
+    // The scan opens the restored account's own slot to record whether it
+    // still holds the key: that read is under the canary too.
+    const inspect = jest.spyOn(
+      AccountSecureStorage as unknown as {
+        inspectSlotUnderOneVaultState: (
+          id: string,
+          address: string
+        ) => Promise<{ state: string }>;
+      },
+      'inspectSlotUnderOneVaultState'
+    );
     await run(() =>
       authed('scan_found_accounts', (cap) =>
         scanFoundAccounts(later!.unscannedIds, cap)
+      )
+    );
+    expect(inspect).toHaveBeenCalledTimes(1);
+    expect(inspect.mock.calls[0][1]).toBe(CANARY_ADDRESS);
+    await expect(inspect.mock.results[0].value).resolves.toMatchObject({
+      state: 'key-matches',
+    });
+    // A slot that won't open, and a reader that throws, during the scan.
+    inspect.mockRestore();
+    const restoredId =
+      (await MultiAccountWalletService.readWalletStrict())!.accounts.find(
+        (a) => a.address === CANARY_ADDRESS
+      )!.id;
+    const healthy = mockPlatform.__secure.get(
+      `voi_account_secret_${restoredId}`
+    )!;
+    mockPlatform.__secure.set(
+      `voi_account_secret_${restoredId}`,
+      healthy.replace(/"[A-Za-z0-9+/=]{24,}"/g, '"AAAA"')
+    );
+    await run(() =>
+      authed('scan_found_accounts', (cap) =>
+        scanFoundAccounts(['orphan-canary-2'], cap)
+      )
+    );
+    mockPlatform.__secure.set(`voi_account_secret_${restoredId}`, healthy);
+    const throwing = jest
+      .spyOn(
+        AccountSecureStorage as unknown as {
+          inspectSlotUnderOneVaultState: () => Promise<never>;
+        },
+        'inspectSlotUnderOneVaultState'
+      )
+      .mockRejectedValueOnce(new Error('inspect failed'));
+    await run(() =>
+      authed('scan_found_accounts', (cap) =>
+        scanFoundAccounts(['orphan-canary-2'], cap)
+      )
+    );
+    throwing.mockRestore();
+    await run(() =>
+      authed('scan_found_accounts', (cap) =>
+        scanFoundAccounts(['orphan-canary-2'], cap)
       )
     );
     const listed = await run(() => readFoundAccountsSummary());

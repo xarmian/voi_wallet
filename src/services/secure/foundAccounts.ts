@@ -4,7 +4,9 @@
  * The boot reconcile quarantines a key that no wallet account owns (an
  * interrupted create, a lost wallet record). This module is the only caller of
  * the storage methods that read or delete such a key:
- *  - the summary reads no key: ids, presence, and the public scan results;
+ *  - the summary reads no key: ids, presence of the found keys, and the public
+ *    scan results. It reads no wallet account's slot either: whether a wallet
+ *    account still holds its own key is the scan's recorded verdict;
  *  - the scan, a restore and a remove each need a fresh-auth capability.
  * A restore copies the key into a new account through the import's journaled
  * create, and deletes the found copy only once the new account's slot reads
@@ -36,8 +38,12 @@ export type FoundRow =
       address: string;
       walletLabel: string;
       walletType: AccountType;
-      /** The wallet account's own slot holds something (the presence probe). */
-      walletHasKey: boolean;
+      /**
+       * The last auth-gated scan's verdict on whether this wallet account's own
+       * slot reads the key back. Missing: not checked (or checked for another
+       * account id), which never counts as holding the key.
+       */
+      walletKeyUsable?: boolean;
     }
   | { kind: 'unscanned'; id: string; hintAddress?: string; hintLabel?: string };
 
@@ -91,11 +97,11 @@ export async function readFoundAccountsSummary(): Promise<FoundSummary> {
         address: scan.address,
         walletLabel: inWallet.label ?? '',
         walletType: inWallet.type,
-        // Presence only, never a decrypt: the account type and originalOwner
-        // do not prove the wallet account still holds its key.
-        walletHasKey: await AccountSecureStorage.probeSecretPresenceStrict(
-          inWallet.id
-        ),
+        // The scan's stored verdict, never a slot read here. One recorded for
+        // another account id (the wallet changed since) reads as missing.
+        ...(scan.wallet?.ownerId === inWallet.id
+          ? { walletKeyUsable: scan.wallet.keyUsable }
+          : {}),
       });
       continue;
     }
@@ -136,7 +142,21 @@ export async function scanFoundAccounts(
   cap: FreshAuthCapability
 ): Promise<void> {
   consumeFreshAuth(cap, 'scan_found_accounts');
-  await AccountSecureStorage.scanQuarantinedAddresses(ids);
+  const wallet = await MultiAccountWalletService.readWalletStrict();
+  await AccountSecureStorage.scanQuarantinedAddresses(
+    ids,
+    walletAccountsOf(wallet?.accounts ?? [])
+  );
+}
+
+function walletAccountsOf(
+  accounts: readonly { id: string; address: string; type: AccountType }[]
+) {
+  return accounts.map((account) => ({
+    id: account.id,
+    address: account.address,
+    type: account.type,
+  }));
 }
 
 async function walletOwns(id: string): Promise<boolean> {
@@ -214,9 +234,10 @@ export async function restoreFoundAccount(
 /**
  * Removes each id in turn under one fresh authentication (a ready row's
  * copies), stopping at the first failure. An id whose address is a wallet
- * account is removed only while that account's slot reads the key back
- * (FoundAccountWalletKeyUncheckedError when the slot can't be opened right now,
- * such as with the vault locked; FoundAccountOnlyCopyError otherwise).
+ * account is removed only while that account's slot reads the key back, checked
+ * again here whatever the scan recorded (FoundAccountWalletKeyUncheckedError
+ * when the vault is locked; FoundAccountOnlyCopyError otherwise, including for
+ * a watch or Ledger account).
  */
 export async function removeFoundAccount(
   ids: string[],
@@ -225,10 +246,7 @@ export async function removeFoundAccount(
   consumeFreshAuth(cap, 'remove_found_account');
   for (const id of ids) {
     const wallet = await MultiAccountWalletService.readWalletStrict();
-    const accounts = (wallet?.accounts ?? []).map((account) => ({
-      id: account.id,
-      address: account.address,
-    }));
+    const accounts = walletAccountsOf(wallet?.accounts ?? []);
     // A wallet account's id is never treated as found.
     if (accounts.some((account) => account.id === id))
       throw new FoundAccountNotQuarantinedError();

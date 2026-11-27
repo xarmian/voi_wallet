@@ -154,8 +154,13 @@ export class VaultChangedDuringReadError extends Error {
 /**
  * TASK-478: what the found-accounts scan learned about one quarantined key.
  * Public data only: the address the key derives to, or that it did not open.
+ * `wallet` is set when the address is a wallet account's (`ownerId`):
+ * `keyUsable` says whether that account's own slot read the key back when the
+ * auth-gated scan last checked it. Missing means not known.
  */
-export type QuarantineScanEntry = { address: string } | { unreadable: true };
+export type QuarantineScanEntry =
+  | { address: string; wallet?: { ownerId: string; keyUsable: boolean } }
+  | { unreadable: true };
 
 /** TASK-478: one quarantine-registry id, described without opening its key. */
 export interface QuarantineIndexRow {
@@ -2614,8 +2619,11 @@ export class AccountSecureStorage {
   // reconcile found with no wallet account (an interrupted create, a lost wallet
   // record). Reading one turns stored bytes into a key, so it happens only in
   // scanQuarantinedAddresses and readQuarantinedKeyForRestore, which the
-  // found-accounts service calls behind a fresh authentication. Everything else
-  // here works from ids, presence and public data, and never decrypts.
+  // found-accounts service calls behind a fresh authentication. The scan, a
+  // remove and a restore's release also open a wallet account's own slot (the
+  // side-effect-free inspectSlotUnderOneVaultState) to learn whether it reads
+  // the key back; only that answer is kept. Everything else here works from
+  // ids, presence and public data, and never decrypts.
   // ───────────────────────────────────────────────────────────────────────────
 
   /** The public scan map. Missing is `{}`; a corrupt map or entry is dropped. */
@@ -2639,13 +2647,34 @@ export class AccountSecureStorage {
     const entries: Record<string, QuarantineScanEntry> = {};
     for (const [id, value] of Object.entries(parsed)) {
       if (!id || value === null || typeof value !== 'object') continue;
-      const entry = value as { address?: unknown; unreadable?: unknown };
+      const entry = value as {
+        address?: unknown;
+        unreadable?: unknown;
+        wallet?: unknown;
+      };
       if (entry.unreadable === true) entries[id] = { unreadable: true };
       else if (
         typeof entry.address === 'string' &&
         algosdk.isValidAddress(entry.address)
-      )
-        entries[id] = { address: entry.address };
+      ) {
+        // A malformed verdict is dropped; the address stands on its own.
+        const wallet = entry.wallet as
+          { ownerId?: unknown; keyUsable?: unknown } | null | undefined;
+        entries[id] =
+          wallet !== null &&
+          typeof wallet === 'object' &&
+          typeof wallet.ownerId === 'string' &&
+          wallet.ownerId.length > 0 &&
+          typeof wallet.keyUsable === 'boolean'
+            ? {
+                address: entry.address,
+                wallet: {
+                  ownerId: wallet.ownerId,
+                  keyUsable: wallet.keyUsable,
+                },
+              }
+            : { address: entry.address };
+      }
     }
     return entries;
   }
@@ -2866,22 +2895,69 @@ export class AccountSecureStorage {
   }
 
   /**
+   * Whether wallet account `owner` can use a key of its own for `address`.
+   * A watch or Ledger account never signs with a stored key, so its slot is not
+   * read. Otherwise its slot is read once, without side effects: `true` only
+   * when it reads the key back, `undefined` when a locked vault can't tell,
+   * `false` for anything else. The caller holds the key-mutation mutex.
+   */
+  private static async walletKeyUsableLocked(
+    owner: { id: string; type: AccountType },
+    address: string
+  ): Promise<boolean | undefined> {
+    if (owner.type === AccountType.WATCH || owner.type === AccountType.LEDGER)
+      return false;
+    const slot = await this.inspectSlotUnderOneVaultState(owner.id, address);
+    if (slot.state === 'key-matches') return true;
+    if (slot.state === 'occupied-unreadable' && slot.vault === 'locked')
+      return undefined;
+    return false;
+  }
+
+  /**
    * Scan quarantined keys for their addresses (the caller has a fresh
-   * authentication). One mutex task; ids not in the registry are skipped. A
-   * locked or changed vault, or a read failure, stops the scan: the entries
-   * read so far are saved and the error is rethrown.
+   * authentication). One mutex task; ids not in the registry are skipped. An
+   * id that already has an entry is scanned again, so its verdict is
+   * recomputed. When a key's address is one of `walletAccounts`, the entry
+   * records whether that account's own slot reads the key back (one slot read
+   * per account per scan; see walletKeyUsableLocked). Only that boolean is
+   * kept. A locked or changed vault, or a read failure, stops the scan: the
+   * entries read so far are saved and the error is rethrown.
    */
   static async scanQuarantinedAddresses(
-    ids: string[]
+    ids: string[],
+    walletAccounts: readonly {
+      id: string;
+      address: string;
+      type: AccountType;
+    }[]
   ): Promise<Record<string, QuarantineScanEntry>> {
     return this.runKeyMutationExclusive(async () => {
       const registry = new Set(await this.readQuarantinedIdsSalvaged());
       const results: Record<string, QuarantineScanEntry> = {};
+      const verdicts = new Map<string, boolean | undefined>();
       let stopped: { error: unknown } | undefined;
       for (const id of ids) {
         if (!registry.has(id) || id in results) continue;
         try {
-          results[id] = await this.scanQuarantinedKeyLocked(id);
+          const entry = await this.scanQuarantinedKeyLocked(id);
+          results[id] = entry;
+          if (!('address' in entry)) continue;
+          const owner = walletAccounts.find(
+            (account) => account.address === entry.address
+          );
+          if (!owner) continue;
+          if (!verdicts.has(owner.id))
+            verdicts.set(
+              owner.id,
+              await this.walletKeyUsableLocked(owner, entry.address)
+            );
+          const keyUsable = verdicts.get(owner.id);
+          if (keyUsable !== undefined)
+            results[id] = {
+              address: entry.address,
+              wallet: { ownerId: owner.id, keyUsable },
+            };
         } catch (error) {
           stopped = { error };
           break;
@@ -2980,15 +3056,23 @@ export class AccountSecureStorage {
    * authentication). Refused while a storage write for its slot is unresolved.
    * When the key's scanned address is one of `walletAccounts`, the delete runs
    * only if that account's own slot reads the key back (checked in this task,
-   * without side effects). A slot that holds something it can't open now
-   * (occupied-unreadable: with a PIN set and the vault locked, every key reads
-   * so) throws FoundAccountWalletKeyUncheckedError; any other state throws
-   * FoundAccountOnlyCopyError. Either way nothing is deleted. A delete failure
-   * throws and the id stays in the registry.
+   * without side effects; the stored scan verdict is never trusted here). A
+   * watch or Ledger account can't use a stored key, so it is refused with
+   * FoundAccountOnlyCopyError before any slot read. A slot that can't be opened
+   * because the vault is locked (occupied-unreadable with the vault locked)
+   * throws FoundAccountWalletKeyUncheckedError. Any other state throws
+   * FoundAccountOnlyCopyError, after recording `keyUsable: false` in the id's
+   * scan entry (best effort) so every surface counts the key again. Either way
+   * nothing is deleted. A delete failure throws and the id stays in the
+   * registry.
    */
   static async deleteQuarantinedOrphan(
     accountId: string,
-    walletAccounts: readonly { id: string; address: string }[]
+    walletAccounts: readonly {
+      id: string;
+      address: string;
+      type: AccountType;
+    }[]
   ): Promise<void> {
     return this.runKeyMutationExclusive(async () => {
       if (!(await this.readQuarantinedIdsSalvaged()).includes(accountId)) {
@@ -3001,6 +3085,11 @@ export class AccountSecureStorage {
           ? undefined
           : walletAccounts.find((account) => account.address === address);
       if (owner && address !== undefined) {
+        if (
+          owner.type === AccountType.WATCH ||
+          owner.type === AccountType.LEDGER
+        )
+          throw new FoundAccountOnlyCopyError();
         const slot = await this.inspectSlotUnderOneVaultState(
           owner.id,
           address
@@ -3009,7 +3098,21 @@ export class AccountSecureStorage {
         // legacy-only or undecryptable slot stays that way after unlocking.
         if (slot.state === 'occupied-unreadable' && slot.vault === 'locked')
           throw new FoundAccountWalletKeyUncheckedError();
-        if (slot.state !== 'key-matches') throw new FoundAccountOnlyCopyError();
+        if (slot.state !== 'key-matches') {
+          // The stored verdict may have said the account held its key: correct
+          // it, so the count and the row offer the key again.
+          try {
+            const saved = await this.readQuarantineScanTolerant();
+            saved[accountId] = {
+              address,
+              wallet: { ownerId: owner.id, keyUsable: false },
+            };
+            await this.writeQuarantineScanLocked(saved);
+          } catch {
+            console.warn('[foundAccounts] scan record not saved');
+          }
+          throw new FoundAccountOnlyCopyError();
+        }
       }
       const primaryKey = this.secretKey(accountId);
       const legacyKey = `${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`;
