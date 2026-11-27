@@ -4,7 +4,7 @@
  * Allows users to configure push notification preferences for their wallet accounts.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -316,6 +316,8 @@ export default function NotificationSettingsScreen() {
   // Not granted and the system will not ask again: only the device settings
   // can turn notifications on (TASK-565).
   const [blockedInDeviceSettings, setBlockedInDeviceSettings] = useState(false);
+  // Permission reads can resolve out of order; only the newest sets the notice.
+  const permissionReadSeq = useRef(0);
   const [preferences, setPreferences] = useState<NotificationPreferences>(
     DEFAULT_NOTIFICATION_PREFERENCES
   );
@@ -357,10 +359,15 @@ export default function NotificationSettingsScreen() {
     setIsLoading(true);
     try {
       // Check if notifications are enabled
+      const seq = ++permissionReadSeq.current;
       const { status, canAskAgain } =
         await notificationService.getPermissionState();
       setNotificationsEnabled(status === 'granted');
-      setBlockedInDeviceSettings(status !== 'granted' && canAskAgain === false);
+      if (seq === permissionReadSeq.current) {
+        setBlockedInDeviceSettings(
+          status !== 'granted' && canAskAgain === false
+        );
+      }
 
       // Load preferences from server for selected account
       const prefs = await notificationService.getPreferences(
@@ -387,9 +394,10 @@ export default function NotificationSettingsScreen() {
     let active = true;
     const subscription = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
+      const seq = ++permissionReadSeq.current;
       notificationService.getPermissionState().then(
         ({ status, canAskAgain }) => {
-          if (!active) return;
+          if (!active || seq !== permissionReadSeq.current) return;
           setBlockedInDeviceSettings(
             status !== 'granted' && canAskAgain === false
           );

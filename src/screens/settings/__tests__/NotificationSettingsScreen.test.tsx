@@ -156,3 +156,33 @@ it('shows the notice when the app returns active after permission was turned off
 
   expect(view.getByText(NOTICE)).toBeTruthy();
 });
+
+it('ignores an older permission read that resolves after a newer one', async () => {
+  // The mount read is slow and reports denied; the user turns permission on
+  // and returns before it resolves, and that newer read reports granted.
+  let resolveMountRead: (value: {
+    status: string;
+    canAskAgain: boolean;
+  }) => void = () => {};
+  mockGetPermissionState.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveMountRead = resolve;
+    })
+  );
+  const view = await mount();
+
+  mockGetPermissionState.mockResolvedValue({
+    status: 'granted',
+    canAskAgain: true,
+  });
+  await act(async () => {
+    appStateListeners.forEach((listener) => listener('active'));
+  });
+  expect(view.queryByText(NOTICE)).toBeNull();
+
+  await act(async () => {
+    resolveMountRead({ status: 'denied', canAskAgain: false });
+  });
+
+  expect(view.queryByText(NOTICE)).toBeNull();
+});
