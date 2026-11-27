@@ -3840,7 +3840,9 @@ export class AccountSecureStorage {
       // re-mark, and for a store that cannot answer: the read-back or the
       // re-mark itself throws or times out. A breadcrumb read before the clear
       // that throws counts as set, so on a device that had none this can leave
-      // one with no PIN; the next setupPin clears it.
+      // one with no PIN. Until the next setupPin or a boot that reads a PIN
+      // clears it, a restore also reads the device as not fresh and skips the
+      // file's settings.
       //
       // If removal cannot be CONFIRMED (a wedged/unhealthy store), the commit is
       // ABORTED and the pre-commit rollback drops this attempt's new blobs and

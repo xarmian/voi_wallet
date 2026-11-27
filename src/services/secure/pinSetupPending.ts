@@ -54,7 +54,9 @@ const PENDING_VALUE = 'true';
 // submit path; the boot self-heal runs on the render-gating path), and removal is
 // retried + verified so a transient hiccup does not leave a durable marker.
 // 2 attempts × (remove + verify), each bounded — worst case ≈ 4.8s on a fully
-// wedged store (vs. a normal ~20ms), so setupPin's submit is bounded, never hung.
+// wedged store (vs. a normal ~20ms). setupPin also bounds its own breadcrumb read
+// before the clear and its PIN read-back after a failure (5s each), so its submit
+// is bounded at roughly 15s on a wedged store, never hung.
 const CLEAR_MAX_ATTEMPTS = 2;
 const CLEAR_OP_TIMEOUT_MS = 1200;
 

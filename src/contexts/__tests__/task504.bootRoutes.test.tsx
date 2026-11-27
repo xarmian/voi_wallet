@@ -550,10 +550,20 @@ describe('TASK-504 5.4 route table: during C and after the blob commit', () => {
     await markPinSetupPending();
     await restoreAccounts(stepFile());
     die();
+    const opsBefore = mockPlatform.__ops.length;
     mockPlatform.__flags.failOnTag = `secure:set:${PIN_ITEM}`;
     await expect(
       AccountSecureStorage.setupPin(NEW_PIN, 'pin')
     ).rejects.toThrow();
+    // setupPin cleared the breadcrumb, the credential write failed, and only
+    // then was the breadcrumb set again.
+    const setupOps = mockPlatform.__ops.slice(opsBefore);
+    const cleared = setupOps.indexOf('kv:del:pin_setup_pending');
+    const failedWrite = setupOps.indexOf(`FAILED secure:set:${PIN_ITEM}`);
+    const remarked = setupOps.lastIndexOf('kv:set:pin_setup_pending');
+    expect(cleared).toBeGreaterThan(-1);
+    expect(failedWrite).toBeGreaterThan(cleared);
+    expect(remarked).toBeGreaterThan(failedWrite);
     die();
     expect(await readPinSetupPendingStrict()).toBe(true);
     expect(await AccountSecureStorage.hasPinStrict()).toBe(false);
