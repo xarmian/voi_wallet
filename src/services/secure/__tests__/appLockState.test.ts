@@ -1,8 +1,8 @@
 // Unit tests for AppLockSignal listener isolation (TASK-561).
 //
 // A listener that throws must not escape setUnlocked(): the state is applied
-// first, every other listener is still notified, and the failure is logged as a
-// redacted string (never the raw Error object).
+// first, every other listener is still notified, and the failure is logged by
+// error kind only (never the message or the raw Error object).
 
 import { AppLockSignal } from '../appLockState';
 

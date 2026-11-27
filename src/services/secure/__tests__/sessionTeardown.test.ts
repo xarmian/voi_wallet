@@ -52,7 +52,7 @@ describe('clearSessionSecurity', () => {
 
   it('still clears both caches when the vault clear throws, then rethrows', () => {
     (clearMessagingKeyCache as jest.Mock).mockClear();
-    const failure = new Error('vault listener failed');
+    const failure = new Error('vault clear failed');
     const vaultSpy = jest
       .spyOn(SessionKeyVault, 'clear')
       .mockImplementation(() => {
