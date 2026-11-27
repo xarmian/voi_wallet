@@ -109,14 +109,22 @@ class NotificationService {
       // transaction id and amount; a wipe drops it. The native layer also
       // holds the launch tap for the life of the process, and the wipe
       // removes the last-handled id, so a later initialize() in this process
-      // would deliver it again: clear it too. The queued tap is dropped
-      // first; a throw from the native clear fails only this reset (the wipe
-      // reports it). The web build has no native response to clear (its
-      // module throws UnavailabilityError).
+      // would deliver it again: clear it too. Notifications already
+      // delivered show the previous wallet's addresses and amounts in the
+      // notification centre, and the badge counts them: dismiss them and
+      // clear the badge. The synchronous clears run first; a throw from the
+      // native clear fails only this reset (the wipe reports it). The two
+      // async calls are returned, so the wipe waits for them (bounded) and
+      // reports this reset if either rejects or does not finish. The web
+      // build has none of these (its module throws UnavailabilityError).
       registerWipeReset('notifications', () => {
         instance.clearPendingNotificationTap();
-        if (Platform.OS !== 'web')
-          Notifications.clearLastNotificationResponse();
+        if (Platform.OS === 'web') return;
+        Notifications.clearLastNotificationResponse();
+        return Promise.all([
+          Notifications.dismissAllNotificationsAsync(),
+          Notifications.setBadgeCountAsync(0),
+        ]);
       });
     }
     return NotificationService.instance;

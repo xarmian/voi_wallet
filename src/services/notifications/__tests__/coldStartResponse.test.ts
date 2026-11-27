@@ -21,6 +21,10 @@ let mockResponseListener: ((response: unknown) => void) | null = null;
 // the spies below are the ones the freshly loaded service actually calls.
 const mockGetLastResponse = jest.fn(async (): Promise<unknown> => null);
 const mockClearLastResponse = jest.fn((): void => {});
+const mockDismissAll = jest.fn(async (): Promise<void> => {});
+const mockSetBadgeCount = jest.fn(
+  async (_count: number): Promise<boolean> => true
+);
 const mockAddResponseListener = jest.fn(
   (listener: (response: unknown) => void) => {
     mockResponseListener = listener;
@@ -35,6 +39,8 @@ jest.mock('expo-notifications', () => ({
   ) => mockAddResponseListener(listener),
   getLastNotificationResponseAsync: () => mockGetLastResponse(),
   clearLastNotificationResponse: () => mockClearLastResponse(),
+  dismissAllNotificationsAsync: () => mockDismissAll(),
+  setBadgeCountAsync: (count: number) => mockSetBadgeCount(count),
   AndroidImportance: { HIGH: 4, DEFAULT: 3 },
 }));
 
@@ -165,7 +171,54 @@ describe('notificationService cold-start response (TASK-381)', () => {
       mockGetLastResponse.mockReset();
       mockGetLastResponse.mockImplementation(async () => null);
       mockClearLastResponse.mockReset();
+      mockDismissAll.mockReset();
+      mockDismissAll.mockImplementation(async () => {});
+      mockSetBadgeCount.mockReset();
+      mockSetBadgeCount.mockImplementation(async () => true);
     });
+
+    /** The notifications reset's pending work in a run of the resets. */
+    const notificationsWork = (run: {
+      pending: { name: string; done: Promise<unknown> }[];
+    }) => run.pending.find(({ name }) => name === 'notifications')?.done;
+
+    it('dismisses the delivered notifications and clears the badge, and the wipe waits for both', async () => {
+      const { service, gate } = loadWithGate();
+      const run = gate.runWipeResets();
+      expect(run.failed).toEqual([]);
+      const work = notificationsWork(run);
+      expect(work).toBeDefined();
+      await expect(work).resolves.toBeDefined();
+      expect(mockDismissAll).toHaveBeenCalledTimes(1);
+      expect(mockSetBadgeCount).toHaveBeenCalledWith(0);
+      service.cleanup();
+    });
+
+    it.each([
+      ['dismissing the delivered notifications', () => mockDismissAll],
+      ['clearing the badge', () => mockSetBadgeCount],
+    ] as const)(
+      'a failure %s fails the notifications reset, and the other resets still run',
+      async (_what, failing) => {
+        (failing() as jest.Mock).mockImplementation(async () => {
+          throw new Error('native call failed');
+        });
+        const { service, gate } = loadWithGate();
+        const probe = jest.fn();
+        gate.registerWipeReset('probe', probe);
+        const run = gate.runWipeResets();
+        await expect(notificationsWork(run)).rejects.toThrow(
+          'native call failed'
+        );
+        expect(probe).toHaveBeenCalledTimes(1);
+        // Both are started; one failing does not skip the other.
+        expect(mockDismissAll).toHaveBeenCalledTimes(1);
+        expect(mockSetBadgeCount).toHaveBeenCalledWith(0);
+        // The synchronous clears ran first.
+        expect(mockClearLastResponse).toHaveBeenCalledTimes(1);
+        service.cleanup();
+      }
+    );
 
     // expo-notifications holds the launch response natively for the whole
     // process: every read returns it until it is cleared.

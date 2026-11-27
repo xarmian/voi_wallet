@@ -96,6 +96,31 @@ jest.mock('@/services/wallet', () => ({
     hasWalletWithAccountsStrict: jest.fn(async () => false),
   },
 }));
+// The notifications service is loaded only by its own tests below.
+const mockDismissAll = jest.fn(async (): Promise<void> => {});
+const mockSetBadgeCount = jest.fn(
+  async (_count: number): Promise<boolean> => true
+);
+jest.mock('expo-notifications', () => ({
+  setNotificationHandler: jest.fn(),
+  clearLastNotificationResponse: jest.fn(),
+  dismissAllNotificationsAsync: () => mockDismissAll(),
+  setBadgeCountAsync: (count: number) => mockSetBadgeCount(count),
+  AndroidImportance: { HIGH: 4, DEFAULT: 3 },
+}));
+jest.mock('expo-device', () => ({ isDevice: true }));
+jest.mock('react-native-toast-message', () => ({
+  __esModule: true,
+  default: { show: jest.fn(), hide: jest.fn() },
+}));
+jest.mock('@/services/wallet/ownKeyCustody', () => ({
+  probeOwnKey: jest.fn(),
+}));
+jest.mock('@/services/supabase', () => ({
+  getSupabaseClient: () => null,
+  isSupabaseConfigured: () => false,
+  setDeviceId: jest.fn(),
+}));
 const mockEnvoiLookup: {
   resolve?: (value: unknown) => void;
 } = {};
@@ -540,6 +565,83 @@ describe('in-memory state', () => {
       });
     } finally {
       unregister();
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe('the notifications reset', () => {
+  // The real notifications service and a wipe from one module registry, so
+  // its reset is registered on the gate this wipe runs.
+  const loadWipeWithNotifications = () => {
+    let loaded:
+      | { wipe: typeof import('../index'); gate: typeof import('../gate') }
+      | undefined;
+    jest.isolateModules(() => {
+      require('@/services/notifications');
+      loaded = { wipe: require('../index'), gate: require('../gate') };
+    });
+    return loaded!;
+  };
+
+  beforeEach(() => {
+    mockDismissAll.mockReset();
+    mockDismissAll.mockImplementation(async () => {});
+    mockSetBadgeCount.mockReset();
+    mockSetBadgeCount.mockImplementation(async () => true);
+  });
+
+  test('a wipe dismisses the delivered notifications and clears the badge', async () => {
+    seed(WIPED);
+    const { wipe } = loadWipeWithNotifications();
+    await wipe.wipeAllLocalData();
+    expect(mockDismissAll).toHaveBeenCalledTimes(1);
+    expect(mockSetBadgeCount).toHaveBeenCalledWith(0);
+    expect(remainingKeys().filter((key) => key in WIPED)).toEqual([]);
+    expect(mockPlain.has('voi_wipe_intent')).toBe(false);
+  });
+
+  test.each([
+    ['dismissing the delivered notifications', () => mockDismissAll],
+    ['clearing the badge', () => mockSetBadgeCount],
+  ] as const)(
+    'a failure %s is reported as memory:notifications, and the other resets and steps still run',
+    async (_what, failing) => {
+      seed(WIPED);
+      (failing() as jest.Mock).mockImplementationOnce(async () => {
+        throw new Error('native call failed');
+      });
+      const { wipe, gate } = loadWipeWithNotifications();
+      const probe = jest.fn();
+      gate.registerWipeReset('probe', probe);
+      await expect(wipe.wipeAllLocalData()).rejects.toMatchObject({
+        name: 'WipeIncompleteError',
+        keys: ['memory:notifications'],
+      });
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(mockDismissAll).toHaveBeenCalledTimes(1);
+      expect(mockSetBadgeCount).toHaveBeenCalledWith(0);
+      // The rest of the wipe ran; the request stays for the retry.
+      expect(remainingKeys().filter((key) => key in WIPED)).toEqual([]);
+      expect(mockPlain.get('voi_wipe_intent')).toBe('1');
+    }
+  );
+
+  test('a dismiss that never settles is bounded and reported as memory:notifications', async () => {
+    jest.useFakeTimers();
+    try {
+      mockDismissAll.mockImplementationOnce(() => new Promise<void>(() => {}));
+      const { wipe } = loadWipeWithNotifications();
+      const outcome = wipe.wipeAllLocalData().then(
+        () => undefined,
+        (e: unknown) => e
+      );
+      await jest.advanceTimersByTimeAsync(6000);
+      expect(await outcome).toMatchObject({
+        name: 'WipeIncompleteError',
+        keys: ['memory:notifications'],
+      });
+    } finally {
       jest.useRealTimers();
     }
   });
