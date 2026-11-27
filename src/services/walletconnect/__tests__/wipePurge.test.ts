@@ -169,7 +169,7 @@ describe('handled-request ledger', () => {
     expect(second.isHandled(ref)).toBe(false);
   });
 
-  test('a mark started before the reset does not write after it', async () => {
+  test('a mark started before the reset does not write after it, and reports nothing recorded', async () => {
     const store = new HandledStore();
     await store.load();
     const setItem = jest.spyOn(AsyncStorage, 'setItem');
@@ -178,7 +178,8 @@ describe('handled-request ledger', () => {
       'approved'
     );
     store.resetForWipe();
-    await marking;
+    // Not recorded: the caller must not answer the dApp for a wiped wallet.
+    await expect(marking).resolves.toBe(false);
     expect(setItem).not.toHaveBeenCalled();
     setItem.mockRestore();
   });
