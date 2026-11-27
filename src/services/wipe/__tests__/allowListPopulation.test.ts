@@ -55,6 +55,8 @@ const KNOWN_WIPED_KEYS = new Set([
   'voi_transaction_cache',
   // Notifications.
   '@voi_wallet/last_handled_notification',
+  // The Home offer to turn on notifications comes back for a fresh wallet.
+  'voi_notifications_offer_dismissed',
   // PIN settings and setup markers.
   'voi_pin_timeout_minutes',
   'voi_custom_pin_timeout',

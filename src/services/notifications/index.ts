@@ -284,7 +284,7 @@ class NotificationService {
     }
 
     if (finalStatus !== 'granted') {
-      console.log('Push notification permissions not granted');
+      this.warnRegistrationSkippedOnce('notification permission not granted');
       return false;
     }
 
@@ -800,6 +800,19 @@ class NotificationService {
   async areNotificationsEnabled(): Promise<boolean> {
     const { status } = await Notifications.getPermissionsAsync();
     return status === 'granted';
+  }
+
+  /**
+   * Read the notification permission without prompting. `canAskAgain` false
+   * means the system will not show the prompt again, so only the device
+   * settings can turn notifications on (TASK-565).
+   */
+  async getPermissionState(): Promise<{
+    status: Notifications.NotificationPermissionsStatus['status'];
+    canAskAgain: boolean;
+  }> {
+    const { status, canAskAgain } = await Notifications.getPermissionsAsync();
+    return { status, canAskAgain };
   }
 
   // Private methods
