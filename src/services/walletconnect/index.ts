@@ -173,9 +173,10 @@ export class WalletConnectService extends EventEmitter {
 
   /**
    * TASK-469: remove every WalletConnect session, proposal, request, pairing,
-   * key, expiry, history record and relay message from this device, through
-   * the SDK's own stores. Nothing here waits on the network: the dApps are not
-   * told, and the relay close is not awaited.
+   * key, expiry, history record, relay message and relay subscription (active,
+   * pending or cached for a reconnect) from this device, through the SDK's
+   * own stores. Nothing here waits on the network: the dApps are not told, and
+   * the relay close is not awaited.
    *
    * The memory side is synchronous (each store drops its entry before it
    * persists); the returned promise settles when the emptied stores have been
@@ -241,8 +242,15 @@ export class WalletConnectService extends EventEmitter {
     for (const key of core.expirer.keys) core.expirer.del(key);
     for (const topic of new Set(core.history.values.map((r) => r.topic)))
       core.history.delete(topic);
-    core.relayer.subscriber.subscriptions.clear();
-    core.relayer.subscriber.topicMap.clear();
+    const subscriber = core.relayer.subscriber;
+    subscriber.subscriptions.clear();
+    subscriber.topicMap.clear();
+    subscriber.pending.clear();
+    // `cached` is private in @walletconnect/core: the topics held while the
+    // relay is down, re-subscribed (and persisted) on the next connect. The
+    // SDK empties it only after a reconnect, so an offline wipe must empty it
+    // here. A plain field write; no SDK method (none that avoids the network).
+    (subscriber as unknown as { cached: unknown[] }).cached = [];
     return Promise.all(writes).then(() => undefined);
   }
 

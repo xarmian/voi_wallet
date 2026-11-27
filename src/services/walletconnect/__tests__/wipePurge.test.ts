@@ -36,6 +36,7 @@ const mockHistory = new Map([[7, { id: 7, topic: 's1' }]]);
 const mockMessages = new Map([['s1', {}]]);
 const mockSubscriptions = new Map([['sub1', { topic: 's1' }]]);
 const mockTopicMapClear = jest.fn();
+const mockPendingSubscriptions = new Map([['s1', { topic: 's1' }]]);
 const mockTransportClose = jest.fn(() => new Promise<void>(() => {}));
 let mockInitialized = true;
 const mockClientInitialize = jest.fn(async () => {});
@@ -77,6 +78,9 @@ const mockCore = {
     subscriber: {
       subscriptions: mockSubscriptions,
       topicMap: { clear: mockTopicMapClear },
+      pending: mockPendingSubscriptions,
+      // Private in the SDK: the topics it re-subscribes after a reconnect.
+      cached: [{ topic: 's1' }, { topic: 'p1' }] as { topic: string }[],
     },
   },
 };
@@ -149,6 +153,15 @@ test('sessions, proposals, requests, pairings, keys, expiries, history and messa
   expect(mockTransportClose).toHaveBeenCalledTimes(1);
   expect(mockV1Reset).toHaveBeenCalled();
   expect(WalletConnectService.getInstance().getActiveSessions()).toEqual([]);
+});
+
+test('the relay subscriber forgets its pending and cached topics, so a later reconnect does not subscribe them again', async () => {
+  WalletConnectService.getInstance();
+  mockPendingSubscriptions.set('s2', { topic: 's2' });
+  mockCore.relayer.subscriber.cached = [{ topic: 's2' }];
+  await settle();
+  expect(mockPendingSubscriptions.size).toBe(0);
+  expect(mockCore.relayer.subscriber.cached).toEqual([]);
 });
 
 describe('an initialize() and a wipe at the same time', () => {
