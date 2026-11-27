@@ -1,4 +1,11 @@
+import { Directory, File } from 'expo-file-system';
+import { Platform } from 'react-native';
 import { storage } from '@/platform';
+import {
+  BACKUP_FILE_EXTENSION,
+  backupDirectory,
+  pickerCacheDirectory,
+} from '@/services/backup/files';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { WRITE_TIMEOUT_MS } from '@/services/secure/boundedWrites';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -180,6 +187,79 @@ async function clearLeftoverRecord(): Promise<void> {
   }
 }
 
+/**
+ * The directories the wipe deletes, each with the name it is reported under
+ * when the delete cannot be confirmed. Names only: never a path or file name.
+ */
+const BACKUP_DIRECTORIES: { name: string; directory: () => Directory }[] = [
+  // Backups BackupService wrote and the user did not discard.
+  { name: 'file:backups', directory: backupDirectory },
+  // Copies of backup files picked for a restore.
+  { name: 'file:picker-cache', directory: pickerCacheDirectory },
+];
+const STRAY_BACKUPS_NAME = 'file:cache-backups';
+
+/**
+ * Run a file-system delete, bounded. The installed expo-file-system delete is
+ * synchronous; the bound covers one that returns a promise.
+ */
+function deleteBounded(item: Directory | File): Promise<void> {
+  return withTimeout(
+    Promise.resolve().then(() => item.delete()),
+    WRITE_TIMEOUT_MS,
+    stepTimedOut
+  );
+}
+
+/** Delete a directory with everything in it. Missing counts as done. */
+async function deleteDirectory(directory: () => Directory): Promise<void> {
+  const dir = directory();
+  if (dir.exists) await deleteBounded(dir);
+  if (dir.exists) throw new Error('directory remains');
+}
+
+/** Delete backup files left directly in the cache (no writer puts them there). */
+async function deleteStrayBackupFiles(): Promise<void> {
+  const parent = backupDirectory().parentDirectory;
+  const stray = () =>
+    parent.exists
+      ? parent
+          .list()
+          .filter(
+            (item): item is File =>
+              item instanceof File && item.uri.endsWith(BACKUP_FILE_EXTENSION)
+          )
+      : [];
+  await Promise.allSettled(stray().map(deleteBounded));
+  if (stray().length > 0) throw new Error('backup files remain');
+}
+
+/**
+ * Delete the backup files in the app cache: each one holds every key of the
+ * wallet, encrypted with the backup password. Returns the names of the steps
+ * that could not be confirmed. Touches no storage key, so nothing on the
+ * allow-list. The web build has no app file system.
+ */
+async function deleteBackupFiles(): Promise<string[]> {
+  if (Platform.OS === 'web') return [];
+  const steps = [
+    ...BACKUP_DIRECTORIES.map(({ name, directory }) => ({
+      name,
+      run: () => deleteDirectory(directory),
+    })),
+    { name: STRAY_BACKUPS_NAME, run: deleteStrayBackupFiles },
+  ];
+  const unresolved: string[] = [];
+  for (const { name, run } of steps) {
+    try {
+      await run();
+    } catch {
+      unresolved.push(name);
+    }
+  }
+  return unresolved;
+}
+
 async function runWipe(): Promise<void> {
   await AccountSecureStorage.beginWipe();
   // Before the first delete: every store forgets the previous wallet, and
@@ -216,10 +296,11 @@ async function runWipe(): Promise<void> {
   } catch {
     throw new WipeIncompleteError([LEGACY_WALLET_BLOB_NAME]);
   }
+  const backupFiles = await deleteBackupFiles();
 
   // The local purges write their own (emptied) records; let them land before
   // general storage is listed and swept.
-  const unresolved = new Set<string>(await purges);
+  const unresolved = new Set<string>([...(await purges), ...backupFiles]);
   let keys: string[] = [];
   try {
     keys = await listStorageKeys();
@@ -255,8 +336,9 @@ async function runWipe(): Promise<void> {
  * Order: record the wipe request (so a crash or an incomplete wipe is finished
  * by the next boot instead of being mistaken for a finished one); reset every
  * in-memory store; erase secure storage (bounded, outcomes checked); erase the
- * wallet blob and verify it reads back absent; delete secure items outside the
- * account layer; remove every general-storage key not on the allow-list and
+ * wallet blob and verify it reads back absent; delete the backup files in the
+ * app cache and verify they are gone; delete secure items outside the account
+ * layer; remove every general-storage key not on the allow-list and
  * list storage again to confirm; only then clear the request. It resolves ONLY
  * when every step is complete; otherwise it throws WipeIncompleteError naming
  * what is unresolved (never values). Callers must not show "deleted" or route

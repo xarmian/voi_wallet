@@ -113,6 +113,86 @@ jest.mock('@/services/envoi', () => ({
   },
 }));
 
+// The app cache as an in-memory file tree, with the expo-file-system 58 calls
+// the wipe makes: Directory exists, list and parentDirectory, and a delete that
+// throws when the path is absent and removes a directory with everything in it.
+const MOCK_CACHE = 'file:///cache';
+const mockDirs = new Set<string>();
+const mockFiles = new Set<string>();
+// Directory or file URIs whose delete throws, never settles, or returns
+// without removing anything.
+let mockDeleteFailures = new Set<string>();
+let mockDeleteHangs = new Set<string>();
+let mockDeleteIgnored = new Set<string>();
+
+jest.mock('expo-file-system', () => {
+  const join = (...parts: (string | { uri: string })[]) =>
+    parts
+      .map((p) => (typeof p === 'string' ? p : p.uri))
+      .map((p) => p.replace(/\/+$/, ''))
+      .join('/');
+  const parentOf = (uri: string) => uri.slice(0, uri.lastIndexOf('/'));
+  const remove = (uri: string, exists: boolean) => {
+    if (mockDeleteFailures.has(uri)) throw new Error('delete failed');
+    if (mockDeleteHangs.has(uri)) return new Promise<void>(() => {});
+    if (!exists) throw new Error('path does not exist');
+    if (mockDeleteIgnored.has(uri)) return undefined;
+    mockFiles.delete(uri);
+    mockDirs.delete(uri);
+    for (const f of [...mockFiles])
+      if (f.startsWith(`${uri}/`)) mockFiles.delete(f);
+    for (const d of [...mockDirs])
+      if (d.startsWith(`${uri}/`)) mockDirs.delete(d);
+    return undefined;
+  };
+  class File {
+    uri: string;
+    constructor(...parts: (string | { uri: string })[]) {
+      this.uri = join(...parts);
+    }
+    get exists() {
+      return mockFiles.has(this.uri);
+    }
+    delete() {
+      return remove(this.uri, this.exists);
+    }
+  }
+  class Directory {
+    uri: string;
+    constructor(...parts: (string | { uri: string })[]) {
+      this.uri = join(...parts);
+    }
+    get exists() {
+      return mockDirs.has(this.uri);
+    }
+    get parentDirectory() {
+      return new Directory(parentOf(this.uri));
+    }
+    delete() {
+      return remove(this.uri, this.exists);
+    }
+    list() {
+      return [
+        ...[...mockDirs]
+          .filter((d) => parentOf(d) === this.uri)
+          .map((d) => new Directory(d)),
+        ...[...mockFiles]
+          .filter((f) => parentOf(f) === this.uri)
+          .map((f) => new File(f)),
+      ];
+    }
+  }
+  return {
+    File,
+    Directory,
+    Paths: {
+      get cache() {
+        return new Directory(MOCK_CACHE);
+      },
+    },
+  };
+});
+
 import { wipeAllLocalData } from '../index';
 import { registerWipeReset } from '../gate';
 import { useFriendsStore } from '@/store/friendsStore';
@@ -170,6 +250,12 @@ beforeEach(() => {
   mockNonce = 0;
   mockEnvoiLookup.resolve = undefined;
   useFriendsStore.setState({ friends: [], isInitialized: false });
+  mockDirs.clear();
+  mockDirs.add(MOCK_CACHE);
+  mockFiles.clear();
+  mockDeleteFailures = new Set();
+  mockDeleteHangs = new Set();
+  mockDeleteIgnored = new Set();
 });
 
 // A delete still refused when a test ends leaves its name in the wipe's
@@ -456,5 +542,92 @@ describe('in-memory state', () => {
       unregister();
       jest.useRealTimers();
     }
+  });
+});
+
+describe('backup files in the app cache', () => {
+  const BACKUPS = `${MOCK_CACHE}/backups`;
+  const PICKER = `${MOCK_CACHE}/DocumentPicker`;
+  const seedBackupFiles = () => {
+    mockDirs.add(BACKUPS);
+    mockDirs.add(PICKER);
+    mockFiles.add(`${BACKUPS}/voi-wallet-backup-2026-11-27.voibackup`);
+    mockFiles.add(`${PICKER}/0f8e7d6c.voibackup`);
+  };
+  const failure = async () =>
+    wipeAllLocalData().then(
+      () => undefined,
+      (e: unknown) => e
+    );
+
+  test('a written backup and a picked copy are deleted, and other cache files stay', async () => {
+    seedBackupFiles();
+    mockFiles.add(`${MOCK_CACHE}/stray.voibackup`);
+    mockFiles.add(`${MOCK_CACHE}/image.png`);
+    await wipeAllLocalData();
+    expect(mockDirs.has(BACKUPS)).toBe(false);
+    expect(mockDirs.has(PICKER)).toBe(false);
+    expect([...mockFiles]).toEqual([`${MOCK_CACHE}/image.png`]);
+  });
+
+  test('missing backup directories are fine: the wipe completes', async () => {
+    seed(WIPED);
+    await expect(wipeAllLocalData()).resolves.toBeUndefined();
+    expect(mockPlain.has('voi_wipe_intent')).toBe(false);
+  });
+
+  test('a directory delete that throws makes the wipe incomplete, named by step only', async () => {
+    seedBackupFiles();
+    mockDeleteFailures = new Set([BACKUPS]);
+    const error = await failure();
+    expect(error).toBeInstanceOf(WipeIncompleteError);
+    const keys = (error as WipeIncompleteError).keys;
+    expect(keys).toContain('file:backups');
+    expect(keys).not.toContain('file:picker-cache');
+    const text = `${keys.join(' ')} ${(error as Error).message}`;
+    expect(text).not.toContain('voibackup');
+    expect(text).not.toContain('file:///');
+    expect(mockPlain.get('voi_wipe_intent')).toBe('1');
+    // The other directory is still deleted.
+    expect(mockDirs.has(PICKER)).toBe(false);
+  });
+
+  test('a directory delete that never settles is bounded and unresolved', async () => {
+    seedBackupFiles();
+    mockDeleteHangs = new Set([PICKER]);
+    jest.useFakeTimers();
+    try {
+      const outcome = failure();
+      await jest.advanceTimersByTimeAsync(6000);
+      expect(await outcome).toMatchObject({
+        name: 'WipeIncompleteError',
+        keys: expect.arrayContaining(['file:picker-cache']),
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('a directory still present after its delete is unresolved', async () => {
+    seedBackupFiles();
+    mockDeleteIgnored = new Set([BACKUPS]);
+    expect(await failure()).toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: expect.arrayContaining(['file:backups']),
+    });
+  });
+
+  test('a backup file left in the cache itself that cannot be deleted is unresolved', async () => {
+    const stray = `${MOCK_CACHE}/stray.voibackup`;
+    mockFiles.add(stray);
+    mockDeleteFailures = new Set([stray]);
+    const error = await failure();
+    expect(error).toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: expect.arrayContaining(['file:cache-backups']),
+    });
+    expect((error as WipeIncompleteError).keys.join(' ')).not.toContain(
+      'stray'
+    );
   });
 });

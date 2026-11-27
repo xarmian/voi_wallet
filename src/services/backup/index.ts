@@ -4,7 +4,7 @@
  * Main service for creating and restoring encrypted wallet backups.
  */
 
-import { Directory, File, Paths } from 'expo-file-system';
+import { Directory, File } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import Constants from 'expo-constants';
 import {
@@ -34,6 +34,7 @@ import {
 } from './collectors';
 import type { FreshAuthCapability } from '@/services/secure/freshAuth';
 import { AccountType } from '@/types/wallet';
+import { BACKUP_FILE_EXTENSION, backupDirectory } from './files';
 import {
   performFullRestore,
   planRestore,
@@ -58,7 +59,7 @@ function formatDateForFilename(date: Date): string {
  */
 function generateBackupFilename(): string {
   const dateStr = formatDateForFilename(new Date());
-  return `voi-wallet-${dateStr}.voibackup`;
+  return `voi-wallet-${dateStr}${BACKUP_FILE_EXTENSION}`;
 }
 
 const INVALID_FILE =
@@ -152,7 +153,7 @@ export function assertEnvelopeMatchesPayload(
  * Get the backup cache directory
  */
 async function getBackupDirectory(): Promise<Directory> {
-  const backupDir = new Directory(Paths.cache, 'backups');
+  const backupDir = backupDirectory();
   if (!backupDir.exists) {
     await backupDir.create();
   }
@@ -591,14 +592,14 @@ export class BackupService {
    */
   static async cleanupTempFiles(): Promise<void> {
     try {
-      const backupDir = new Directory(Paths.cache, 'backups');
+      const backupDir = backupDirectory();
       if (!backupDir.exists) {
         return;
       }
 
       const contents = await backupDir.list();
       for (const item of contents) {
-        if (item instanceof File && item.uri.endsWith('.voibackup')) {
+        if (item instanceof File && item.uri.endsWith(BACKUP_FILE_EXTENSION)) {
           try {
             await item.delete();
           } catch {
