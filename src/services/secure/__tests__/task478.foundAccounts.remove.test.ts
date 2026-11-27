@@ -540,4 +540,32 @@ describe("TASK-478 deleting a wallet account's slot clears verdicts naming it", 
     expect(actionableOf(summary).ids).toContain(formatA.id);
     expect(idsNeedingScan(summary)).toContain(formatA.id);
   });
+
+  it('a delete that fails after the slot is gone still clears the verdict', async () => {
+    const { formatA, account } = await canaryInWalletScanned();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    // The slot delete succeeds; the metadata remove after it fails.
+    mockPlatform.__state.fault = (op, key) =>
+      op === 'kv.remove' && key === `voi_account_metadata_${account.id}`
+        ? 'reject'
+        : undefined;
+    await expect(
+      AccountSecureStorage.deleteAccount(account.id)
+    ).rejects.toThrow();
+    mockPlatform.__state.fault = undefined;
+    warn.mockRestore();
+    expect(mockPlatform.__secure.has(SECRET(account.id))).toBe(false);
+    expect(readScanMap()?.[formatA.id]).toEqual({ address: CANARY_ADDRESS });
+    const summary = await readFoundAccountsSummary();
+    expect(
+      (await MultiAccountWalletService.readWalletStrict())!.accounts.map(
+        (a) => a.id
+      )
+    ).toContain(account.id);
+    expect(summary.rows.find((r) => r.id === formatA.id)).toMatchObject({
+      kind: 'in-wallet',
+      walletType: AccountType.STANDARD,
+    });
+    expect(actionableOf(summary).ids).toContain(formatA.id);
+  });
 });

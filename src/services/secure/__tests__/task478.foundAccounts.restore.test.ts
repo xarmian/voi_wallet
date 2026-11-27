@@ -46,12 +46,15 @@ import * as freshAuth from '@/services/secure/freshAuth';
 import type { FreshAuthCapability } from '@/services/secure/freshAuth';
 import { MultiAccountWalletService } from '@/services/wallet';
 import {
+  actionableOf,
   readFoundAccountsSummary,
   restoreFoundAccount,
   scanFoundAccounts,
 } from '../foundAccounts';
 import { idsNeedingScan } from '../foundAccountsCount';
 import {
+  CANARY_ADDRESS,
+  CANARY_MNEMONIC,
   PIN,
   SECRET,
   addWatch,
@@ -372,6 +375,39 @@ describe('TASK-478 restore a found account', () => {
     expect(warn).toHaveBeenCalledWith('[foundAccounts] scan record not saved');
     expect(readScanMap()?.[formatA.id]).toEqual({ address: formatA.address });
     expect(readRegistry()).toContain(formatA.id);
+  });
+
+  it("a released restore records the new account's verdict on the other copies", async () => {
+    await addWatch();
+    await AccountSecureStorage.setupPin(PIN, 'pin');
+    unlock();
+    const q1 = await writeUnboundKey('copy-1', CANARY_MNEMONIC);
+    const q2 = await writeUnboundKey('copy-2', CANARY_MNEMONIC);
+    await boot();
+    unlock();
+    await scanAll();
+    const row = (await readFoundAccountsSummary()).rows.find(
+      (r) => r.kind === 'ready' && r.address === CANARY_ADDRESS
+    );
+    expect(row?.kind === 'ready' && row.ids.sort()).toEqual(
+      [q1.id, q2.id].sort()
+    );
+
+    expect(await restore(q1)).toEqual({
+      kind: 'restored',
+      address: CANARY_ADDRESS,
+    });
+    const account = await walletAccountAt(CANARY_ADDRESS);
+    expect(mockPlatform.__secure.has(SECRET(q1.id))).toBe(false);
+    expect(readScanMap()).toEqual({
+      [q2.id]: {
+        address: CANARY_ADDRESS,
+        wallet: { ownerId: account!.id, keyUsable: true },
+      },
+    });
+    const summary = await readFoundAccountsSummary();
+    expect(idsNeedingScan(summary)).toEqual([]);
+    expect(actionableOf(summary).ids).not.toContain(q2.id);
   });
 
   it('a commit failure after the wallet write reports restored-unconfirmed', async () => {

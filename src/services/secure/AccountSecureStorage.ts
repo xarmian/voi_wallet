@@ -3096,7 +3096,9 @@ export class AccountSecureStorage {
    * copy ('kept'); only an unknown write outcome is rethrown. A 'kept' after
    * the new slot was inspected records that answer on every scan entry with
    * `address` (true only for key-matches; nothing when a locked vault can't
-   * tell), best effort, so the kept copy lists without another scan.
+   * tell), best effort, so the kept copy lists without another scan. A
+   * 'released' records true for `newId` on the remaining copies of `address`
+   * the same way, so they list as duplicates without another scan.
    */
   static async releaseRestoredOrphan(
     oldId: string,
@@ -3123,6 +3125,11 @@ export class AccountSecureStorage {
         if (slot.state !== 'key-matches') return await kept();
         await this.deleteAccountLocked(oldId);
         await this.dropQuarantineRecordsLocked(oldId);
+        // The remaining copies of `address` are duplicates of the new account.
+        await this.recordWalletVerdictLocked(address, {
+          ownerId: newId,
+          keyUsable: true,
+        });
         return 'released' as const;
       } catch (error) {
         if (error instanceof WriteOutcomeUnknownError) throw error;
@@ -3903,9 +3910,10 @@ export class AccountSecureStorage {
    * found-accounts scan entry and notice record (TASK-478). Every found key's
    * verdict that names the id as its wallet account loses it (the address
    * stays), since the slot it described is gone; the next scan checks again,
-   * and until then the key counts. Best-effort: a corrupt registry or record
-   * must never turn a completed delete into a failure. The caller holds the
-   * key-mutation mutex.
+   * and until then the key counts. deleteAccountLocked already cleared those
+   * verdicts before its first slot write; clearing again here is harmless.
+   * Best-effort: a corrupt registry or record must never turn a completed
+   * delete into a failure. The caller holds the key-mutation mutex.
    */
   private static async dropQuarantineRecordsLocked(
     accountId: string
@@ -3926,19 +3934,13 @@ export class AccountSecureStorage {
     } catch {
       console.warn('[deleteAccount] reconcile record cleanup failed');
     }
+    await this.clearVerdictsNamingLocked(accountId);
     try {
       const scan = await this.readQuarantineScanTolerant();
-      let changed = false;
       if (accountId in scan) {
         delete scan[accountId];
-        changed = true;
+        await this.writeQuarantineScanLocked(scan);
       }
-      for (const [id, entry] of Object.entries(scan))
-        if ('address' in entry && entry.wallet?.ownerId === accountId) {
-          scan[id] = { address: entry.address };
-          changed = true;
-        }
-      if (changed) await this.writeQuarantineScanLocked(scan);
       const seen = await this.readFoundNoticeSeen();
       if (seen.includes(accountId))
         await this.writeFoundNoticeSeenLocked(
@@ -3946,6 +3948,31 @@ export class AccountSecureStorage {
         );
     } catch {
       console.warn('[deleteAccount] found-accounts record cleanup failed');
+    }
+  }
+
+  /**
+   * Strips the `wallet` verdict (keeping the address) from every found key's
+   * scan entry that names `accountId` as its wallet account. Runs before that
+   * account's slot is deleted, so a delete that fails partway never leaves a
+   * verdict describing a slot that is gone: a missing verdict is always safe
+   * (the key counts and is scanned again). Best effort: a failure is logged
+   * without detail and never thrown. The caller holds the key-mutation mutex.
+   */
+  private static async clearVerdictsNamingLocked(
+    accountId: string
+  ): Promise<void> {
+    try {
+      const scan = await this.readQuarantineScanTolerant();
+      let changed = false;
+      for (const [id, entry] of Object.entries(scan))
+        if ('address' in entry && entry.wallet?.ownerId === accountId) {
+          scan[id] = { address: entry.address };
+          changed = true;
+        }
+      if (changed) await this.writeQuarantineScanLocked(scan);
+    } catch {
+      console.warn('[deleteAccount] found-accounts verdict cleanup failed');
     }
   }
 
@@ -4067,6 +4094,8 @@ export class AccountSecureStorage {
   /** RAW deleteAccount (no mutex acquire) — for callers already holding it
    *  (e.g. clearAll). */
   private static async deleteAccountLocked(accountId: string): Promise<void> {
+    // Before the first slot write: a later step can throw with the slot gone.
+    await this.clearVerdictsNamingLocked(accountId);
     try {
       // Remove from secure storage
       await this.saveSecret(accountId, null);
