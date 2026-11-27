@@ -85,6 +85,7 @@ import { FABRadialMenu } from '@/components/navigation/FABRadialMenu';
 import { FAB_SIZE } from '@/components/navigation/fabGeometry';
 import { useUpdateStore } from '@/store/updateStore';
 import { initializeServices } from './serviceBootstrap';
+import { useRemoteSignerReady } from './useRemoteSignerReady';
 
 // Import TransactionHistoryScreen directly to avoid async-require issues in EAS builds
 import TransactionHistoryScreen from '@/screens/wallet/TransactionHistoryScreen';
@@ -885,16 +886,8 @@ function MainTabNavigator() {
   const { theme, nftBackgroundEnabled } = useTheme();
   const styles = useThemedStyles(createStyles);
   const appMode = useAppMode();
-  const isInitialized = useRemoteSignerStore((state) => state.isInitialized);
-  const initStartedRef = useRef(false);
-
-  // Initialize remote signer store on mount to get the correct app mode
-  useEffect(() => {
-    if (!isInitialized && !initStartedRef.current) {
-      initStartedRef.current = true;
-      useRemoteSignerStore.getState().initialize();
-    }
-  }, [isInitialized]);
+  // Initializes the remote signer store (the app mode) while mounted.
+  const isInitialized = useRemoteSignerReady();
 
   // Wait for remote signer store to initialize before rendering
   // This prevents briefly showing the wrong navigator and triggering unnecessary network calls
