@@ -74,6 +74,12 @@ export default function RestoreWalletScreen() {
     uri: string;
     name: string;
   } | null>(null);
+  // The latest selected file, for callbacks that run after a render has passed
+  // (the Restore Failed alert's OK).
+  const selectedFileRef = useRef(selectedFile);
+  useEffect(() => {
+    selectedFileRef.current = selectedFile;
+  }, [selectedFile]);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [showProgressModal, setShowProgressModal] = useState(false);
   const [showConfirmationModal, setShowConfirmationModal] = useState(false);
@@ -305,6 +311,10 @@ export default function RestoreWalletScreen() {
             : {}
       );
       setShowProgressModal(false);
+      // The file is restored: drop it, so a later lock cover does not ask for
+      // its password again. The report below uses only the result.
+      setSelectedFile(null);
+      setBackupInfo(null);
 
       // Reload theme to reflect restored settings
       await reloadTheme();
@@ -391,11 +401,25 @@ export default function RestoreWalletScreen() {
       ]);
     } catch (err) {
       setShowProgressModal(false);
+      // The file card would show a count for a restore that did not happen.
+      setBackupInfo(null);
       const message =
         err instanceof BackupError
           ? err.message
           : 'Failed to restore backup. Please try again.';
-      Alert.alert('Restore Failed', message, [{ text: 'OK' }]);
+      const failedFile = selectedFile;
+      Alert.alert('Restore Failed', message, [
+        {
+          text: 'OK',
+          onPress: () => {
+            // Back to the password step for the same file, unless the file was
+            // dropped while the alert was up (the old-PIN session ended).
+            if (selectedFileRef.current !== failedFile) return;
+            setError(undefined);
+            setShowPasswordModal(true);
+          },
+        },
+      ]);
       if (oldPin === 'forgotten') {
         // The step may have removed the PIN before it failed: show what is true.
         AccountSecureStorage.hasPinStrict()
