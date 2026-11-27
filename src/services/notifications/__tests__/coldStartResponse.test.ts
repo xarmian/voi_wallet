@@ -20,6 +20,11 @@ let mockResponseListener: ((response: unknown) => void) | null = null;
 // Shared across jest.isolateModules registries (each re-runs this factory), so
 // the spies below are the ones the freshly loaded service actually calls.
 const mockGetLastResponse = jest.fn(async (): Promise<unknown> => null);
+const mockClearLastResponse = jest.fn((): void => {});
+const mockDismissAll = jest.fn(async (): Promise<void> => {});
+const mockSetBadgeCount = jest.fn(
+  async (_count: number): Promise<boolean> => true
+);
 const mockAddResponseListener = jest.fn(
   (listener: (response: unknown) => void) => {
     mockResponseListener = listener;
@@ -33,6 +38,9 @@ jest.mock('expo-notifications', () => ({
     listener: (response: unknown) => void
   ) => mockAddResponseListener(listener),
   getLastNotificationResponseAsync: () => mockGetLastResponse(),
+  clearLastNotificationResponse: () => mockClearLastResponse(),
+  dismissAllNotificationsAsync: () => mockDismissAll(),
+  setBadgeCountAsync: (count: number) => mockSetBadgeCount(count),
   AndroidImportance: { HIGH: 4, DEFAULT: 3 },
 }));
 
@@ -69,6 +77,21 @@ const loadService = () => {
     service = require('../index').notificationService;
   });
   return service!;
+};
+
+/** A fresh singleton and the wipe gate from the same module registry. */
+const loadWithGate = () => {
+  let loaded: {
+    service: typeof import('../index').notificationService;
+    gate: typeof import('@/services/wipe/gate');
+  };
+  jest.isolateModules(() => {
+    loaded = {
+      service: require('../index').notificationService,
+      gate: require('@/services/wipe/gate'),
+    };
+  });
+  return loaded!;
 };
 
 describe('notificationService cold-start response (TASK-381)', () => {
@@ -139,5 +162,197 @@ describe('notificationService cold-start response (TASK-381)', () => {
     expect(mockGetLastResponse).not.toHaveBeenCalled();
     expect(mockAddResponseListener).not.toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  describe('a wipe (TASK-469)', () => {
+    // A launch response queued by an earlier test that never read it must not
+    // leak in here.
+    beforeEach(() => {
+      mockGetLastResponse.mockReset();
+      mockGetLastResponse.mockImplementation(async () => null);
+      mockClearLastResponse.mockReset();
+      mockDismissAll.mockReset();
+      mockDismissAll.mockImplementation(async () => {});
+      mockSetBadgeCount.mockReset();
+      mockSetBadgeCount.mockImplementation(async () => true);
+    });
+
+    /** The notifications reset's pending work in a run of the resets. */
+    const notificationsWork = (run: {
+      pending: { name: string; done: Promise<unknown> }[];
+    }) => run.pending.find(({ name }) => name === 'notifications')?.done;
+
+    it('dismisses the delivered notifications and clears the badge, and the wipe waits for both', async () => {
+      const { service, gate } = loadWithGate();
+      const run = gate.runWipeResets();
+      expect(run.failed).toEqual([]);
+      const work = notificationsWork(run);
+      expect(work).toBeDefined();
+      await expect(work).resolves.toBeDefined();
+      expect(mockDismissAll).toHaveBeenCalledTimes(1);
+      expect(mockSetBadgeCount).toHaveBeenCalledWith(0);
+      service.cleanup();
+    });
+
+    it.each([
+      ['dismissing the delivered notifications', () => mockDismissAll],
+      ['clearing the badge', () => mockSetBadgeCount],
+    ] as const)(
+      'a failure %s fails the notifications reset, and the other resets still run',
+      async (_what, failing) => {
+        (failing() as jest.Mock).mockImplementation(async () => {
+          throw new Error('native call failed');
+        });
+        const { service, gate } = loadWithGate();
+        const probe = jest.fn();
+        gate.registerWipeReset('probe', probe);
+        const run = gate.runWipeResets();
+        await expect(notificationsWork(run)).rejects.toThrow(
+          'native call failed'
+        );
+        expect(probe).toHaveBeenCalledTimes(1);
+        // Both are started; one failing does not skip the other.
+        expect(mockDismissAll).toHaveBeenCalledTimes(1);
+        expect(mockSetBadgeCount).toHaveBeenCalledWith(0);
+        // The synchronous clears ran first.
+        expect(mockClearLastResponse).toHaveBeenCalledTimes(1);
+        service.cleanup();
+      }
+    );
+
+    // expo-notifications holds the launch response natively for the whole
+    // process: every read returns it until it is cleared.
+    const holdLaunchResponse = (held: unknown) => {
+      let current = held;
+      mockGetLastResponse.mockImplementation(async () => current);
+      mockClearLastResponse.mockImplementation(() => {
+        current = null;
+      });
+    };
+
+    it('a launch tap is not delivered again by an initialize after a wipe', async () => {
+      holdLaunchResponse(
+        response('notif-11', { type: 'payment', txId: 'TXOLD' })
+      );
+      const { service, gate } = loadWithGate();
+      const handler = jest.fn();
+      service.setNotificationTapHandler(handler);
+      await service.initialize();
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      // The wipe: the resets run, then the sweep removes the last-handled id.
+      gate.openWipeWindow();
+      const run = gate.runWipeResets();
+      mockStorage.clear();
+      gate.closeWipeWindow();
+      expect(run.failed).toEqual([]);
+
+      // Re-enabling notifications in Settings runs initialize() again.
+      await service.initialize();
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(mockClearLastResponse).toHaveBeenCalledTimes(1);
+      service.cleanup();
+    });
+
+    it('a failed native clear is reported as the notifications reset failing, and the queued tap is still dropped', async () => {
+      holdLaunchResponse(response('notif-12', { type: 'payment' }));
+      mockClearLastResponse.mockImplementation(() => {
+        throw new Error('native clear failed');
+      });
+      const { service, gate } = loadWithGate();
+      await service.initialize();
+      expect(service.getPendingNotificationTap()).not.toBeNull();
+
+      const run = gate.runWipeResets();
+      expect(run.failed).toEqual(['notifications']);
+      expect(service.getPendingNotificationTap()).toBeNull();
+      service.cleanup();
+    });
+
+    it('drops a tap queued before the wipe, so a later tap handler does not get it', async () => {
+      mockGetLastResponse.mockResolvedValueOnce(
+        response('notif-5', { type: 'payment', txId: 'TX1' })
+      );
+      const { service, gate } = loadWithGate();
+      await service.initialize();
+      expect(service.getPendingNotificationTap()).not.toBeNull();
+
+      gate.runWipeResets();
+      expect(service.getPendingNotificationTap()).toBeNull();
+      const handler = jest.fn();
+      service.setNotificationTapHandler(handler);
+      expect(handler).not.toHaveBeenCalled();
+      service.cleanup();
+    });
+
+    it('does not queue a launch tap read while a wipe runs', async () => {
+      const read: { answer?: (value: unknown) => void } = {};
+      mockGetLastResponse.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            read.answer = resolve;
+          })
+      );
+      const { service, gate } = loadWithGate();
+      const starting = service.initialize();
+      for (let i = 0; i < 50 && !read.answer; i++) await Promise.resolve();
+      expect(read.answer).toBeDefined();
+      gate.openWipeWindow();
+      gate.runWipeResets();
+      read.answer!(response('notif-9', { type: 'payment' }));
+      await starting;
+      gate.closeWipeWindow();
+
+      expect(service.getPendingNotificationTap()).toBeNull();
+      const handler = jest.fn();
+      service.setNotificationTapHandler(handler);
+      expect(handler).not.toHaveBeenCalled();
+      service.cleanup();
+    });
+
+    it('a tap dropped by the wipe logs one fixed line and none of its payload', async () => {
+      const { service, gate } = loadWithGate();
+      await service.initialize();
+      const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        gate.openWipeWindow();
+        mockResponseListener!(
+          response('notif-10', { type: 'payment', txId: 'TXSECRET' })
+        );
+        gate.closeWipeWindow();
+        const logged = JSON.stringify(log.mock.calls);
+        expect(logged).not.toContain('TXSECRET');
+        const tapLines = log.mock.calls.filter((call) =>
+          /tap/i.test(String(call[0]))
+        );
+        expect(tapLines).toEqual([['[Notifications] Tap dropped by a wipe']]);
+      } finally {
+        log.mockRestore();
+        service.cleanup();
+      }
+    });
+
+    it('ignores a tap that arrives while the wipe runs, queued or delivered', async () => {
+      const { service, gate } = loadWithGate();
+      await service.initialize();
+
+      gate.openWipeWindow();
+      mockResponseListener!(response('notif-6', { type: 'payment' }));
+      gate.closeWipeWindow();
+      expect(service.getPendingNotificationTap()).toBeNull();
+      const handler = jest.fn();
+      service.setNotificationTapHandler(handler);
+      expect(handler).not.toHaveBeenCalled();
+
+      gate.openWipeWindow();
+      mockResponseListener!(response('notif-7', { type: 'payment' }));
+      gate.closeWipeWindow();
+      expect(handler).not.toHaveBeenCalled();
+
+      // Once the wipe has settled, taps are delivered again.
+      mockResponseListener!(response('notif-8', { type: 'payment' }));
+      expect(handler).toHaveBeenCalledWith({ type: 'payment' }, 'notif-8');
+      service.cleanup();
+    });
   });
 });

@@ -1,5 +1,5 @@
 /**
- * TASK-469: wipeWalletData records the request first, clears it last, only when
+ * TASK-469: wipeAllLocalData records the request first, clears it last, only when
  * everything is complete, and every partial state it can leave is finished by a
  * retry (the boot calls the same function when the marker is found).
  */
@@ -75,6 +75,7 @@ jest.mock('@/platform', () => ({
     multiRemove: jest.fn(async (keys: string[]) => {
       keys.forEach((key) => mockPlainValues.delete(key));
     }),
+    getAllKeys: jest.fn(async () => [...mockPlainValues.keys()]),
   },
   biometrics: {},
   deviceId: {},
@@ -98,7 +99,7 @@ import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { WipeIncompleteError } from '@/types/wallet';
 import { UNKNOWN_WRITES_STORAGE_KEY } from '@/services/secure/boundedWrites';
 import {
-  wipeWalletData,
+  wipeAllLocalData,
   isWipeInFlight,
   WALLET_BLOB_NAME,
   LEGACY_WALLET_BLOB_NAME,
@@ -169,7 +170,7 @@ beforeEach(() => {
 describe('marker lifecycle', () => {
   test('the request is recorded before the first delete and cleared last, after the wallet blob', async () => {
     seedWallet(['one']);
-    await wipeWalletData();
+    await wipeAllLocalData();
     expect(mockEvents[0]).toBe(`set:${MARKER}`);
     expect(mockEvents[mockEvents.length - 1]).toBe(`remove:${MARKER}`);
     expect(mockEvents.indexOf('wallet-blob')).toBeLessThan(
@@ -185,7 +186,7 @@ describe('marker lifecycle', () => {
   test('if the request cannot be recorded the wipe does not start: nothing is deleted', async () => {
     seedWallet(['one']);
     mockMarkerSetFailure = true;
-    await expect(wipeWalletData()).rejects.toMatchObject({
+    await expect(wipeAllLocalData()).rejects.toMatchObject({
       name: 'WipeIncompleteError',
       keys: [MARKER],
     });
@@ -201,7 +202,9 @@ describe('marker lifecycle', () => {
     ).mockImplementationOnce(async () => {
       throw new Error('delete failed');
     });
-    await expect(wipeWalletData()).rejects.toBeInstanceOf(WipeIncompleteError);
+    await expect(wipeAllLocalData()).rejects.toBeInstanceOf(
+      WipeIncompleteError
+    );
     expect(mockPlainValues.get(MARKER)).toBe('1');
     expect(mockEvents).not.toContain('wallet-blob');
   });
@@ -209,7 +212,7 @@ describe('marker lifecycle', () => {
   test('a failed wallet-blob clear is incomplete, named, and keeps the request', async () => {
     seedWallet(['one']);
     mockWalletsFailure = true;
-    await expect(wipeWalletData()).rejects.toMatchObject({
+    await expect(wipeAllLocalData()).rejects.toMatchObject({
       name: 'WipeIncompleteError',
       keys: [WALLET_BLOB_NAME],
     });
@@ -219,7 +222,7 @@ describe('marker lifecycle', () => {
   test('a failure to clear the request reports incomplete (a stale marker must not wipe a later wallet)', async () => {
     seedWallet(['one']);
     mockMarkerRemoveFailure = true;
-    await expect(wipeWalletData()).rejects.toMatchObject({
+    await expect(wipeAllLocalData()).rejects.toMatchObject({
       name: 'WipeIncompleteError',
       keys: [MARKER],
     });
@@ -252,7 +255,7 @@ describe('the wallet-blob step is bounded and verified', () => {
   test('a blob that still reads back present is incomplete, and the request stays', async () => {
     seedWallet(['one']);
     mockBlobStillThere = true;
-    await expect(wipeWalletData()).rejects.toMatchObject({
+    await expect(wipeAllLocalData()).rejects.toMatchObject({
       name: 'WipeIncompleteError',
       keys: [WALLET_BLOB_NAME],
     });
@@ -262,7 +265,7 @@ describe('the wallet-blob step is bounded and verified', () => {
   test('a verification read that fails is incomplete, never "gone"', async () => {
     seedWallet(['one']);
     mockBlobVerifyFailure = true;
-    await expect(wipeWalletData()).rejects.toMatchObject({
+    await expect(wipeAllLocalData()).rejects.toMatchObject({
       name: 'WipeIncompleteError',
       keys: [WALLET_BLOB_NAME],
     });
@@ -274,7 +277,7 @@ describe('the wallet-blob step is bounded and verified', () => {
     try {
       seedWallet(['one']);
       mockWalletsHang = true;
-      const outcome = wipeWalletData().then(
+      const outcome = wipeAllLocalData().then(
         () => undefined,
         (error: unknown) => error
       );
@@ -294,7 +297,7 @@ describe('the legacy wallet copy and the marker write', () => {
   test('the legacy secure-store copy is deleted and confirmed before the request is cleared', async () => {
     seedWallet(['one']);
     mockSecureValues.set(LEGACY_WALLET_SECURE_KEY, '{"accounts":["a"]}');
-    await wipeWalletData();
+    await wipeAllLocalData();
     expect(mockSecureValues.has(LEGACY_WALLET_SECURE_KEY)).toBe(false);
     expect(
       mockEvents.indexOf(`secure-delete:${LEGACY_WALLET_SECURE_KEY}`)
@@ -305,7 +308,7 @@ describe('the legacy wallet copy and the marker write', () => {
     seedWallet(['one']);
     mockSecureValues.set(LEGACY_WALLET_SECURE_KEY, '{"accounts":["a"]}');
     mockLegacyDeleteFailure = true;
-    await expect(wipeWalletData()).rejects.toMatchObject({
+    await expect(wipeAllLocalData()).rejects.toMatchObject({
       name: 'WipeIncompleteError',
       keys: [LEGACY_WALLET_BLOB_NAME],
     });
@@ -317,7 +320,7 @@ describe('the legacy wallet copy and the marker write', () => {
     try {
       seedWallet(['one']);
       mockMarkerRemoveHang = true;
-      const first = wipeWalletData().then(
+      const first = wipeAllLocalData().then(
         () => undefined,
         (error: unknown) => error
       );
@@ -333,7 +336,7 @@ describe('the legacy wallet copy and the marker write', () => {
       // finished at boot. It is refused up front, so nothing is deleted.
       mockMarkerRemoveHang = false;
       seedWallet(['two']);
-      await expect(wipeWalletData()).rejects.toMatchObject({
+      await expect(wipeAllLocalData()).rejects.toMatchObject({
         name: 'WipeIncompleteError',
         keys: [MARKER],
       });
@@ -348,9 +351,9 @@ describe('the legacy wallet copy and the marker write', () => {
 describe('one wipe at a time', () => {
   test('a call made while a wipe runs joins it: one request written, one wallet clear', async () => {
     seedWallet(['one']);
-    const first = wipeWalletData();
+    const first = wipeAllLocalData();
     expect(isWipeInFlight()).toBe(true);
-    const second = wipeWalletData();
+    const second = wipeAllLocalData();
     await Promise.all([first, second]);
     expect(mockEvents.filter((e) => e === `set:${MARKER}`)).toHaveLength(1);
     expect(mockEvents.filter((e) => e === 'wallet-blob')).toHaveLength(1);
@@ -360,13 +363,13 @@ describe('one wipe at a time', () => {
   test('both callers see the same failure, and a later call starts a fresh wipe', async () => {
     seedWallet(['one']);
     mockWalletsFailure = true;
-    const first = wipeWalletData();
-    const second = wipeWalletData();
+    const first = wipeAllLocalData();
+    const second = wipeAllLocalData();
     await expect(first).rejects.toBeInstanceOf(WipeIncompleteError);
     await expect(second).rejects.toBeInstanceOf(WipeIncompleteError);
     expect(isWipeInFlight()).toBe(false);
     mockWalletsFailure = false;
-    await wipeWalletData();
+    await wipeAllLocalData();
     expectEverythingGone(['one']);
   });
 });
@@ -376,14 +379,14 @@ describe('a retry finishes the wipe from every partial state', () => {
     seedWallet(['one', 'two']);
     mockSecureValues.delete(secretKey('one'));
     mockPlainValues.set(MARKER, '1');
-    await wipeWalletData();
+    await wipeAllLocalData();
     expectEverythingGone(['one', 'two']);
   });
 
   test('accounts and PIN gone, wallet blob with phantom accounts still present', async () => {
     mockPlainValues.set('voi_wallet_metadata', '{"accounts":["phantom"]}');
     mockPlainValues.set(MARKER, '1');
-    await wipeWalletData();
+    await wipeAllLocalData();
     expectEverythingGone([]);
   });
 
@@ -391,14 +394,14 @@ describe('a retry finishes the wipe from every partial state', () => {
     mockSecureValues.set(service.PIN_KEY, 'pin');
     mockSecureValues.set(service.SALT_KEY, 'salt');
     mockPlainValues.set(MARKER, '1');
-    await wipeWalletData();
+    await wipeAllLocalData();
     expectEverythingGone([]);
   });
 
   test('killed right after the request was recorded (nothing else changed)', async () => {
     seedWallet(['one']);
     mockPlainValues.set(MARKER, '1');
-    await wipeWalletData();
+    await wipeAllLocalData();
     expectEverythingGone(['one']);
   });
 
@@ -418,7 +421,7 @@ describe('a retry finishes the wipe from every partial state', () => {
       );
       await jest.advanceTimersByTimeAsync(5001);
       await settled;
-      await expect(wipeWalletData()).rejects.toBeInstanceOf(
+      await expect(wipeAllLocalData()).rejects.toBeInstanceOf(
         WipeIncompleteError
       );
       expect(mockPlainValues.get(MARKER)).toBe('1');
@@ -437,7 +440,7 @@ describe('a retry finishes the wipe from every partial state', () => {
     (freshStorage as unknown as Record<string, unknown>).unknownJournalDesired =
       undefined;
     expect(await freshStorage.readWipeIntentStrict()).toBe(true);
-    await fresh.wipeWalletData();
+    await fresh.wipeAllLocalData();
     expectEverythingGone(['one']);
     expect(
       JSON.parse(mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY) ?? '{}')

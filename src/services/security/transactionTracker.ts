@@ -1,6 +1,7 @@
 import { storage, secureStorage } from '../../platform';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
 import { redactError } from '@/utils/logRedaction';
+import { wipeEpoch, wipedSince } from '@/services/wipe/gate';
 
 /**
  * Transaction Tracker - Prevents replay attacks and enforces rate limits
@@ -26,11 +27,14 @@ interface RateLimitRecord {
 
 export class TransactionTracker {
   private static async migrateLegacyItem(key: string): Promise<string | null> {
+    const epoch = wipeEpoch();
     try {
       const legacyValue = await secureStorage.getItem(key);
       if (!legacyValue) {
         return null;
       }
+      // TASK-492: a copy read before or during a wipe is not written back.
+      if (wipedSince(epoch)) return null;
 
       await storage.setItem(key, legacyValue);
       await secureStorage.deleteItem(key).catch(() => {});
@@ -113,17 +117,23 @@ export class TransactionTracker {
     txHash: string,
     from: string,
     to: string,
-    amount: string
+    amount: string,
+    // The wipe epoch when the send began: a wipe since then means this is the
+    // previous wallet's transaction, and it is not recorded (TASK-492).
+    epoch: number = wipeEpoch()
   ): Promise<void> {
     try {
       // Add to transaction cache
-      await this.addToCache({
-        txHash,
-        timestamp: Date.now(),
-        amount,
-        from,
-        to,
-      });
+      await this.addToCache(
+        {
+          txHash,
+          timestamp: Date.now(),
+          amount,
+          from,
+          to,
+        },
+        epoch
+      );
 
       // Update rate limits
       await this.updateRateLimits();
@@ -255,10 +265,13 @@ export class TransactionTracker {
    * Add transaction to cache
    */
   private static async addToCache(
-    transaction: TransactionRecord
+    transaction: TransactionRecord,
+    epoch: number
   ): Promise<void> {
     try {
       let cache = await this.getTransactionCache();
+      // No await between this check and the write.
+      if (wipedSince(epoch)) return;
 
       // Add new transaction
       cache.push(transaction);

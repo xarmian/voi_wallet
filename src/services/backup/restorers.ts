@@ -42,6 +42,7 @@ import {
   RestoreRecordResult,
 } from './types';
 import { redactAddress, redactError } from '@/utils/logRedaction';
+import { wipeEpoch, wipedSince } from '@/services/wipe/gate';
 
 // Storage keys for various settings
 const STORAGE_KEYS = {
@@ -1314,6 +1315,21 @@ export async function performFullRestore(
   // the storage operations below are awaiting completion.
   const stagedAccounts = accounts.map((account) => ({ ...account }));
   validateRetainedKeys(stagedAccounts);
+  // TASK-492: a restore that straddles a wipe writes none of the file's
+  // settings, friends or flags after it, and reports no success. The check
+  // runs before the breadcrumb, right after the accounts step returns (fresh
+  // or not), before each settings write, and once more after the last write;
+  // the first that finds a wipe stops the restore with RESTORE_FAILED, so no
+  // count is reported for a wiped device.
+  const epoch = wipeEpoch();
+  const stopIfWiped = () => {
+    if (wipedSince(epoch)) {
+      throw new BackupError(
+        'Failed to restore accounts: the wallet was deleted during the restore',
+        'RESTORE_FAILED'
+      );
+    }
+  };
 
   // Decide "fresh" BEFORE any account is added, from strict reads: a read
   // error stops the restore here, with nothing written. The decision runs
@@ -1339,11 +1355,14 @@ export async function performFullRestore(
   // boot into the fail-closed recovery screen (whose Reset WIPES this
   // just-restored wallet); the breadcrumb lets checkInitialAuthState route to
   // SecuritySetup (resume PIN setup) instead. setupPin clears it on success.
+  stopIfWiped();
   if (!hasPin) {
     await markPinSetupPending();
   }
 
   const accountCounts = await restoreAccounts(stagedAccounts, options);
+  // A wipe during the accounts step deleted what it added.
+  stopIfWiped();
 
   // The device was fresh when this restore began; if another writer put an
   // account on the wallet before our commit, it is not fresh now, and the file
@@ -1354,13 +1373,21 @@ export async function performFullRestore(
   let remoteSignerSettingsRestored = false;
   let friendsCount = 0;
   if (fresh) {
+    // None of these writes goes through a store with its own wipe check: each
+    // writes AsyncStorage directly.
+    stopIfWiped();
     await restoreSettings(settings);
+    stopIfWiped();
     remoteSignerSettingsRestored = await restoreRemoteSignerSettings(
       settings.remoteSigner
     );
+    stopIfWiped();
     friendsCount = await restoreFriends(friends);
+    stopIfWiped();
     await restoreExperimental(experimental);
   }
+  // After the last write: a wipe that started during it reports no success.
+  stopIfWiped();
 
   return {
     records: accountCounts.records,

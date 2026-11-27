@@ -41,6 +41,7 @@ import {
   WC_V1_SESSION_STORAGE_KEY,
 } from './config';
 import { redactError } from '@/utils/logRedaction';
+import { wipeEpoch, wipedSince } from '@/services/wipe/gate';
 import { describePeerMethod } from './peerLabels';
 import {
   readSessionKey,
@@ -580,6 +581,25 @@ export class WalletConnectV1Client extends EventEmitter {
   }
 
   /**
+   * TASK-469: forget the session in memory and drop the socket, without
+   * telling the peer or touching storage (the wipe removes the stored session
+   * and its key).
+   */
+  resetForWipe(): void {
+    if (this.socket) {
+      this.socket.destroy();
+      this.socket = null;
+    }
+    this.config = null;
+    this.sessionData = null;
+    this.clientId = null;
+    this.handshakeTopic = null;
+    this.handshakeId = 0;
+    this.connecting = null;
+    this.emit(WalletConnectV1Event.DISCONNECT);
+  }
+
+  /**
    * Get current session data
    */
   getSessionData(): WalletConnectV1SessionData | null {
@@ -766,6 +786,9 @@ export class WalletConnectV1Client extends EventEmitter {
 
     let priorSlot: string | null = null;
     let secureWritten = false;
+    // TASK-469: a store begun before or during a wipe writes nothing after
+    // it; a key it already wrote is deleted, not rolled back to the old slot.
+    const epoch = wipeEpoch();
 
     try {
       // Capture the prior slot for rollback. An unreadable slot (Android
@@ -777,16 +800,23 @@ export class WalletConnectV1Client extends EventEmitter {
         priorSlot = null;
       }
 
+      if (wipedSince(epoch)) return;
       await writeSessionKey(topic, sessionKey);
       secureWritten = true;
 
+      if (wipedSince(epoch)) {
+        await restoreSessionKeySlot(null);
+        return;
+      }
       await AsyncStorage.setItem(storageKey, JSON.stringify(persisted));
       await this.removeStaleSessions(storageKey, topic);
     } catch {
       console.error('WC v1 Client: Failed to store session');
       if (secureWritten) {
+        // Once a wipe has started, the prior slot is the wiped wallet's key:
+        // never write it back. Only try (again) to delete the key written here.
         try {
-          await restoreSessionKeySlot(priorSlot);
+          await restoreSessionKeySlot(wipedSince(epoch) ? null : priorSlot);
         } catch {
           console.error('WC v1 Client: Failed to roll back session key');
         }
@@ -826,6 +856,9 @@ export class WalletConnectV1Client extends EventEmitter {
    * Load stored session
    */
   async loadSession(topic: string): Promise<WalletConnectV1SessionData | null> {
+    // TASK-469: a load begun before or during a wipe returns nothing it read
+    // and writes nothing back.
+    const epoch = wipeEpoch();
     try {
       const stored = await AsyncStorage.getItem(
         `${WC_V1_SESSION_STORAGE_KEY}:${topic}`
@@ -889,6 +922,8 @@ export class WalletConnectV1Client extends EventEmitter {
         return null;
       }
 
+      if (wipedSince(epoch)) return null;
+
       const hasInlineKey =
         persisted.key !== undefined &&
         persisted.key !== null &&
@@ -929,7 +964,7 @@ export class WalletConnectV1Client extends EventEmitter {
 
       // Same rule as boot restore: drain whenever the row still carries a key
       // AND the secure copy is confirmed — never strip the only copy.
-      if (hasInlineKey && secureKeyConfirmed) {
+      if (hasInlineKey && secureKeyConfirmed && !wipedSince(epoch)) {
         try {
           const { key: _dropped, ...keyless } = persisted;
           await AsyncStorage.setItem(storageKey, JSON.stringify(keyless));
@@ -938,6 +973,7 @@ export class WalletConnectV1Client extends EventEmitter {
         }
       }
 
+      if (wipedSince(epoch)) return null;
       return { ...persisted, key: sessionKey };
     } catch {
       console.error('WC v1 Client: Failed to load session');

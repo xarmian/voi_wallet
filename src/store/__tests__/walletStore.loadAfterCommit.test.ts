@@ -270,3 +270,119 @@ describe('TASK-514: the failure counter and what does NOT count as a failed wall
     expect(store().walletLoadFailures).toBe(0);
   });
 });
+
+describe('TASK-469: the strict probe is bounded', () => {
+  it('a probe that never settles counts as a failed load after 5 s, so an awaited refresh finishes', async () => {
+    jest.useFakeTimers();
+    try {
+      mockGetCurrentWallet.mockResolvedValue(null);
+      mockHasWalletWithAccountsStrict.mockImplementation(
+        () => new Promise<boolean>(() => {})
+      );
+      let settled = false;
+      const refreshed = store()
+        .refresh()
+        .then(() => {
+          settled = true;
+        });
+      await jest.advanceTimersByTimeAsync(4900);
+      expect(settled).toBe(false);
+      await jest.advanceTimersByTimeAsync(200);
+      await refreshed;
+      expect(settled).toBe(true);
+      expect(store().isInitialized).toBe(true);
+      expect(store().walletLoadFailed).toBe(true);
+      expect(store().isLoading).toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe('TASK-492: a wipe resets the wallet store without persisting', () => {
+  it('the wallet and every account state are cleared', async () => {
+    const { runWipeResets } = require('@/services/wipe/gate');
+    mockGetCurrentWallet.mockResolvedValue(walletWith(['a', 'b']));
+    await store().initialize();
+    expect(Object.keys(store().accountStates)).toEqual(['a', 'b']);
+    runWipeResets();
+    expect(store().wallet).toBeNull();
+    expect(store().accountStates).toEqual({});
+    expect(store().isInitialized).toBe(false);
+    expect(store().walletLoadFailed).toBe(false);
+  });
+
+  it('a load in flight when the wipe starts does not install the previous wallet', async () => {
+    const { runWipeResets } = require('@/services/wipe/gate');
+    let finish: (w: Wallet | null) => void = () => {};
+    mockGetCurrentWallet.mockImplementationOnce(
+      () => new Promise<Wallet | null>((resolve) => (finish = resolve))
+    );
+    const loading = store().initialize();
+    runWipeResets();
+    finish(walletWith(['a']));
+    await loading;
+    expect(store().wallet).toBeNull();
+    expect(store().accountStates).toEqual({});
+  });
+
+  it('a load started during the wipe does not install the previous wallet', async () => {
+    const gate = require('@/services/wipe/gate');
+    gate.openWipeWindow();
+    try {
+      gate.runWipeResets();
+      // The wipe has not deleted the wallet blob yet: this read still finds it.
+      mockGetCurrentWallet.mockResolvedValueOnce(walletWith(['a']));
+      await store().initialize();
+      expect(store().wallet).toBeNull();
+      expect(store().isInitialized).toBe(false);
+      expect(store().isLoading).toBe(false);
+    } finally {
+      gate.closeWipeWindow();
+    }
+  });
+
+  it('a load whose read fails during the wipe leaves the reset store alone', async () => {
+    const { runWipeResets } = require('@/services/wipe/gate');
+    let fail: (e: Error) => void = () => {};
+    mockGetCurrentWallet.mockImplementationOnce(
+      () => new Promise<Wallet | null>((_, reject) => (fail = reject))
+    );
+    const loading = store().initialize();
+    runWipeResets();
+    fail(new Error('read failed'));
+    await loading;
+    expect(store().walletLoadFailed).toBe(false);
+    expect(store().walletLoadFailures).toBe(0);
+    expect(store().isInitialized).toBe(false);
+  });
+
+  it('a call after the wipe runs a fresh pass instead of joining the one that read the previous wallet', async () => {
+    const { runWipeResets } = require('@/services/wipe/gate');
+    let finishStale: (w: Wallet | null) => void = () => {};
+    mockGetCurrentWallet.mockImplementationOnce(
+      () => new Promise<Wallet | null>((resolve) => (finishStale = resolve))
+    );
+    const stale = store().initialize();
+    runWipeResets();
+    mockGetCurrentWallet.mockResolvedValueOnce(walletWith(['new']));
+    const fresh = store().initialize();
+    await fresh;
+    expect(mockGetCurrentWallet).toHaveBeenCalledTimes(2);
+    expect(store().wallet?.accounts.map((a) => a.id)).toEqual(['new']);
+    finishStale(walletWith(['old']));
+    await stale;
+    expect(store().wallet?.accounts.map((a) => a.id)).toEqual(['new']);
+  });
+
+  it('a load begun after the wipe ends installs the wallet normally', async () => {
+    const gate = require('@/services/wipe/gate');
+    gate.openWipeWindow();
+    gate.runWipeResets();
+    gate.closeWipeWindow();
+    mockGetCurrentWallet.mockResolvedValueOnce(walletWith(['a']));
+    await store().initialize();
+    expect(store().wallet?.accounts.map((a) => a.id)).toEqual(['a']);
+    expect(store().isInitialized).toBe(true);
+  });
+});

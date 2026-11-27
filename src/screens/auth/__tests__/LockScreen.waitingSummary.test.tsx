@@ -35,7 +35,7 @@ jest.mock('@/services/secure', () => ({
 jest.mock('@/store/walletStore', () => ({
   useWalletStore: { getState: () => ({ wallet: undefined }) },
 }));
-jest.mock('@/services/wipe', () => ({ wipeWalletData: jest.fn() }));
+jest.mock('@/services/wipe', () => ({ wipeAllLocalData: jest.fn() }));
 jest.mock('@/services/wipe/notices', () => ({
   showWipeCompleteNotice: jest.fn(),
   showWipeIncompleteNotice: jest.fn(),

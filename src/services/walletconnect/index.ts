@@ -1,5 +1,9 @@
 import { SignClientTypes } from '@walletconnect/types';
-import { getSdkError, buildApprovedNamespaces } from '@walletconnect/utils';
+import {
+  getSdkError,
+  buildApprovedNamespaces,
+  parseExpirerTarget,
+} from '@walletconnect/utils';
 import { EventEmitter } from 'events';
 import algosdk from 'algosdk';
 import { Platform } from 'react-native';
@@ -40,6 +44,13 @@ import {
   resolveV1Chain,
 } from '@/services/walletconnect/v1/config';
 import { redactSensitiveForLog, redactError } from '@/utils/logRedaction';
+import {
+  isWipeWindowOpen,
+  registerWipeReset,
+  wipeWindowClosed,
+} from '@/services/wipe/gate';
+import { WRITE_TIMEOUT_MS } from '@/services/secure/boundedWrites';
+import { withTimeout } from '@/utils/withTimeout';
 import {
   readSessionKey,
   writeSessionKey,
@@ -115,7 +126,14 @@ function beginRetentionSweep(): Promise<void> | null {
       // The sweep body is deferred by one microtask so that `retentionSweep` is
       // filled in BEFORE any of it runs: nothing, however re-entrant, can find
       // the latch set and the slot still empty.
-      retentionSweep = Promise.resolve()
+      //
+      // TASK-469: a first start during a wipe sweeps only once the wipe has
+      // settled; before that its rewrite of the stored messages could land
+      // after the wipe removed them.
+      const startedDuringWipe = isWipeWindowOpen();
+      retentionSweep = (
+        startedDuringWipe ? wipeWindowClosed() : Promise.resolve()
+      )
         .then(() => {
           // Re-check at the moment of execution, not just at scheduling: Core
           // may have been constructed in between. From here on every service
@@ -150,9 +168,140 @@ export class WalletConnectService extends EventEmitter {
 
   static getInstance(): WalletConnectService {
     if (!WalletConnectService.instance) {
-      WalletConnectService.instance = new WalletConnectService();
+      const instance = new WalletConnectService();
+      WalletConnectService.instance = instance;
+      registerWipeReset('walletconnect', () => instance.purgeLocalForWipe());
     }
     return WalletConnectService.instance;
+  }
+
+  /**
+   * TASK-469: remove every WalletConnect session, proposal, request, pairing,
+   * key, expiry, history record, relay message and relay subscription (active,
+   * pending or cached for a reconnect) from this device, through the SDK's
+   * own stores. Nothing here waits on the network: the dApps are not told, and
+   * the relay close is not awaited.
+   *
+   * The memory side is synchronous (each store drops its entry before it
+   * persists); the returned promise settles when the emptied stores have been
+   * written, so the wipe's storage sweep runs after them.
+   *
+   * Residual: the SDK core stays alive in this process. A relay event that
+   * lands after the wipe's final storage check can write a `wc@2:` record
+   * again; it holds no session (they are gone from memory) and the next
+   * Delete Everything removes it.
+   *
+   * An initialize() under way restores the stored sessions into the SDK and
+   * then loads them here, so the purge waits for it (bounded; a timeout
+   * rejects and the wipe reports incomplete) and purges what it loaded. An
+   * initialize() that starts during the wipe waits for the wipe to settle
+   * (see runInitialization), so it finds nothing to restore.
+   */
+  purgeLocalForWipe(): Promise<void> {
+    this.forgetLocalSessions();
+    const starting = this.initializing;
+    if (!starting) return this.purgeClient();
+    return withTimeout(
+      starting.catch(() => undefined),
+      WRITE_TIMEOUT_MS,
+      () => new Error('WalletConnect start did not finish')
+    ).then(() => {
+      this.forgetLocalSessions();
+      return this.purgeClient();
+    });
+  }
+
+  private forgetLocalSessions(): void {
+    this.activeSessions.clear();
+    WalletConnectV1Client.getInstance().resetForWipe();
+    this.emit('sessions_changed');
+  }
+
+  private purgeClient(): Promise<void> {
+    if (!this.client.isInitialized()) return Promise.resolve();
+    const signClient = this.client.getProvider().client;
+    const core = this.client.getCore();
+    const reason = getSdkError('USER_DISCONNECTED');
+    void core.relayer.transportClose().catch(() => {});
+    const writes: Promise<unknown>[] = [
+      ...signClient.session.keys.map((topic) =>
+        signClient.session.delete(topic, reason)
+      ),
+      ...signClient.proposal.keys.map((id) =>
+        signClient.proposal.delete(id, reason)
+      ),
+      ...signClient.pendingRequest.keys.map((id) =>
+        signClient.pendingRequest.delete(id, reason)
+      ),
+      ...core.pairing.pairings.keys.map((topic) =>
+        core.pairing.pairings.delete(topic, reason)
+      ),
+      ...[...core.crypto.keychain.keychain.keys()].map((tag) =>
+        core.crypto.keychain.del(tag)
+      ),
+      ...[...core.relayer.messages.messages.keys()].map((topic) =>
+        core.relayer.messages.del(topic)
+      ),
+      // Session-authenticate (one-click auth) stores: requests, the pairing
+      // topics they arrived on, and the wallet's auth public key.
+      ...signClient.auth.requests.keys.map((id) =>
+        signClient.auth.requests.delete(id, reason)
+      ),
+      ...signClient.auth.pairingTopics.keys.map((topic) =>
+        signClient.auth.pairingTopics.delete(topic, reason)
+      ),
+      ...signClient.auth.authKeys.keys.map((key) =>
+        signClient.auth.authKeys.delete(key, reason)
+      ),
+    ];
+    // The expirer's keys are formatted targets (`topic:<topic>`, `id:<id>`),
+    // and its `del` formats its argument again: it takes the topic string or
+    // the numeric id, so a target passed back as is never matches (an id
+    // target becomes `topic:id:<id>`). sdkSubscriberShape.test.ts checks this.
+    for (const target of core.expirer.keys) {
+      let parsed: { topic?: string; id?: number };
+      try {
+        parsed = parseExpirerTarget(target);
+      } catch {
+        continue; // Left in place: the check below fails the purge.
+      }
+      if (parsed.topic !== undefined) core.expirer.del(parsed.topic);
+      else if (parsed.id !== undefined) core.expirer.del(parsed.id);
+    }
+    const expiriesLeft = core.expirer.keys.length;
+    for (const topic of new Set(core.history.values.map((r) => r.topic)))
+      core.history.delete(topic);
+    const subscriber = core.relayer.subscriber;
+    subscriber.subscriptions.clear();
+    subscriber.topicMap.clear();
+    subscriber.pending.clear();
+    // `cached` is private in @walletconnect/core: the topics held while the
+    // relay is down, re-subscribed (and persisted) on the next connect. The
+    // SDK empties it only after a reconnect, so an offline wipe must empty it
+    // here. A plain field write; no SDK method (none that avoids the network).
+    (subscriber as unknown as { cached: unknown[] }).cached = [];
+    // Private in @walletconnect/sign-client's Engine. `sessionRequestQueue`
+    // emits the next `session_request` only while idle and goes back to idle
+    // only through the engine's own respond, delete and expiry paths, which
+    // the deletes above bypass; left active, every later request would wait
+    // behind the wiped one. `emittedSessionRequests` (a LimitedSet over a
+    // private `set`) holds the ids already emitted. Plain field writes, no SDK
+    // method; sdkSubscriberShape.test.ts fails if the fields move.
+    const engine = signClient.engine as unknown as {
+      sessionRequestQueue?: { state: string; queue: unknown[] };
+      emittedSessionRequests?: { set?: Set<unknown> };
+    };
+    if (engine.sessionRequestQueue) {
+      engine.sessionRequestQueue.state = 'IDLE'; // ENGINE_QUEUE_STATES.idle
+      engine.sessionRequestQueue.queue = [];
+    }
+    engine.emittedSessionRequests?.set?.clear();
+    return Promise.all(writes).then(() => {
+      if (expiriesLeft > 0)
+        throw new Error(
+          `WalletConnect expirer kept ${expiriesLeft} entries after the purge`
+        );
+    });
   }
 
   constructor() {
@@ -184,8 +333,11 @@ export class WalletConnectService extends EventEmitter {
     // executes: without the sweep in front (off-native, or a warm Core) the
     // body would otherwise reach `client.initialize()` synchronously, while
     // `initializing` was still null.
+    // Taken now, not when the run starts: a run that began before a wipe is
+    // one the wipe's purge waits for, so it must not wait for the wipe.
+    const startedDuringWipe = isWipeWindowOpen();
     this.initializing = Promise.resolve().then(() =>
-      this.runInitialization(pendingRetentionSweep)
+      this.runInitialization(pendingRetentionSweep, startedDuringWipe)
     );
     try {
       await this.initializing;
@@ -195,7 +347,8 @@ export class WalletConnectService extends EventEmitter {
   }
 
   private async runInitialization(
-    pendingRetentionSweep: Promise<void> | null
+    pendingRetentionSweep: Promise<void> | null,
+    startedDuringWipe: boolean
   ): Promise<void> {
     try {
       // Must complete BEFORE the provider constructs Core: once the SDK's
@@ -203,6 +356,11 @@ export class WalletConnectService extends EventEmitter {
       // next message and would clobber the swept records (PLAN-324 DR-2).
       // Never rejects — see beginRetentionSweep.
       if (pendingRetentionSweep) await pendingRetentionSweep;
+
+      // A start during a wipe waits for it to settle: until the sweep, storage
+      // still holds the previous wallet's sessions, which the SDK would
+      // restore into memory.
+      if (startedDuringWipe) await wipeWindowClosed();
 
       await this.client.initialize();
       await this.loadExistingSessions();

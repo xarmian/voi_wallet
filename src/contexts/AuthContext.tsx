@@ -23,7 +23,7 @@ import { AppLockSignal } from '@/services/secure/appLockState';
 import { SecurityUtils } from '@/utils/security';
 import { DeepLinkService } from '@/services/deeplink';
 import { redactError } from '@/utils/logRedaction';
-import { isWipeInFlight, wipeWalletData } from '@/services/wipe';
+import { isWipeInFlight, wipeAllLocalData } from '@/services/wipe';
 import { showWipeCompleteNotice } from '@/services/wipe/notices';
 
 import { reviewGrant } from '@/services/auth/reviewGrant';
@@ -468,7 +468,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const startedHere = !isWipeInFlight();
           try {
             await withTimeout(
-              wipeWalletData(),
+              wipeAllLocalData(),
               WIPE_FINISH_TIMEOUT_MS,
               'interrupted wipe finish'
             );

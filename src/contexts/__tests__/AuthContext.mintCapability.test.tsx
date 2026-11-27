@@ -80,7 +80,7 @@ jest.mock('@/services/secure', () => ({
 }));
 
 jest.mock('@/services/wipe', () => ({
-  wipeWalletData: jest.fn(),
+  wipeAllLocalData: jest.fn(),
   isWipeInFlight: jest.fn(),
 }));
 jest.mock('@/services/wipe/notices', () => ({

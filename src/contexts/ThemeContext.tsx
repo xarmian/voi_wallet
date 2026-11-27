@@ -29,6 +29,11 @@ import {
   type ColorPalette,
 } from '../services/theme/colorExtraction';
 import { generateThemeFromColors } from '../services/theme/themeGenerator';
+import {
+  registerWipeReset,
+  wipeEpoch,
+  wipedSince,
+} from '../services/wipe/gate';
 
 interface ThemeContextType {
   theme: Theme;
@@ -195,6 +200,9 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   };
 
   const setNFTTheme = async (nftData: NFTThemeData) => {
+    // TASK-469: a pick begun before or during a wipe names the previous
+    // wallet's token; it must not be saved or shown after the wipe.
+    const epoch = wipeEpoch();
     try {
       if (!nftData.imageUrl) {
         throw new Error('NFT image URL is required');
@@ -219,6 +227,8 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
         defaultPalette
       );
 
+      // No await between this check and the write.
+      if (wipedSince(epoch)) return;
       // Save NFT theme to storage (keeping preferredMode for migration)
       await saveNFTTheme(
         nftData,
@@ -229,6 +239,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
         defaultPaletteIndex,
         true // backgroundImageEnabled defaults to true
       );
+      if (wipedSince(epoch)) return;
 
       // Update state
       setNftThemeDataState(nftData);
@@ -265,6 +276,12 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   };
 
   const loadThemeData = useCallback(async () => {
+    // TASK-469: a load begun before or during a wipe may read the picked NFT
+    // the wipe removes; it must not show it after the reset. The kept
+    // preferences (mode, toggles) still load.
+    const epoch = wipeEpoch();
+    const unlessWiped = <T,>(value: T | null): T | null =>
+      wipedSince(epoch) ? null : value;
     try {
       // Load theme mode
       const savedMode = await AsyncStorage.getItem(THEME_STORAGE_KEY);
@@ -272,13 +289,14 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
       // Migration: Handle old 'nft' theme mode
       if (savedMode === 'nft') {
         // Load NFT theme to get preferred mode
-        const storedNFTTheme = await loadNFTTheme();
+        const storedNFTTheme = unlessWiped(await loadNFTTheme());
         if (storedNFTTheme) {
           // Migrate to base theme based on preferred mode
           const baseMode =
             storedNFTTheme.preferredMode === 'dark' ? 'dark' : 'light';
           await AsyncStorage.setItem(THEME_STORAGE_KEY, baseMode);
           setThemeModeState(baseMode);
+          if (wipedSince(epoch)) return;
 
           // Set NFT theme data and enable it
           setNftThemeDataState(storedNFTTheme.nftData);
@@ -300,7 +318,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
         }
 
         // Load NFT theme if available (only when not migrating to avoid double-load)
-        const storedNFTTheme = await loadNFTTheme();
+        const storedNFTTheme = unlessWiped(await loadNFTTheme());
         if (storedNFTTheme) {
           try {
             setNftThemeDataState(storedNFTTheme.nftData);
@@ -318,6 +336,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
                 const extractedData = await extractColorsWithPalettes(
                   storedNFTTheme.nftData.imageUrl
                 );
+                if (wipedSince(epoch)) return;
                 setNftPalettes(extractedData.palettes);
                 setSelectedPaletteIndexState(0);
               } catch (error) {
@@ -382,6 +401,19 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   useEffect(() => {
     loadThemeData();
   }, [loadThemeData]);
+
+  // TASK-469: a wipe removes the picked NFT (it names a token the previous
+  // wallet owned). Drop it from memory too; with no pick the base theme shows,
+  // whatever the kept toggles say.
+  useEffect(
+    () =>
+      registerWipeReset('nft-theme', () => {
+        setNftThemeDataState(null);
+        setNftExtractedColors(null);
+        setNftPalettes([]);
+      }),
+    []
+  );
 
   useEffect(() => {
     const subscription = Appearance.addChangeListener(({ colorScheme }) => {

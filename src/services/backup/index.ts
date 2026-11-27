@@ -4,7 +4,7 @@
  * Main service for creating and restoring encrypted wallet backups.
  */
 
-import { Directory, File, Paths } from 'expo-file-system';
+import { Directory, File } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import Constants from 'expo-constants';
 import {
@@ -34,6 +34,8 @@ import {
 } from './collectors';
 import type { FreshAuthCapability } from '@/services/secure/freshAuth';
 import { AccountType } from '@/types/wallet';
+import { BACKUP_FILE_EXTENSION, backupDirectory } from './files';
+import { wipeEpoch, wipedSince } from '@/services/wipe/gate';
 import {
   performFullRestore,
   planRestore,
@@ -58,7 +60,7 @@ function formatDateForFilename(date: Date): string {
  */
 function generateBackupFilename(): string {
   const dateStr = formatDateForFilename(new Date());
-  return `voi-wallet-${dateStr}.voibackup`;
+  return `voi-wallet-${dateStr}${BACKUP_FILE_EXTENSION}`;
 }
 
 const INVALID_FILE =
@@ -152,7 +154,7 @@ export function assertEnvelopeMatchesPayload(
  * Get the backup cache directory
  */
 async function getBackupDirectory(): Promise<Directory> {
-  const backupDir = new Directory(Paths.cache, 'backups');
+  const backupDir = backupDirectory();
   if (!backupDir.exists) {
     await backupDir.create();
   }
@@ -205,6 +207,19 @@ export class BackupService {
     password: string,
     cap: FreshAuthCapability
   ): Promise<BackupResult> {
+    // TASK-469: a wipe that starts while this backup is collected, encrypted or
+    // written must not find the previous wallet's keys in a file after it. The
+    // wipe deletes the backup files once; a write after that would recreate
+    // the directory and the wipe would never see the file.
+    const epoch = wipeEpoch();
+    const stopIfWiped = () => {
+      if (wipedSince(epoch)) {
+        throw new BackupError(
+          'Backup failed: the wallet was deleted during the backup',
+          'FILE_WRITE_FAILED'
+        );
+      }
+    };
     try {
       // Step 0: Enforce the passphrase policy at the service boundary. The UI
       // modal already gates on this, but a direct caller must not be able to
@@ -298,9 +313,22 @@ export class BackupService {
       const filename = generateBackupFilename();
       const fileContent = JSON.stringify(encrypted, null, 2);
 
+      stopIfWiped();
       const backupDir = await getBackupDirectory();
+      // No await between this check and the write.
+      stopIfWiped();
       const backupFile = new File(backupDir, filename);
       await backupFile.write(fileContent);
+      if (wipedSince(epoch)) {
+        // The wipe started during the write: the file may already be past the
+        // wipe's file step. Delete it, and return nothing that points at it.
+        try {
+          if (backupFile.exists) backupFile.delete();
+        } catch {
+          // Reported as a failed backup either way.
+        }
+        stopIfWiped();
+      }
 
       this.reportProgress({
         step: 'saving',
@@ -591,14 +619,14 @@ export class BackupService {
    */
   static async cleanupTempFiles(): Promise<void> {
     try {
-      const backupDir = new Directory(Paths.cache, 'backups');
+      const backupDir = backupDirectory();
       if (!backupDir.exists) {
         return;
       }
 
       const contents = await backupDir.list();
       for (const item of contents) {
-        if (item instanceof File && item.uri.endsWith('.voibackup')) {
+        if (item instanceof File && item.uri.endsWith(BACKUP_FILE_EXTENSION)) {
           try {
             await item.delete();
           } catch {

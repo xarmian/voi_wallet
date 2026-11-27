@@ -12,9 +12,16 @@ import React from 'react';
 import { Alert } from 'react-native';
 import { render, fireEvent, act } from '@testing-library/react-native';
 
-import SecureStorageUnavailableScreen from '../SecureStorageUnavailableScreen';
+import SecureStorageUnavailableScreen, {
+  RECOVERY_WIPE_DEADLINE_MS,
+} from '../SecureStorageUnavailableScreen';
 import { AccountSecureStorage } from '@/services/secure';
 import { MultiAccountWalletService } from '@/services/wallet';
+import { wipeAllLocalData } from '@/services/wipe';
+import {
+  WIPE_COMPLETE_NOTICE,
+  WIPE_INCOMPLETE_NOTICE,
+} from '@/services/wipe/notices';
 
 jest.mock('@/services/secure', () => ({
   AccountSecureStorage: { clearAll: jest.fn(async () => {}) },
@@ -24,16 +31,26 @@ jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: { clearAllWallets: jest.fn(async () => {}) },
 }));
 
-// TASK-469: the screen resets through wipeWalletData(); here it is the plain
+// TASK-469: the screen resets through wipeAllLocalData(); here it is the plain
 // composition of the two mocked calls, so the assertions below stay about what
-// the wipe does and in what order.
+// the wipe does and in what order. Like the real one, a call made while a wipe
+// runs joins it, and isWipeInFlight is true until that wipe settles.
+let mockInFlight: Promise<void> | null = null;
 jest.mock('@/services/wipe', () => ({
-  wipeWalletData: jest.fn(async () => {
+  wipeAllLocalData: jest.fn(() => {
+    if (mockInFlight) return mockInFlight;
     const { AccountSecureStorage: secure } = require('@/services/secure');
     const { MultiAccountWalletService: wallet } = require('@/services/wallet');
-    await secure.clearAll();
-    await wallet.clearAllWallets();
+    const run = (async () => {
+      await secure.clearAll();
+      await wallet.clearAllWallets();
+    })().finally(() => {
+      mockInFlight = null;
+    });
+    mockInFlight = run;
+    return run;
   }),
+  isWipeInFlight: () => mockInFlight !== null,
 }));
 
 // Keep the render host-component-light: theme + native leaves are opaque.
@@ -71,6 +88,8 @@ const mockClearAllWallets =
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // A wipe left hung by an earlier test belongs to that test only.
+  mockInFlight = null;
 });
 
 // Auto-confirm every Alert by invoking its destructive (or last) button, so the
@@ -222,8 +241,12 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
 
     const messages = alertSpy.mock.calls.map((c) => String(c[1]));
     const combined = messages.join('\n');
-    // Erases ALL local data — not just "a wallet" restorable from one phrase.
-    expect(combined).toMatch(/erases ALL local wallet data/i);
+    // TASK-469: the first dialog opens with the exact statement of what is
+    // deleted and what is kept, then the recovery-phrase guidance on its own.
+    expect(messages[0]).toBe(
+      'This deletes all accounts, keys, contacts, messages and connections from this device. App settings like theme and network are kept.\n\n' +
+        'Only accounts backed by a recovery phrase you personally hold can be restored — each from its own phrase. Watch-only, Ledger, and remote-signer accounts must be re-added manually. This cannot be undone.'
+    );
     // Names the account kinds a single seed does NOT restore.
     expect(combined).toMatch(/watch-only/i);
     expect(combined).toMatch(/ledger/i);
@@ -232,6 +255,31 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
     expect(combined).toMatch(/each from its own phrase/i);
     expect(combined).toMatch(/every recovery phrase/i);
 
+    alertSpy.mockRestore();
+  });
+
+  it('an incomplete wipe shows the same "didn\'t finish" notice as the lock screen, and the user stays here', async () => {
+    const alertSpy = autoConfirmAlerts();
+    mockClearAll.mockRejectedValueOnce(new Error('disk I/O failure'));
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const onRetry = jest.fn(async () => {});
+    const { getByLabelText, getByPlaceholderText } = await render(
+      <SecureStorageUnavailableScreen onRetry={onRetry} />
+    );
+    await fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
+    await act(async () => {
+      await fireEvent.press(
+        getByLabelText('Reset app and restore from recovery phrase')
+      );
+    });
+    const titles = alertSpy.mock.calls.map((c) => c[0]);
+    expect(titles).toContain(WIPE_INCOMPLETE_NOTICE.title);
+    expect(titles).not.toContain(WIPE_COMPLETE_NOTICE.title);
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(
+      getByLabelText('Reset app and restore from recovery phrase')
+    ).toBeTruthy();
+    errorSpy.mockRestore();
     alertSpy.mockRestore();
   });
 
@@ -262,47 +310,222 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
     alertSpy.mockRestore();
   });
 
-  it('FIX 3(b): a HUNG wipe step times out — the reset never sticks on "Resetting…"', async () => {
-    jest.useFakeTimers();
-    const alertSpy = autoConfirmAlerts();
-    // clearAll never settles (wedged native keystore deletion). Bounded reset
-    // steps must time out so the flow proceeds instead of hanging forever.
-    mockClearAll.mockReturnValueOnce(new Promise(() => {}));
-    const onRetry = jest.fn(async () => {});
-    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    const { getByLabelText, getByPlaceholderText, queryByText } = await render(
-      <SecureStorageUnavailableScreen onRetry={onRetry} />
-    );
-
-    await fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
-    await act(async () => {
-      await fireEvent.press(
-        getByLabelText('Reset app and restore from recovery phrase')
+  describe('a wipe that outlasts the step bound (TASK-469)', () => {
+    // The wipe's own steps are bounded at 5 s or 15 s each, and on this
+    // screen the keychain is failing, so they can run out: the wipe can take
+    // longer than the screen's 8 s step bound and still finish. A step that
+    // never settles keeps it running for good, so the screen also has a hard
+    // deadline.
+    const settleAfter = (ms: number, outcome: 'resolve' | 'reject') =>
+      new Promise<void>((resolve, reject) =>
+        setTimeout(
+          () =>
+            outcome === 'resolve'
+              ? resolve()
+              : reject(new Error('disk I/O failure')),
+          ms
+        )
       );
-      await Promise.resolve();
-    });
-
-    // A timeout must release the buttons while preserving wallet metadata.
-    await act(async () => {
-      jest.advanceTimersByTime(8000);
-      for (let i = 0; i < 10; i += 1) {
-        await Promise.resolve();
-      }
-    });
-
-    expect(onRetry).not.toHaveBeenCalled();
-    expect(mockClearAllWallets).not.toHaveBeenCalled();
-    expect(queryByText(/Restart your device and try again/)).not.toBeNull();
-    await act(async () => {
-      await fireEvent.press(
-        getByLabelText('Reset app and restore from recovery phrase')
+    const advance = async (ms: number) => {
+      await act(async () => {
+        jest.advanceTimersByTime(ms);
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
+      });
+    };
+    const RESET_LABEL = 'Reset app and restore from recovery phrase';
+    const ERROR_TEXT = /Restart your device and try again/;
+    const startReset = async () => {
+      const alertSpy = autoConfirmAlerts();
+      const onRetry = jest.fn(async () => {});
+      const screen = await render(
+        <SecureStorageUnavailableScreen onRetry={onRetry} />
       );
-    });
-    expect(mockClearAllWallets).toHaveBeenCalledTimes(1);
-    expect(onRetry).toHaveBeenCalledTimes(1);
+      await fireEvent.changeText(screen.getByPlaceholderText('RESET'), 'RESET');
+      const pressReset = async () => {
+        await act(async () => {
+          await fireEvent.press(screen.getByLabelText(RESET_LABEL));
+          await Promise.resolve();
+        });
+      };
+      await pressReset();
+      const titles = () => alertSpy.mock.calls.map((c) => c[0]);
+      const count = (title: string) =>
+        titles().filter((t) => t === title).length;
+      const resetDisabled = () =>
+        screen.getByLabelText(RESET_LABEL).props.accessibilityState?.disabled;
+      return {
+        alertSpy,
+        onRetry,
+        screen,
+        titles,
+        count,
+        pressReset,
+        resetDisabled,
+      };
+    };
+    // A wipe the test settles by hand; it stays in flight until then.
+    const holdClearAll = () => {
+      const held: {
+        resolve: () => void;
+        reject: (error: Error) => void;
+      } = { resolve: () => {}, reject: () => {} };
+      mockClearAll.mockReturnValueOnce(
+        new Promise<void>((resolve, reject) => {
+          held.resolve = resolve;
+          held.reject = reject;
+        })
+      );
+      return held;
+    };
 
-    errorSpy.mockRestore();
-    alertSpy.mockRestore();
-    jest.useRealTimers();
+    let errorSpy: jest.SpyInstance;
+    beforeEach(() => {
+      jest.useFakeTimers();
+      errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      errorSpy.mockRestore();
+      jest.useRealTimers();
+    });
+
+    it('the recovery deadline is 120 s', () => {
+      expect(RECOVERY_WIPE_DEADLINE_MS).toBe(120000);
+    });
+
+    it('a wipe that finishes after 8 s shows the complete notice, not the incomplete one', async () => {
+      mockClearAll.mockReturnValueOnce(settleAfter(12000, 'resolve'));
+      const { alertSpy, onRetry, screen, titles, count } = await startReset();
+
+      await advance(8000);
+      expect(titles()).not.toContain(WIPE_INCOMPLETE_NOTICE.title);
+      expect(titles()).not.toContain(WIPE_COMPLETE_NOTICE.title);
+      expect(screen.queryByText(ERROR_TEXT)).toBeNull();
+
+      await advance(4000);
+      await advance(RECOVERY_WIPE_DEADLINE_MS);
+      expect(count(WIPE_COMPLETE_NOTICE.title)).toBe(1);
+      expect(titles()).not.toContain(WIPE_INCOMPLETE_NOTICE.title);
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      alertSpy.mockRestore();
+    });
+
+    it('a wipe that fails after 8 s shows the incomplete notice only when it fails', async () => {
+      mockClearAll.mockReturnValueOnce(settleAfter(12000, 'reject'));
+      const { alertSpy, onRetry, titles, count } = await startReset();
+
+      await advance(8000);
+      expect(titles()).not.toContain(WIPE_INCOMPLETE_NOTICE.title);
+
+      await advance(4000);
+      await advance(RECOVERY_WIPE_DEADLINE_MS);
+      expect(count(WIPE_INCOMPLETE_NOTICE.title)).toBe(1);
+      expect(titles()).not.toContain(WIPE_COMPLETE_NOTICE.title);
+      expect(onRetry).not.toHaveBeenCalled();
+      alertSpy.mockRestore();
+    });
+
+    it('a hung wipe shows the incomplete notice at the deadline, not at 8 s, and frees the buttons', async () => {
+      mockClearAll.mockReturnValueOnce(new Promise<void>(() => {}));
+      const { alertSpy, onRetry, screen, titles, count, resetDisabled } =
+        await startReset();
+
+      await advance(8000);
+      expect(titles()).not.toContain(WIPE_INCOMPLETE_NOTICE.title);
+      expect(screen.queryByText('Resetting…')).not.toBeNull();
+      expect(resetDisabled()).toBe(true);
+
+      await advance(RECOVERY_WIPE_DEADLINE_MS - 8000 - 1);
+      expect(titles()).not.toContain(WIPE_INCOMPLETE_NOTICE.title);
+
+      await advance(1);
+      expect(count(WIPE_INCOMPLETE_NOTICE.title)).toBe(1);
+      expect(titles()).not.toContain(WIPE_COMPLETE_NOTICE.title);
+      expect(screen.queryByText(ERROR_TEXT)).not.toBeNull();
+      expect(screen.queryByText('Resetting…')).toBeNull();
+      expect(resetDisabled()).toBe(false);
+      expect(mockClearAllWallets).not.toHaveBeenCalled();
+      expect(onRetry).not.toHaveBeenCalled();
+
+      // Retry is usable too.
+      await act(async () => {
+        await fireEvent.press(
+          screen.getByLabelText('Retry secure storage check')
+        );
+      });
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      alertSpy.mockRestore();
+    });
+
+    it('a wipe that finishes after the deadline shows incomplete at the deadline, then complete when it finishes', async () => {
+      const held = holdClearAll();
+      const { alertSpy, onRetry, count } = await startReset();
+
+      await advance(RECOVERY_WIPE_DEADLINE_MS);
+      expect(count(WIPE_INCOMPLETE_NOTICE.title)).toBe(1);
+      expect(count(WIPE_COMPLETE_NOTICE.title)).toBe(0);
+      expect(onRetry).not.toHaveBeenCalled();
+
+      held.resolve();
+      await advance(0);
+      expect(count(WIPE_COMPLETE_NOTICE.title)).toBe(1);
+      expect(count(WIPE_INCOMPLETE_NOTICE.title)).toBe(1);
+      expect(mockClearAllWallets).toHaveBeenCalledTimes(1);
+      // The recheck the success path runs.
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      alertSpy.mockRestore();
+    });
+
+    it('a wipe that fails after the deadline shows nothing new', async () => {
+      const held = holdClearAll();
+      const { alertSpy, onRetry, titles, count, screen } = await startReset();
+
+      await advance(RECOVERY_WIPE_DEADLINE_MS);
+      expect(count(WIPE_INCOMPLETE_NOTICE.title)).toBe(1);
+      const shown = titles().length;
+
+      held.reject(new Error('disk I/O failure'));
+      await advance(0);
+      expect(titles()).toHaveLength(shown);
+      expect(count(WIPE_COMPLETE_NOTICE.title)).toBe(0);
+      expect(onRetry).not.toHaveBeenCalled();
+      expect(screen.queryByText(ERROR_TEXT)).not.toBeNull();
+      alertSpy.mockRestore();
+    });
+
+    it('a wipe that finishes after the screen unmounted shows nothing', async () => {
+      const held = holdClearAll();
+      const { alertSpy, onRetry, count, screen } = await startReset();
+
+      await advance(RECOVERY_WIPE_DEADLINE_MS);
+      expect(count(WIPE_INCOMPLETE_NOTICE.title)).toBe(1);
+      await screen.unmount();
+
+      held.resolve();
+      await advance(0);
+      expect(count(WIPE_COMPLETE_NOTICE.title)).toBe(0);
+      expect(onRetry).not.toHaveBeenCalled();
+      alertSpy.mockRestore();
+    });
+
+    it('a second press during a hung wipe joins it, and its outcome is shown once', async () => {
+      const held = holdClearAll();
+      const { alertSpy, onRetry, count, pressReset } = await startReset();
+
+      await advance(RECOVERY_WIPE_DEADLINE_MS);
+      expect(count(WIPE_INCOMPLETE_NOTICE.title)).toBe(1);
+
+      await pressReset();
+      expect(wipeAllLocalData).toHaveBeenCalledTimes(2);
+      // Joined, not a second wipe.
+      expect(mockClearAll).toHaveBeenCalledTimes(1);
+
+      held.resolve();
+      await advance(0);
+      expect(count(WIPE_COMPLETE_NOTICE.title)).toBe(1);
+      expect(count(WIPE_INCOMPLETE_NOTICE.title)).toBe(1);
+      expect(mockClearAllWallets).toHaveBeenCalledTimes(1);
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      alertSpy.mockRestore();
+    });
   });
 });

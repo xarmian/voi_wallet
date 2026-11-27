@@ -1,6 +1,7 @@
 import { redactError } from '@/utils/logRedaction';
 import { RequestCoordinator } from './requestCoordinator';
 import { describeApproved, describeClose } from './resultCopy';
+import { registerWipeReset } from '@/services/wipe/gate';
 import type { ExitReason, RequestRef } from './requestCoordinator';
 
 export interface QueueDapp {
@@ -93,7 +94,11 @@ export class RequestQueue {
   }
 
   static getInstance(): RequestQueue {
-    if (!this.instance) this.instance = new RequestQueue();
+    if (!this.instance) {
+      const instance = new RequestQueue();
+      this.instance = instance;
+      registerWipeReset('walletconnect-queue', () => instance.resetForWipe());
+    }
     return this.instance;
   }
 
@@ -271,6 +276,11 @@ export class RequestQueue {
   }
 
   __resetForTests(): void {
+    this.resetForWipe();
+  }
+
+  /** TASK-469: drop the head, the result and every waiting request. */
+  resetForWipe(): void {
     for (const unsubscribe of this.unsubscribers.values()) unsubscribe();
     this.unsubscribers.clear();
     this.nextArrivalSeq = 1;

@@ -25,7 +25,7 @@ import { AuthProvider, useAuth } from '../AuthContext';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { reconcileCrossStoreHalfState } from '@/services/wallet/crossStoreReconcile';
 import { AccountSecureStorage } from '@/services/secure';
-import { isWipeInFlight, wipeWalletData } from '@/services/wipe';
+import { isWipeInFlight, wipeAllLocalData } from '@/services/wipe';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
 import { AppLockSignal } from '@/services/secure/appLockState';
@@ -64,7 +64,7 @@ jest.mock('@/services/secure', () => ({
 }));
 
 jest.mock('@/services/wipe', () => ({
-  wipeWalletData: jest.fn(),
+  wipeAllLocalData: jest.fn(),
   isWipeInFlight: jest.fn(),
 }));
 jest.mock('@/services/wipe/notices', () => ({
@@ -125,7 +125,7 @@ const mockClearPinSetupPending = clearPinSetupPending as jest.Mock;
 const mockReconcile = reconcileCrossStoreHalfState as jest.Mock;
 const mockReadWipeIntent =
   AccountSecureStorage.readWipeIntentStrict as jest.Mock;
-const mockWipeWalletData = wipeWalletData as jest.Mock;
+const mockWipeAllLocalData = wipeAllLocalData as jest.Mock;
 const mockIsWipeInFlight = isWipeInFlight as jest.Mock;
 
 // Placeholder secrets: verifyPin is mocked, and nothing derives a key.
@@ -195,7 +195,7 @@ beforeEach(() => {
   mockIsPinSetupPending.mockResolvedValue(false);
   mockClearPinSetupPending.mockResolvedValue(true);
   mockReadWipeIntent.mockResolvedValue(false);
-  mockWipeWalletData.mockResolvedValue(undefined);
+  mockWipeAllLocalData.mockResolvedValue(undefined);
   mockIsWipeInFlight.mockReturnValue(false);
 });
 

@@ -36,9 +36,13 @@ let mockMounts = 0;
 let mockChildMounts = 0;
 let mockLog: string[] = [];
 let mockFocus: LockFocusSource;
+let mockLockProps: { onEverythingDeleted?: () => void } = {};
 jest.mock('@/screens/auth/LockScreen', () => ({
   __esModule: true,
-  default: function MockLockScreen() {
+  default: function MockLockScreen(props: {
+    onEverythingDeleted?: () => void;
+  }) {
+    mockLockProps = props;
     mockFocus = mockUseLockFocus();
     mockUseEffect(() => {
       mockMounted++;
@@ -456,4 +460,20 @@ it('DEFECT the control is gone once the reset lands, and never shows with a PIN 
   };
   await view.rerender(tree(nav));
   expect(view.queryByText('Finish setup')).toBeNull();
+});
+
+it('DEFECT a complete Delete Everything on the lock screen resets the root to Onboarding (TASK-469)', async () => {
+  const nav = navigation('Main');
+  auth = { ...unlocked, isLocked: true, isAuthenticated: false };
+  await render(tree(nav));
+  expect(mockLockProps.onEverythingDeleted).toBeInstanceOf(Function);
+  expect(nav.value.resetRoot).not.toHaveBeenCalled();
+  await act(async () => {
+    mockLockProps.onEverythingDeleted!();
+  });
+  expect(nav.value.resetRoot).toHaveBeenCalledTimes(1);
+  expect(nav.value.resetRoot).toHaveBeenCalledWith({
+    index: 0,
+    routes: [{ name: 'Onboarding' }],
+  });
 });

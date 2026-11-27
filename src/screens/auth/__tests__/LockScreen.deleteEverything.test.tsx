@@ -7,6 +7,8 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 /**
  * TASK-469: Delete Everything on the lock screen.
  *  - It resolves "Everything is deleted" ONLY after the wipe reports complete.
+ *  - A complete wipe sends the root back to Onboarding (the lock screen is an
+ *    overlay; the navigator under it still holds the previous wallet's routes).
  *  - An incomplete wipe (any error) shows the plain "didn't finish" message, the
  *    user stays on the screen, nothing is re-routed, and no "deleted" notice shows.
  *
@@ -21,9 +23,12 @@ const mockWipe = jest.fn();
 const mockShowComplete = jest.fn();
 const mockShowIncomplete = jest.fn();
 const mockEvents: string[] = [];
+const mockToOnboarding = jest.fn(() => {
+  mockEvents.push('onboarding');
+});
 
 jest.mock('@/services/wipe', () => ({
-  wipeWalletData: (...args: unknown[]) => mockWipe(...args),
+  wipeAllLocalData: (...args: unknown[]) => mockWipe(...args),
 }));
 jest.mock('@/services/wipe/notices', () => ({
   showWipeCompleteNotice: () => {
@@ -86,7 +91,9 @@ const autoConfirm = () =>
   });
 
 const pressDeleteEverything = async () => {
-  const view = await render(<LockScreen />);
+  const view = await render(
+    <LockScreen onEverythingDeleted={mockToOnboarding} />
+  );
   await act(async () => {});
   await act(async () => {
     await fireEvent.press(view.getByText('Reset Application'));
@@ -102,11 +109,12 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
-test('a complete wipe re-checks auth, then shows "Everything is deleted" once', async () => {
+test('a complete wipe sends the root to Onboarding, re-checks auth, then shows "Everything is deleted" once', async () => {
   autoConfirm();
   await pressDeleteEverything();
   expect(mockWipe).toHaveBeenCalledTimes(1);
-  expect(mockEvents).toEqual(['recheck', 'complete-notice']);
+  expect(mockToOnboarding).toHaveBeenCalledTimes(1);
+  expect(mockEvents).toEqual(['onboarding', 'recheck', 'complete-notice']);
   expect(mockShowIncomplete).not.toHaveBeenCalled();
 });
 
@@ -123,6 +131,7 @@ test.each([
     expect(mockShowIncomplete).toHaveBeenCalledTimes(1);
     expect(mockShowComplete).not.toHaveBeenCalled();
     expect(mockRecheck).not.toHaveBeenCalled();
+    expect(mockToOnboarding).not.toHaveBeenCalled();
     expect(mockEvents).toEqual(['incomplete-notice']);
     // The user stays on the lock screen.
     expect(view.getByText('Reset Application')).toBeTruthy();
@@ -141,4 +150,15 @@ test('the user can run Delete Everything again after an incomplete wipe', async 
   await act(async () => {});
   expect(mockWipe).toHaveBeenCalledTimes(2);
   expect(mockShowComplete).toHaveBeenCalledTimes(1);
+  expect(mockToOnboarding).toHaveBeenCalledTimes(1);
+});
+
+test('the first dialog states what is deleted and what is kept; the final button is still "Delete Everything"', async () => {
+  const alertSpy = autoConfirm();
+  await pressDeleteEverything();
+  expect(alertSpy.mock.calls[0][1]).toBe(
+    'This deletes all accounts, keys, contacts, messages and connections from this device. App settings like theme and network are kept.'
+  );
+  const finalButtons = alertSpy.mock.calls[1][2] ?? [];
+  expect(finalButtons.map((b) => b.text)).toContain('Delete Everything');
 });

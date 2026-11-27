@@ -15,6 +15,12 @@ import * as Device from 'expo-device';
 import { Platform, AppState, AppStateStatus } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  isWipeWindowOpen,
+  registerWipeReset,
+  wipeEpoch,
+  wipedSince,
+} from '@/services/wipe/gate';
 import algosdk from 'algosdk';
 import {
   getSupabaseClient,
@@ -97,7 +103,29 @@ class NotificationService {
    */
   static getInstance(): NotificationService {
     if (!NotificationService.instance) {
-      NotificationService.instance = new NotificationService();
+      const instance = new NotificationService();
+      NotificationService.instance = instance;
+      // TASK-469: a queued tap carries the previous wallet's addresses,
+      // transaction id and amount; a wipe drops it. The native layer also
+      // holds the launch tap for the life of the process, and the wipe
+      // removes the last-handled id, so a later initialize() in this process
+      // would deliver it again: clear it too. Notifications already
+      // delivered show the previous wallet's addresses and amounts in the
+      // notification centre, and the badge counts them: dismiss them and
+      // clear the badge. The synchronous clears run first; a throw from the
+      // native clear fails only this reset (the wipe reports it). The two
+      // async calls are returned, so the wipe waits for them (bounded) and
+      // reports this reset if either rejects or does not finish. The web
+      // build has none of these (its module throws UnavailabilityError).
+      registerWipeReset('notifications', () => {
+        instance.clearPendingNotificationTap();
+        if (Platform.OS === 'web') return;
+        Notifications.clearLastNotificationResponse();
+        return Promise.all([
+          Notifications.dismissAllNotificationsAsync(),
+          Notifications.setBadgeCountAsync(0),
+        ]);
+      });
     }
     return NotificationService.instance;
   }
@@ -107,6 +135,9 @@ class NotificationService {
    * Call this early in app startup
    */
   async initialize(): Promise<void> {
+    // TASK-492: the last-handled id below is wiped data; a start that
+    // straddles a wipe does not write it back.
+    const epoch = wipeEpoch();
     // Configure notification handler lazily to avoid iOS simulator crashes
     // This must happen before any notification operations
     configureNotificationHandler();
@@ -144,12 +175,18 @@ class NotificationService {
           );
 
           // Mark as handled BEFORE processing
-          await AsyncStorage.setItem(
-            LAST_HANDLED_NOTIFICATION_KEY,
-            notificationId
-          );
+          if (!wipedSince(epoch))
+            await AsyncStorage.setItem(
+              LAST_HANDLED_NOTIFICATION_KEY,
+              notificationId
+            );
 
-          if (this.onNotificationTap) {
+          // TASK-469: a launch tap read across a wipe belongs to the wiped
+          // wallet; it is neither delivered nor queued.
+          const wiped = wipedSince(epoch) || isWipeWindowOpen();
+          if (wiped) {
+            console.log('[Notifications] Launch tap dropped by a wipe');
+          } else if (this.onNotificationTap) {
             this.onNotificationTap(data, notificationId);
           } else {
             this.pendingNotificationTap = data;
@@ -888,6 +925,14 @@ class NotificationService {
         const data = response.notification.request.content
           .data as unknown as NotificationData;
         const notificationId = response.notification.request.identifier;
+
+        // TASK-469: a tap that arrives while a wipe runs belongs to the wallet
+        // being wiped; it is neither delivered nor queued, and its payload is
+        // not logged.
+        if (isWipeWindowOpen()) {
+          console.log('[Notifications] Tap dropped by a wipe');
+          return;
+        }
         console.log('Notification tapped:', data);
 
         if (this.onNotificationTap) {

@@ -11,6 +11,7 @@ import {
   SigningProgress,
   REMOTE_SIGNER_CONSTANTS,
 } from '../types/remoteSigner';
+import { registerWipeReset, wipeEpoch, wipedSince } from '@/services/wipe/gate';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -46,13 +47,16 @@ const PROCESSED_PERSIST_MAX_ATTEMPTS = 3;
 // failure so a single bad write cannot stall every later persist.
 let processedPersistChain: Promise<void> = Promise.resolve();
 
-async function writeProcessedIds(ids: string[]): Promise<void> {
+async function writeProcessedIds(ids: string[], epoch: number): Promise<void> {
   let lastError: unknown;
   for (
     let attempt = 1;
     attempt <= PROCESSED_PERSIST_MAX_ATTEMPTS;
     attempt += 1
   ) {
+    // A retry runs after a failed write: a wipe may have started since
+    // (TASK-492). No await between this check and the write.
+    if (wipedSince(epoch)) return;
     try {
       await AsyncStorage.setItem(
         STORAGE_KEYS.PROCESSED_REQUESTS,
@@ -73,10 +77,16 @@ async function writeProcessedIds(ids: string[]): Promise<void> {
 }
 
 function enqueueProcessedPersist(getIds: () => Set<string>): void {
+  // A write queued before a wipe must not land after it (TASK-492).
+  const epoch = wipeEpoch();
   processedPersistChain = processedPersistChain
     // Recover before chaining so a prior failure can never block later writes.
     .catch(() => {})
-    .then(() => writeProcessedIds(Array.from(getIds())));
+    .then(() =>
+      wipedSince(epoch)
+        ? undefined
+        : writeProcessedIds(Array.from(getIds()), epoch)
+    );
 }
 
 /**
@@ -101,6 +111,9 @@ export async function __drainProcessedPersistChainForTests(): Promise<void> {
  */
 export async function getAppModeEarly(): Promise<AppMode> {
   if (appModePromise) return appModePromise;
+  // TASK-492: during a wipe the stored mode is the previous wallet's; report
+  // the default and cache nothing, so a read after the wipe is fresh.
+  if (wipedSince(wipeEpoch())) return 'wallet';
 
   appModePromise = AsyncStorage.getItem(STORAGE_KEYS.APP_MODE)
     .then((value) => (value === 'signer' ? 'signer' : 'wallet') as AppMode)
@@ -221,10 +234,12 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       }
 
       let resolveInitialization: () => void = () => {};
-      remoteSignerInitializationPromise = new Promise<void>((resolve) => {
+      const thisPass = new Promise<void>((resolve) => {
         resolveInitialization = resolve;
       });
+      remoteSignerInitializationPromise = thisPass;
 
+      const epoch = wipeEpoch();
       try {
         // Batch the independent cold-boot reads (F-03). APP_MODE reuses the
         // promise getAppModeEarly() already cached at startup — AppNavigator
@@ -238,6 +253,8 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
             AsyncStorage.getItem(STORAGE_KEYS.PAIRED_SIGNERS),
             AsyncStorage.getItem(STORAGE_KEYS.PROCESSED_REQUESTS),
           ]);
+        // A wipe during the reads reset the store: do not install what they read.
+        if (wipedSince(epoch)) return;
 
         // Parse signer config (if exists)
         const signerConfig: SignerDeviceConfig | null = storedConfig
@@ -285,19 +302,27 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
         get().cleanupProcessedRequests();
       } catch (error) {
         console.error('[RemoteSignerStore] Failed to initialize:', error);
-        set({ isInitialized: true });
+        if (!wipedSince(epoch)) set({ isInitialized: true });
       } finally {
         // Reset the coalescer on settle so a later explicit initialize()
         // re-hydrates, and resolve the shared promise for any coalesced caller.
-        remoteSignerInitializationPromise = null;
+        // A wipe dropped this pass: a newer one may own the coalescer now.
+        if (remoteSignerInitializationPromise === thisPass)
+          remoteSignerInitializationPromise = null;
         resolveInitialization();
       }
     },
 
     // ============ Mode Switching ============
     setAppMode: async (mode: AppMode) => {
+      const epoch = wipeEpoch();
       try {
+        // TASK-492: a call made during a wipe writes nothing; one made before
+        // it is queued ahead of the sweep. Checked again after the write for
+        // the in-memory update.
+        if (wipedSince(epoch)) return;
         await AsyncStorage.setItem(STORAGE_KEYS.APP_MODE, mode);
+        if (wipedSince(epoch)) return;
         set({ appMode: mode });
         console.log(`[RemoteSignerStore] App mode set to: ${mode}`);
       } catch (error) {
@@ -308,6 +333,7 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
 
     // ============ Signer Mode Actions ============
     initializeSignerConfig: async (deviceName: string) => {
+      const epoch = wipeEpoch();
       try {
         const config: SignerDeviceConfig = {
           deviceId: generateDeviceId(),
@@ -315,10 +341,13 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
           requirePinPerTxn: false,
         };
 
+        // Not during a wipe (see setAppMode).
+        if (wipedSince(epoch)) return;
         await AsyncStorage.setItem(
           STORAGE_KEYS.SIGNER_CONFIG,
           JSON.stringify(config)
         );
+        if (wipedSince(epoch)) return;
         set({ signerConfig: config });
         console.log(
           '[RemoteSignerStore] Signer config initialized:',
@@ -340,10 +369,14 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       }
 
       const updated = { ...signerConfig, deviceName: name };
+      const epoch = wipeEpoch();
+      // Not during a wipe (see setAppMode).
+      if (wipedSince(epoch)) return;
       await AsyncStorage.setItem(
         STORAGE_KEYS.SIGNER_CONFIG,
         JSON.stringify(updated)
       );
+      if (wipedSince(epoch)) return;
       set({ signerConfig: updated });
     },
 
@@ -463,10 +496,14 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       const updated = new Map(pairedSigners);
       updated.set(info.deviceId, info);
 
+      const epoch = wipeEpoch();
+      // Not during a wipe (see setAppMode).
+      if (wipedSince(epoch)) return;
       await AsyncStorage.setItem(
         STORAGE_KEYS.PAIRED_SIGNERS,
         JSON.stringify(Array.from(updated.entries()))
       );
+      if (wipedSince(epoch)) return;
       set({ pairedSigners: updated });
       console.log('[RemoteSignerStore] Added paired signer:', info.deviceId);
     },
@@ -476,10 +513,14 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       const updated = new Map(pairedSigners);
       updated.delete(deviceId);
 
+      const epoch = wipeEpoch();
+      // Not during a wipe (see setAppMode).
+      if (wipedSince(epoch)) return;
       await AsyncStorage.setItem(
         STORAGE_KEYS.PAIRED_SIGNERS,
         JSON.stringify(Array.from(updated.entries()))
       );
+      if (wipedSince(epoch)) return;
       set({ pairedSigners: updated });
       console.log('[RemoteSignerStore] Removed paired signer:', deviceId);
     },
@@ -492,10 +533,14 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       const updated = new Map(pairedSigners);
       updated.set(deviceId, { ...signer, lastActivity: Date.now() });
 
+      const epoch = wipeEpoch();
+      // Not during a wipe (see setAppMode).
+      if (wipedSince(epoch)) return;
       await AsyncStorage.setItem(
         STORAGE_KEYS.PAIRED_SIGNERS,
         JSON.stringify(Array.from(updated.entries()))
       );
+      if (wipedSince(epoch)) return;
       set({ pairedSigners: updated });
     },
 
@@ -505,6 +550,22 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
     },
   }))
 );
+
+// TASK-492: forget pairings, the signer config and processed ids without
+// persisting; the mode goes back to wallet.
+registerWipeReset('remote-signer', () => {
+  appModePromise = null;
+  remoteSignerInitializationPromise = null;
+  useRemoteSignerStore.setState({
+    appMode: 'wallet',
+    isInitialized: false,
+    signerConfig: null,
+    pendingRequest: null,
+    signingProgress: createInitialSigningProgress(),
+    processedRequestIds: new Set(),
+    pairedSigners: new Map(),
+  });
+});
 
 // ============ Selector Hooks ============
 

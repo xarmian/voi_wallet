@@ -48,6 +48,7 @@ import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
 import { createPendingRouteQueue, PendingRouteQueue } from './pendingRoute';
+import { registerWipeReset, wipeEpoch, wipedSince } from '@/services/wipe/gate';
 
 // Log-redaction helpers (TASK-33): deep-link URIs and their parsed contents can
 // embed full addresses, amounts, notes and other PII. These keep debug logs
@@ -153,7 +154,13 @@ export class DeepLinkService {
 
   static getInstance(): DeepLinkService {
     if (!DeepLinkService.instance) {
-      DeepLinkService.instance = new DeepLinkService();
+      const instance = new DeepLinkService();
+      DeepLinkService.instance = instance;
+      // TASK-469: a tap held for unlock carries the previous wallet's
+      // addresses; a wipe drops it.
+      registerWipeReset('deeplink-notification', () => {
+        instance.pendingNotification = null;
+      });
     }
     return DeepLinkService.instance;
   }
@@ -319,6 +326,7 @@ export class DeepLinkService {
       );
       const pendingData = this.pendingNotification;
       this.pendingNotification = null;
+      // A wipe clears the held tap, so one still here predates no wipe.
       this.handleNotificationNavigation(pendingData);
     }
   }
@@ -375,6 +383,11 @@ export class DeepLinkService {
   private setupNotificationHandler(): void {
     notificationService.setNotificationTapHandler(
       (data: NotificationData, notificationId?: string) => {
+        // TASK-469: taken on arrival. A tap that arrives while a wipe runs
+        // (the capture counts as wiped for good), or that is still waiting for
+        // navigation, for unlock or behind a WalletConnect review when a wipe
+        // starts, belongs to the wiped wallet and is dropped.
+        const epoch = wipeEpoch();
         // Keyed by the notification identifier, so the cold-start response
         // and a response-listener event for the same tap route once. The
         // unlock gate below runs inside the queued call, i.e. after
@@ -383,7 +396,7 @@ export class DeepLinkService {
           ? `notification:${notificationId}`
           : `notification:untracked:${++this.untrackedNotificationCount}`;
         return this.routeQueue.deliver(key, () =>
-          this.handleNotificationTap(data)
+          this.handleNotificationTap(data, epoch)
         );
       }
     );
@@ -393,7 +406,14 @@ export class DeepLinkService {
    * The notification-tap handler body: hold the route until unlock, else
    * navigate. Runs from the route queue once navigation is ready.
    */
-  private async handleNotificationTap(data: NotificationData): Promise<void> {
+  private async handleNotificationTap(
+    data: NotificationData,
+    epoch: number
+  ): Promise<void> {
+    if (wipedSince(epoch)) {
+      console.log('[DeepLink] Notification tap dropped by a wipe');
+      return;
+    }
     console.log(
       '[DeepLink] Notification tap handler called, isAppUnlocked:',
       this.isAppUnlocked,
@@ -410,15 +430,21 @@ export class DeepLinkService {
       return;
     }
 
-    await this.handleNotificationNavigation(data);
+    await this.handleNotificationNavigation(data, epoch);
   }
 
   /**
    * Handle navigation for a notification tap
    * This is called either immediately (if app is unlocked) or after unlock
    */
-  private handleNotificationNavigation(data: NotificationData): Promise<void> {
-    return this.whenReviewQueueIdle(() => this.navigateForNotification(data));
+  private handleNotificationNavigation(
+    data: NotificationData,
+    epoch: number = wipeEpoch()
+  ): Promise<void> {
+    return this.whenReviewQueueIdle(() =>
+      // A wipe while the tap waited for the review queue drops it.
+      wipedSince(epoch) ? Promise.resolve() : this.navigateForNotification(data)
+    );
   }
 
   /**

@@ -80,6 +80,11 @@ import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountType } from '@/types/wallet';
+import {
+  closeWipeWindow,
+  openWipeWindow,
+  runWipeResets,
+} from '@/services/wipe/gate';
 import { performFullRestore, restoreAccounts } from '../restorers';
 import type { BackupAccountData, BackupSettings } from '../types';
 
@@ -329,5 +334,81 @@ describe('TASK-504 step 2b: fresh is decided from strict reads', () => {
 
     const none = await restoreFile(keyed('f-9'), fileSettings(0));
     expect(none.pairedSignersNotRestored).toBe(0);
+  });
+});
+
+describe('TASK-492: a wipe that starts during a fresh restore', () => {
+  afterEach(() => closeWipeWindow());
+
+  it('a wipe that starts after the settings are written stops the restore: friends, signer settings and flags are never written', async () => {
+    const setItem = AsyncStorage.setItem as jest.Mock;
+    setItem.mockClear();
+    // The wipe starts while the file's display settings are being written.
+    multiSet.mockImplementationOnce(async () => {
+      openWipeWindow();
+      runWipeResets();
+    });
+    const restoring = performFullRestore(
+      [keyed('w-1')],
+      {
+        ...fileSettings(),
+        remoteSigner: { appMode: 'wallet', signerConfig: null },
+      } as unknown as BackupSettings,
+      [{ envoiName: 'bob' } as never],
+      { swapEnabled: true } as Parameters<typeof performFullRestore>[3]
+    );
+    await expect(restoring).rejects.toMatchObject({ code: 'RESTORE_FAILED' });
+    // Only the settings write ran; the signer settings write never did.
+    expect(multiSet).toHaveBeenCalledTimes(1);
+    const written = setItem.mock.calls.map(([key]) => key);
+    expect(written).not.toContain('@friends/list');
+    expect(written).not.toContain('experimental-features');
+  });
+});
+
+describe('TASK-492: a restore that a wipe overlaps reports no success', () => {
+  afterEach(() => closeWipeWindow());
+
+  it('a wipe that starts during the accounts step of a restore that is not fresh rejects with RESTORE_FAILED', async () => {
+    // The device already holds an account, so the restore is not fresh.
+    await restoreAccounts([keyed('dev-1')]);
+    const original = MultiAccountWalletService.mergeRestoredAccounts.bind(
+      MultiAccountWalletService
+    );
+    jest
+      .spyOn(MultiAccountWalletService, 'mergeRestoredAccounts')
+      .mockImplementationOnce(async (...args) => {
+        // The accounts commit, then the wipe starts before the step returns.
+        const committed = await original(...args);
+        openWipeWindow();
+        runWipeResets();
+        return committed;
+      });
+    await expect(restoreFile(keyed('f-10'))).rejects.toMatchObject({
+      code: 'RESTORE_FAILED',
+    });
+    expect(multiSet).not.toHaveBeenCalled();
+  });
+
+  it('a wipe that starts during the final flags write rejects with RESTORE_FAILED', async () => {
+    const setItem = AsyncStorage.setItem as jest.Mock;
+    setItem.mockImplementation(async (key: string) => {
+      if (key === 'experimental-features') {
+        openWipeWindow();
+        runWipeResets();
+      }
+    });
+    try {
+      await expect(
+        performFullRestore([keyed('f-11')], fileSettings(), [], {
+          swapEnabled: true,
+        } as Parameters<typeof performFullRestore>[3])
+      ).rejects.toMatchObject({ code: 'RESTORE_FAILED' });
+      expect(setItem.mock.calls.map(([key]) => key)).toContain(
+        'experimental-features'
+      );
+    } finally {
+      setItem.mockImplementation(async () => {});
+    }
   });
 });

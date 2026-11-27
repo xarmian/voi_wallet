@@ -28,7 +28,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure';
 import type { PinThrottleState } from '@/services/secure';
 import type { SecretSource } from '@/services/secure/SessionKeyVault';
-import { wipeWalletData } from '@/services/wipe';
+import { wipeAllLocalData } from '@/services/wipe';
 import {
   showWipeCompleteNotice,
   showWipeIncompleteNotice,
@@ -106,7 +106,16 @@ function useWaitingSummary(visible: boolean) {
   return visible ? buildWaitingSummary(snapshot, now) : null;
 }
 
-export default function LockScreen() {
+export default function LockScreen({
+  onEverythingDeleted,
+}: {
+  /**
+   * Called once a Delete Everything has completed, before the auth re-check.
+   * This screen is an overlay above a navigator that still holds the previous
+   * wallet's routes, so the owner sends the root back to Onboarding.
+   */
+  onEverythingDeleted?: () => void;
+} = {}) {
   const focus = useLockFocus();
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -389,7 +398,7 @@ export default function LockScreen() {
   const handleReset = () => {
     showAlert(
       'Reset Application',
-      'This will permanently delete all wallet data, accounts, and settings. This action cannot be undone.\n\nAre you sure you want to continue?',
+      'This deletes all accounts, keys, contacts, messages and connections from this device. App settings like theme and network are kept.',
       [
         {
           text: 'Cancel',
@@ -427,12 +436,16 @@ export default function LockScreen() {
     // erased; on any failure the user stays on this screen with a plain message
     // and the wipe request stays recorded, so the next launch finishes it.
     try {
-      await wipeWalletData();
+      await wipeAllLocalData();
     } catch (error) {
       console.error('Reset error:', redactError(error));
       showWipeIncompleteNotice();
       return;
     }
+
+    // TASK-469: everything is gone, so the routes under this overlay are the
+    // previous wallet's. Send the root to Onboarding while still covered.
+    onEverythingDeleted?.();
 
     // Reset local state (the wipe also erased the persisted PIN throttle).
     setPin('');

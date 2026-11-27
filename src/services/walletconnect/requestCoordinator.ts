@@ -1,5 +1,6 @@
 import { redactError } from '@/utils/logRedaction';
 import { HandledOutcome, HandledRef, HandledStore } from './handledStore';
+import { registerWipeReset } from '@/services/wipe/gate';
 import {
   DeadlineSource,
   isPastDeadline,
@@ -162,6 +163,8 @@ export class RequestCoordinator {
     { ref: RequestRef; error: AnswerError }
   >();
   private retrying = new Map<string, Promise<boolean>>();
+  /** Moves on every reset, so an admission that began before one stops. */
+  private generation = 0;
   // Refs between their close and the end of their answer. A ref leaves `open`
   // when it closes, but its answer (and, for a v1 proposal, the client's
   // disconnect) runs after that, so occupancy keeps counting it until then.
@@ -184,7 +187,13 @@ export class RequestCoordinator {
   }
 
   static getInstance(): RequestCoordinator {
-    if (!this.instance) this.instance = new RequestCoordinator();
+    if (!this.instance) {
+      const instance = new RequestCoordinator();
+      this.instance = instance;
+      registerWipeReset('walletconnect-requests', () =>
+        instance.resetForWipe()
+      );
+    }
     return this.instance;
   }
 
@@ -206,8 +215,12 @@ export class RequestCoordinator {
       return { action: 'suppressed', reason: 'duplicate' };
     }
     this.admitting.set(key, { ...ref });
+    const generation = this.generation;
+    // A reset (a wipe) while this admission awaited: open nothing, answer nothing.
+    const wasReset = () => this.generation !== generation;
     try {
       await this.store.load();
+      if (wasReset()) return { action: 'suppressed', reason: 'handled' };
       if (this.store.isHandled(ref)) {
         this.closed.add(key);
         if (!this.answered.has(key)) {
@@ -225,11 +238,13 @@ export class RequestCoordinator {
       // leaves nothing open and nothing to expire. With no guard installed this
       // adds no await, so admission timing is unchanged.
       const refusal = this.entryGuard ? await this.refusalFor(ref) : null;
+      if (wasReset()) return { action: 'suppressed', reason: 'handled' };
       if (refusal) {
         await this.settle(ref, refusal);
         return { action: 'refused', reason: refusal };
       }
       const firstSeenMs = await this.store.noteSeen(ref);
+      if (wasReset()) return { action: 'suppressed', reason: 'handled' };
       // A settle/decide may have closed this ref while storage was awaited.
       if (this.closed.has(key))
         return { action: 'suppressed', reason: 'handled' };
@@ -257,10 +272,12 @@ export class RequestCoordinator {
       this.armTimer(entry);
       return { action: 'show', ref, firstSeenMs, deadlineMs, source };
     } catch {
+      if (wasReset()) return { action: 'suppressed', reason: 'handled' };
       await this.sendError(ref, 'timing-unknown');
       return { action: 'unavailable' };
     } finally {
-      this.admitting.delete(key);
+      // After a reset the slot may belong to a newer admission.
+      if (!wasReset()) this.admitting.delete(key);
     }
   }
 
@@ -532,6 +549,12 @@ export class RequestCoordinator {
   }
 
   __resetForTests(): void {
+    this.resetForWipe();
+  }
+
+  /** TASK-469: forget every open, released and answered request; no answer is sent. */
+  resetForWipe(): void {
+    this.generation += 1;
     for (const entry of [...this.open.values(), ...this.released.values()]) {
       this.clearEntry(entry);
       entry.listeners.clear();

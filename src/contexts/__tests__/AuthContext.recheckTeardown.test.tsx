@@ -26,7 +26,7 @@ import {
   clearPinSetupPending,
   isPinSetupPending,
 } from '@/services/secure/pinSetupPending';
-import { wipeWalletData, isWipeInFlight } from '@/services/wipe';
+import { wipeAllLocalData, isWipeInFlight } from '@/services/wipe';
 import { reviewGrant } from '@/services/auth/reviewGrant';
 import {
   clearAllCachedKeys,
@@ -91,7 +91,7 @@ jest.mock('@/services/secure', () => ({
 }));
 
 jest.mock('@/services/wipe', () => ({
-  wipeWalletData: jest.fn(),
+  wipeAllLocalData: jest.fn(),
   isWipeInFlight: jest.fn(),
 }));
 jest.mock('@/services/wipe/notices', () => ({
@@ -320,7 +320,7 @@ beforeEach(() => {
     false
   );
   (isWipeInFlight as jest.Mock).mockReturnValue(false);
-  (wipeWalletData as jest.Mock).mockResolvedValue(undefined);
+  (wipeAllLocalData as jest.Mock).mockResolvedValue(undefined);
 
   probe.armed = false;
   probe.renders = [];
@@ -451,7 +451,7 @@ describe('recheck from a locked state that fails closed on the wipe marker', () 
         (
           AccountSecureStorage.readWipeIntentStrict as jest.Mock
         ).mockResolvedValue(true);
-        (wipeWalletData as jest.Mock).mockRejectedValue(
+        (wipeAllLocalData as jest.Mock).mockRejectedValue(
           new Error('wipe failed')
         );
       },

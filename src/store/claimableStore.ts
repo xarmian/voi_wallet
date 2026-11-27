@@ -12,6 +12,7 @@ import MimirApiService, { Arc200Approval } from '@/services/mimir';
 import EnvoiService from '@/services/envoi';
 import { ClaimableItem, TokenApproval } from '@/types/claimable';
 import { dedupeLatestApprovals } from '@/utils/arc200Approvals';
+import { registerWipeReset, wipeEpoch, wipedSince } from '@/services/wipe/gate';
 
 const HIDDEN_STORAGE_KEY_PREFIX = '@claimable/hidden/';
 
@@ -239,13 +240,14 @@ export const useClaimableStore = create<ClaimableState>()(
      * Hide an approval from the claimable list
      */
     hideApproval: async (approvalId: string) => {
+      const epoch = wipeEpoch();
       const { hiddenApprovals, currentAccountAddress } = get();
       const newHidden = new Set(hiddenApprovals);
       newHidden.add(approvalId);
       set({ hiddenApprovals: newHidden });
 
       if (currentAccountAddress) {
-        await persistHiddenApprovals(currentAccountAddress, newHidden);
+        await persistHiddenApprovals(currentAccountAddress, newHidden, epoch);
       }
     },
 
@@ -253,13 +255,14 @@ export const useClaimableStore = create<ClaimableState>()(
      * Unhide an approval
      */
     unhideApproval: async (approvalId: string) => {
+      const epoch = wipeEpoch();
       const { hiddenApprovals, currentAccountAddress } = get();
       const newHidden = new Set(hiddenApprovals);
       newHidden.delete(approvalId);
       set({ hiddenApprovals: newHidden });
 
       if (currentAccountAddress) {
-        await persistHiddenApprovals(currentAccountAddress, newHidden);
+        await persistHiddenApprovals(currentAccountAddress, newHidden, epoch);
       }
     },
 
@@ -313,6 +316,27 @@ export const useClaimableStore = create<ClaimableState>()(
   }))
 );
 
+// TASK-492: forget the previous wallet's claimables without persisting. With
+// no current account, no fetch in flight can commit (see isLatest).
+registerWipeReset('claimable', () => {
+  inFlightFetches.clear();
+  useClaimableStore.setState({
+    approvals: [],
+    claimableItems: [],
+    itemsAccountAddress: null,
+    hiddenApprovals: new Set<string>(),
+    hiddenApprovalsAccount: null,
+    showHiddenApprovals: false,
+    isLoading: false,
+    isValidating: false,
+    lastFetchedAt: {},
+    errorBackoffAt: {},
+    hasPartialFailure: false,
+    currentAccountAddress: null,
+    lastError: null,
+  });
+});
+
 type ClaimableSet = (partial: Partial<ClaimableState>) => void;
 type ClaimableGet = () => ClaimableState;
 
@@ -327,8 +351,13 @@ async function runFetchApprovals(
   set: ClaimableSet,
   get: ClaimableGet
 ): Promise<void> {
+  // TASK-492: a fetch that starts during a wipe would claim the store for the
+  // previous wallet's account after the reset; it does nothing.
+  const epoch = wipeEpoch();
+  if (wipedSince(epoch)) return;
   const requestToken = nextClaimableRequest(accountAddress);
   const isLatest = () =>
+    !wipedSince(epoch) &&
     isLatestClaimableRequest(
       accountAddress,
       requestToken,
@@ -597,8 +626,16 @@ function omitAccount(
  */
 async function persistHiddenApprovals(
   accountAddress: string,
-  hiddenApprovals: Set<string>
+  hiddenApprovals: Set<string>,
+  epoch: number
 ): Promise<void> {
+  // TASK-492: not during or after a wipe, and only while the store still
+  // holds this account. No await between this check and the write.
+  if (
+    wipedSince(epoch) ||
+    useClaimableStore.getState().currentAccountAddress !== accountAddress
+  )
+    return;
   try {
     const storageKey = getHiddenStorageKey(accountAddress);
     await AsyncStorage.setItem(

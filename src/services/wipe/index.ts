@@ -1,39 +1,47 @@
+import { Directory, File } from 'expo-file-system';
+import { Platform } from 'react-native';
+import { storage } from '@/platform';
+import {
+  BACKUP_FILE_EXTENSION,
+  backupDirectory,
+  pickerCacheDirectory,
+} from '@/services/backup/files';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import { WRITE_TIMEOUT_MS } from '@/services/secure/boundedWrites';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { WipeIncompleteError } from '@/types/wallet';
+import { withTimeout } from '@/utils/withTimeout';
+import {
+  PRESENCE_SENTINEL_PREFIX,
+  SECURE_KEEP,
+  SECURE_LEFTOVER_KEYS,
+  redactKeyName,
+} from './allowList';
 import {
   LEGACY_WALLET_BLOB_NAME,
   LEGACY_WALLET_SECURE_KEY,
+  SECURE_LEFTOVERS_RECORD_KEY,
   WALLET_BLOB_NAME,
 } from './constants';
+import {
+  WipeResetRun,
+  closeWipeWindow,
+  openWipeWindow,
+  runWipeResets,
+} from './gate';
+import { STORAGE_KEYS_NAME, listStorageKeys, sweepStorage } from './sweep';
 
 export {
   LEGACY_WALLET_BLOB_NAME,
   LEGACY_WALLET_SECURE_KEY,
   WALLET_BLOB_NAME,
 } from './constants';
+export { STORAGE_KEYS_NAME } from './sweep';
 
 /** Bound on each wallet-blob step, so a stalled store cannot hang a wipe. */
 export const BLOB_STEP_TIMEOUT_MS = 15000;
 
-function bounded<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('wipe step timed out')),
-      ms
-    );
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
-}
+const stepTimedOut = () => new Error('wipe step timed out');
 
 let inFlight: Promise<void> | null = null;
 
@@ -42,18 +50,235 @@ export function isWipeInFlight(): boolean {
   return inFlight !== null;
 }
 
+/**
+ * Wait for the local cleanups resets started, each bounded. Never rejects:
+ * returns the names of the ones that failed or did not finish.
+ */
+async function settleResets(run: WipeResetRun): Promise<string[]> {
+  const outcomes = await Promise.allSettled(
+    run.pending.map(({ done }) =>
+      withTimeout(Promise.resolve(done), WRITE_TIMEOUT_MS, stepTimedOut)
+    )
+  );
+  return [
+    ...run.failed,
+    ...run.pending
+      .filter((_, i) => outcomes[i].status === 'rejected')
+      .map(({ name }) => name),
+  ].map((name) => `memory:${name}`);
+}
+
+/** Every name in a list of storage keys that a leftover presence marker points at. */
+function markedNames(keys: string[]): string[] {
+  return keys
+    .filter((key) => key.startsWith(PRESENCE_SENTINEL_PREFIX))
+    .map((key) => key.slice(PRESENCE_SENTINEL_PREFIX.length))
+    .filter((name) => !SECURE_KEEP.includes(name));
+}
+
+/**
+ * Delete secure items by name. Returns the ones that could not be confirmed
+ * deleted.
+ */
+async function deleteSecureItems(names: Set<string>): Promise<string[]> {
+  const list = [...names];
+  const outcomes = await Promise.allSettled(
+    list.map((name) => AccountSecureStorage.deleteSecureKeyVerified(name))
+  );
+  return list.filter((_, i) => outcomes[i].status === 'rejected');
+}
+
+/**
+ * Secure items whose delete could not be confirmed in this process (names
+ * only). Each run deletes them again; a name goes once its delete is
+ * confirmed. This covers a retry in the same process when the leftover record
+ * could not be read or written.
+ */
+const unconfirmedSecureNames = new Set<string>();
+
+type LeftoverRecord =
+  | { state: 'read'; names: string[] }
+  | { state: 'corrupt' }
+  | { state: 'unreadable' };
+
+/** The secure items an earlier wipe could not delete (names only), bounded. */
+async function readLeftoverRecord(): Promise<LeftoverRecord> {
+  let raw: string | null;
+  try {
+    raw = await withTimeout(
+      storage.getItem(SECURE_LEFTOVERS_RECORD_KEY),
+      WRITE_TIMEOUT_MS,
+      stepTimedOut
+    );
+  } catch {
+    return { state: 'unreadable' };
+  }
+  if (raw === null) return { state: 'read', names: [] };
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.every((n) => typeof n === 'string'))
+      return { state: 'read', names: parsed };
+  } catch {
+    // Falls through to corrupt.
+  }
+  return { state: 'corrupt' };
+}
+
+/**
+ * Delete the secure items clearAll does not know: the named leftovers, any
+ * item a leftover presence marker in `keys` points at, any item an earlier
+ * wipe recorded as not deleted, and any item this process could not confirm
+ * deleted before. The markers of failed deletes may be gone (the mobile
+ * adapter removes them either way), so the failed names are kept twice: in
+ * the leftover record, which covers a restart when it could be written, and
+ * in memory, which covers a retry in the same process. A failed delete whose
+ * record was unreadable or not written, followed by a restart before a retry,
+ * is not covered.
+ * Returns the names still unresolved and the names confirmed deleted.
+ */
+async function deleteSecureLeftovers(
+  keys: string[]
+): Promise<{ unresolved: string[]; deleted: Set<string> }> {
+  const record = await readLeftoverRecord();
+  const names = new Set([
+    ...Object.keys(SECURE_LEFTOVER_KEYS),
+    ...markedNames(keys),
+    ...(record.state === 'read' ? record.names : []),
+    ...unconfirmedSecureNames,
+  ]);
+  const failed = await deleteSecureItems(names);
+  const deleted = new Set([...names].filter((name) => !failed.includes(name)));
+  failed.forEach((name) => unconfirmedSecureNames.add(name));
+  deleted.forEach((name) => unconfirmedSecureNames.delete(name));
+  const unresolved = [...failed];
+  // An unreadable record is left as it is: rewriting it would lose its names.
+  if (record.state === 'unreadable') {
+    unresolved.push(SECURE_LEFTOVERS_RECORD_KEY);
+  } else if (
+    failed.length > 0 ||
+    record.state === 'corrupt' ||
+    record.names.length > 0
+  ) {
+    if (record.state === 'corrupt')
+      unresolved.push(SECURE_LEFTOVERS_RECORD_KEY);
+    try {
+      await withTimeout(
+        storage.setItem(SECURE_LEFTOVERS_RECORD_KEY, JSON.stringify(failed)),
+        WRITE_TIMEOUT_MS,
+        stepTimedOut
+      );
+    } catch {
+      unresolved.push(SECURE_LEFTOVERS_RECORD_KEY);
+    }
+  }
+  return { unresolved, deleted };
+}
+
+/** Remove the leftover record once the wipe is complete, bounded. */
+async function clearLeftoverRecord(): Promise<void> {
+  try {
+    await withTimeout(
+      storage.removeItem(SECURE_LEFTOVERS_RECORD_KEY),
+      WRITE_TIMEOUT_MS,
+      stepTimedOut
+    );
+  } catch {
+    throw new WipeIncompleteError([SECURE_LEFTOVERS_RECORD_KEY]);
+  }
+}
+
+/**
+ * The directories the wipe deletes, each with the name it is reported under
+ * when the delete cannot be confirmed. Names only: never a path or file name.
+ */
+const BACKUP_DIRECTORIES: { name: string; directory: () => Directory }[] = [
+  // Backups BackupService wrote and the user did not discard.
+  { name: 'file:backups', directory: backupDirectory },
+  // Copies of backup files picked for a restore.
+  { name: 'file:picker-cache', directory: pickerCacheDirectory },
+];
+const STRAY_BACKUPS_NAME = 'file:cache-backups';
+
+/**
+ * Run a file-system delete, bounded. The installed expo-file-system delete is
+ * synchronous; the bound covers one that returns a promise.
+ */
+function deleteBounded(item: Directory | File): Promise<void> {
+  return withTimeout(
+    Promise.resolve().then(() => item.delete()),
+    WRITE_TIMEOUT_MS,
+    stepTimedOut
+  );
+}
+
+/** Delete a directory with everything in it. Missing counts as done. */
+async function deleteDirectory(directory: () => Directory): Promise<void> {
+  const dir = directory();
+  if (dir.exists) await deleteBounded(dir);
+  if (dir.exists) throw new Error('directory remains');
+}
+
+/** Delete backup files left directly in the cache (no writer puts them there). */
+async function deleteStrayBackupFiles(): Promise<void> {
+  const parent = backupDirectory().parentDirectory;
+  const stray = () =>
+    parent.exists
+      ? parent
+          .list()
+          .filter(
+            (item): item is File =>
+              item instanceof File && item.uri.endsWith(BACKUP_FILE_EXTENSION)
+          )
+      : [];
+  await Promise.allSettled(stray().map(deleteBounded));
+  if (stray().length > 0) throw new Error('backup files remain');
+}
+
+/**
+ * Delete the backup files in the app cache: each one holds every key of the
+ * wallet, encrypted with the backup password. Returns the names of the steps
+ * that could not be confirmed. Touches no storage key, so nothing on the
+ * allow-list. The web build has no app file system.
+ */
+async function deleteBackupFiles(): Promise<string[]> {
+  if (Platform.OS === 'web') return [];
+  const steps = [
+    ...BACKUP_DIRECTORIES.map(({ name, directory }) => ({
+      name,
+      run: () => deleteDirectory(directory),
+    })),
+    { name: STRAY_BACKUPS_NAME, run: deleteStrayBackupFiles },
+  ];
+  const unresolved: string[] = [];
+  for (const { name, run } of steps) {
+    try {
+      await run();
+    } catch {
+      unresolved.push(name);
+    }
+  }
+  return unresolved;
+}
+
 async function runWipe(): Promise<void> {
   await AccountSecureStorage.beginWipe();
+  // Before the first delete: every store forgets the previous wallet, and
+  // writes that captured the epoch earlier skip. From here until the wipe
+  // settles, a load or write that starts counts as wiped too.
+  openWipeWindow();
+  const purges = settleResets(runWipeResets());
   await AccountSecureStorage.clearAll();
   try {
-    await bounded(
+    await withTimeout(
       MultiAccountWalletService.clearAllWallets(),
-      BLOB_STEP_TIMEOUT_MS
+      BLOB_STEP_TIMEOUT_MS,
+      stepTimedOut
     );
     // Verify, do not assume: the blob must read back as absent.
-    const stillThere = await bounded(
+    const stillThere = await withTimeout(
       MultiAccountWalletService.hasWalletWithAccountsStrict(),
-      BLOB_STEP_TIMEOUT_MS
+      BLOB_STEP_TIMEOUT_MS,
+      stepTimedOut
     );
     if (stillThere !== false) throw new Error('wallet blob remains');
   } catch {
@@ -63,13 +288,45 @@ async function runWipe(): Promise<void> {
   // hung keychain cannot block its write chain). The wipe confirms it here,
   // bounded: the tombstone alone makes the copy unreadable, not gone.
   try {
-    await bounded(
+    await withTimeout(
       AccountSecureStorage.deleteSecureKeyVerified(LEGACY_WALLET_SECURE_KEY),
-      BLOB_STEP_TIMEOUT_MS
+      BLOB_STEP_TIMEOUT_MS,
+      stepTimedOut
     );
   } catch {
     throw new WipeIncompleteError([LEGACY_WALLET_BLOB_NAME]);
   }
+  const backupFiles = await deleteBackupFiles();
+
+  // The local purges write their own (emptied) records; let them land before
+  // general storage is listed and swept.
+  const unresolved = new Set<string>([...(await purges), ...backupFiles]);
+  let keys: string[] = [];
+  try {
+    keys = await listStorageKeys();
+  } catch {
+    unresolved.add(STORAGE_KEYS_NAME);
+  }
+  const leftovers = await deleteSecureLeftovers(keys);
+  leftovers.unresolved.forEach((name) => unresolved.add(name));
+  // The sweep removes a presence marker only when the item behind it was
+  // deleted above. Any other marker (the first listing failed, or it appeared
+  // after that listing) is the only pointer to its item, so it stays for the
+  // retry, and the wipe is incomplete while one is there. An item whose delete
+  // failed is in the leftover record; on mobile its marker is already gone
+  // (the adapter removes it even when the native delete fails).
+  const isMarker = (key: string) =>
+    key.startsWith(PRESENCE_SENTINEL_PREFIX) &&
+    !leftovers.deleted.has(key.slice(PRESENCE_SENTINEL_PREFIX.length));
+  const swept = await sweepStorage(keys, isMarker);
+  swept.unresolved.forEach((key) => unresolved.add(key));
+  const failedNames = new Set(leftovers.unresolved);
+  for (const key of swept.spared)
+    if (!failedNames.has(key.slice(PRESENCE_SENTINEL_PREFIX.length)))
+      unresolved.add(key);
+  if (unresolved.size > 0)
+    throw new WipeIncompleteError([...unresolved].map(redactKeyName));
+  await clearLeftoverRecord();
   await AccountSecureStorage.endWipe();
 }
 
@@ -77,21 +334,25 @@ async function runWipe(): Promise<void> {
  * TASK-469: the one way to erase the wallet from this device.
  *
  * Order: record the wipe request (so a crash or an incomplete wipe is finished
- * by the next boot instead of being mistaken for a finished one), erase secure
- * storage (bounded, outcomes checked), erase the wallet blob and verify it reads
- * back absent, and only then clear the request. It resolves ONLY when every step
- * is complete; otherwise it throws WipeIncompleteError naming what is unresolved
- * (never values). Callers must not show "deleted" or route to onboarding on any
- * throw.
+ * by the next boot instead of being mistaken for a finished one); reset every
+ * in-memory store; erase secure storage (bounded, outcomes checked); erase the
+ * wallet blob and verify it reads back absent; delete the backup files in the
+ * app cache and verify they are gone; delete secure items outside the account
+ * layer; remove every general-storage key not on the allow-list and
+ * list storage again to confirm; only then clear the request. It resolves ONLY
+ * when every step is complete; otherwise it throws WipeIncompleteError naming
+ * what is unresolved (never values). Callers must not show "deleted" or route
+ * to onboarding on any throw.
  *
  * One wipe at a time: a call made while a wipe is running (a Retry after a
  * boot-time timeout abandoned it, or a recheck during a user-started wipe)
  * joins that wipe instead of starting a second one.
  */
-export function wipeWalletData(): Promise<void> {
+export function wipeAllLocalData(): Promise<void> {
   if (inFlight) return inFlight;
   const run = runWipe().finally(() => {
     inFlight = null;
+    closeWipeWindow();
   });
   inFlight = run;
   return run;

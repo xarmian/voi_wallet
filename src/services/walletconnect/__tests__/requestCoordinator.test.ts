@@ -456,9 +456,13 @@ it('REGRESSION coordinator has no service index, v1 client or navigation imports
   ].map((match) => match[1]);
   expect(
     imports.every((specifier) =>
-      ['@/utils/logRedaction', './handledStore', './requestTiming'].includes(
-        specifier
-      )
+      [
+        '@/utils/logRedaction',
+        // Dependency-free: the wipe reset registry.
+        '@/services/wipe/gate',
+        './handledStore',
+        './requestTiming',
+      ].includes(specifier)
     )
   ).toBe(true);
 });
@@ -1093,5 +1097,35 @@ describe('entry guard (setup incomplete)', () => {
   it('DEFECT ensureOpen reports a refusal as handled', async () => {
     expect(await coordinator.ensureOpen(ref)).toBe('handled');
     expect(coordinator.isOpen(ref)).toBe(false);
+  });
+});
+
+describe('TASK-469: a wipe while an admission awaits storage', () => {
+  it('an admission begun before the reset opens nothing and answers nothing after it', async () => {
+    let finishNoteSeen: (ms: number) => void = () => {};
+    jest.spyOn(store, 'noteSeen').mockImplementationOnce(
+      () =>
+        new Promise<number>((resolve) => {
+          finishNoteSeen = resolve;
+        })
+    );
+    const admitting = coordinator.admit(ref, (now + 900_000) / 1000);
+    await flush();
+    coordinator.resetForWipe();
+    finishNoteSeen(now);
+    expect(await admitting).toEqual({
+      action: 'suppressed',
+      reason: 'handled',
+    });
+    expect(coordinator.isOpen(ref)).toBe(false);
+    expect(calls()).toBe(0);
+  });
+
+  it('an admission that starts after the reset is shown normally', async () => {
+    coordinator.resetForWipe();
+    expect(await coordinator.admit(ref, (now + 900_000) / 1000)).toMatchObject({
+      action: 'show',
+    });
+    expect(coordinator.isOpen(ref)).toBe(true);
   });
 });
