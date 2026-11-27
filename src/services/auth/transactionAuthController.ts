@@ -2270,8 +2270,15 @@ export class TransactionAuthController {
         if (this.ledgerCancelRequested || this.userExplicitlyRejected) {
           return;
         }
-        // A send already issued is never signed again.
-        if (this.hasSubmittedToNetwork) return;
+        // A send already issued is never signed again. End in 'error', as
+        // onError does after a submit, so the flow does not sit on a spinner.
+        if (this.hasSubmittedToNetwork) {
+          this.updateState({
+            state: 'error',
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+          return;
+        }
         // Allow the flow to resume once the device becomes ready again
         this.pendingStartAfterReady = true;
         this.pendingPinForStart =

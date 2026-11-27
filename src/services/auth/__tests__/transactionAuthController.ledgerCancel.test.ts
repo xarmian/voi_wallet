@@ -277,7 +277,11 @@ it('submittedFlowSkipsPrepareForRetry', async () => {
   void controller.initializeSigningFlow(request());
   await flush();
   expect(signer).toHaveBeenCalledTimes(1);
-  expect(controller.getState().state).toBe('processing');
+  // The send was issued, so no retry is prepared, and the flow does not stay
+  // on a 'processing' spinner the modal cannot close: it ends in 'error',
+  // as onError does for a failure after submit.
+  expect(controller.getState().state).toBe('error');
+  expect(controller.getState().error?.message).toMatch(/not connected/i);
   expect(internals(controller).hasStartedSigning).toBe(true);
   controller.cleanup();
 });
