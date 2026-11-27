@@ -2,7 +2,10 @@ export type FreshAuthReason =
   | 'reveal_recovery_phrase'
   | 'verify_backup'
   | 'export_backup'
-  | 'export_private_key';
+  | 'export_private_key'
+  | 'scan_found_accounts'
+  | 'restore_found_account'
+  | 'remove_found_account';
 export type FreshAuthFailure =
   'cancelled' | 'unavailable' | 'busy' | 'timeout' | 'failed';
 

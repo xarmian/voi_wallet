@@ -24,6 +24,18 @@ const copy: Record<FreshAuthReason, { title: string; message: string }> = {
     title: 'Export Private Key',
     message: 'Authenticate to export this private key.',
   },
+  scan_found_accounts: {
+    title: 'Accounts Found on This Device',
+    message: 'Authenticate to check the accounts found on this device.',
+  },
+  restore_found_account: {
+    title: 'Restore Account',
+    message: 'Authenticate to restore this account.',
+  },
+  remove_found_account: {
+    title: 'Remove Key',
+    message: 'Authenticate to remove this key from the device.',
+  },
 };
 
 export default function FreshAuthHost() {

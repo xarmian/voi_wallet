@@ -10,7 +10,8 @@ import {
 
 // Buffer polyfill for extension compatibility
 import { Buffer } from 'buffer';
-import { keyBelongsToAddress } from '@/utils/keyIdentity';
+import algosdk from 'algosdk';
+import { keyBelongsToAddress, seedDerivedAddress } from '@/utils/keyIdentity';
 
 // Use crypto-js (pure JS, works in RN/Expo and browser) with explicit side-effect imports
 import CryptoJS from 'crypto-js';
@@ -147,6 +148,38 @@ export class VaultChangedDuringReadError extends Error {
   constructor() {
     super('The session vault changed while a stored key was being checked');
     this.name = 'VaultChangedDuringReadError';
+  }
+}
+
+/**
+ * TASK-478: what the found-accounts scan learned about one quarantined key.
+ * Public data only: the address the key derives to, or that it did not open.
+ */
+export type QuarantineScanEntry = { address: string } | { unreadable: true };
+
+/** TASK-478: one quarantine-registry id, described without opening its key. */
+export interface QuarantineIndexRow {
+  id: string;
+  /** The presence probe: the slot holds something (fetched, never decrypted). */
+  present: boolean;
+  scan?: QuarantineScanEntry;
+  /** From the id's secure metadata; a display hint, never trusted for restore. */
+  hint?: { address: string; label?: string };
+}
+
+/** TASK-478: the found key does not derive to the address the user chose. */
+export class FoundAccountMismatchError extends Error {
+  constructor() {
+    super('The key found on this device does not match the listed account');
+    this.name = 'FoundAccountMismatchError';
+  }
+}
+
+/** TASK-478: the id is not (or no longer) a quarantined key. */
+export class FoundAccountNotQuarantinedError extends Error {
+  constructor() {
+    super('This account is no longer in the found list');
+    this.name = 'FoundAccountNotQuarantinedError';
   }
 }
 
@@ -314,6 +347,12 @@ export class AccountSecureStorage {
   static readonly WIPE_INTENT_KEY = 'voi_wipe_intent';
   private static readonly PENDING_CREATES_KEY = 'voi_pending_account_creates';
   private static readonly QUARANTINED_IDS_KEY = 'voi_reconcile_quarantined_ids';
+  // TASK-478: public caches for the found-accounts screen. The scan map holds
+  // each scanned id's derived address (or that it did not open); the seen list
+  // holds the ids the Home notice has announced. Never key bytes or error text.
+  private static readonly QUARANTINE_SCAN_KEY = 'voi_reconcile_quarantine_scan';
+  private static readonly QUARANTINE_NOTICE_SEEN_KEY =
+    'voi_reconcile_quarantine_notice_seen';
   private static readonly UNEXPLAINED_REMOVALS_KEY =
     'voi_reconcile_unexplained_removals';
   private static readonly RECONCILE_RECOVERY_MARKER_KEY =
@@ -1401,7 +1440,17 @@ export class AccountSecureStorage {
     } catch {
       return;
     }
+    // TASK-478: a quarantined key is read only by the found-accounts scan and
+    // restore, behind a fresh authentication, so the sweep leaves it in the
+    // envelope it was found in. A registry that cannot be read skips the sweep.
+    let skip: Set<string>;
+    try {
+      skip = new Set(await this.readQuarantinedIdsSalvaged());
+    } catch {
+      return;
+    }
     for (const id of ids) {
+      if (skip.has(id)) continue;
       const secret = SessionKeyVault.getSecret();
       if (secret === null) {
         return; // vault locked mid-sweep — stop; resumes on next unlock
@@ -2182,14 +2231,18 @@ export class AccountSecureStorage {
     accountId: string,
     timeoutMs: number = 1500
   ): Promise<boolean> {
-    const primary = await this.withTimeout(
-      secureStorage.getItem(this.secretKey(accountId)),
-      timeoutMs,
-      'secret presence probe'
-    );
+    // Only the presence boolean is kept: the fetched (encrypted) payload is
+    // not held past this expression, logged, or returned (TASK-478).
     // Truthiness (not `!= null`) to match the reader's `if (stored)` semantics —
     // an empty-string value reads as absent there too (Codex P2).
-    if (primary) {
+    const primaryPresent = Boolean(
+      await this.withTimeout(
+        secureStorage.getItem(this.secretKey(accountId)),
+        timeoutMs,
+        'secret presence probe'
+      )
+    );
+    if (primaryPresent) {
       return true;
     }
     // Primary absent: mirror migrateLegacyAccountDataLocked. A set wipe tombstone
@@ -2204,13 +2257,14 @@ export class AccountSecureStorage {
     }
     // No tombstone: a surviving legacy `voi_account_<id>` blob is a LIVE key the
     // reader would migrate on next access — count it as present (do NOT migrate).
-    const legacy = await this.withTimeout(
-      secureStorage.getItem(`${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`),
-      timeoutMs,
-      'legacy secret presence probe'
-    );
     // Truthiness to match migrateLegacyAccountDataLocked's `if (!legacyData)`.
-    return !!legacy;
+    return Boolean(
+      await this.withTimeout(
+        secureStorage.getItem(`${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`),
+        timeoutMs,
+        'legacy secret presence probe'
+      )
+    );
   }
 
   /**
@@ -2518,6 +2572,400 @@ export class AccountSecureStorage {
       if (next.length === 0) await storage.removeItem(this.QUARANTINED_IDS_KEY);
       else
         await storage.setItem(this.QUARANTINED_IDS_KEY, JSON.stringify(next));
+    });
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // TASK-478 — accounts found on this device. A quarantined key is one the boot
+  // reconcile found with no wallet account (an interrupted create, a lost wallet
+  // record). Reading one turns stored bytes into a key, so it happens only in
+  // scanQuarantinedAddresses and readQuarantinedKeyForRestore, which the
+  // found-accounts service calls behind a fresh authentication. Everything else
+  // here works from ids, presence and public data, and never decrypts.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /** The public scan map. Missing is `{}`; a corrupt map or entry is dropped. */
+  private static async readQuarantineScanTolerant(): Promise<
+    Record<string, QuarantineScanEntry>
+  > {
+    const raw = await this.withTimeout(
+      storage.getItem(this.QUARANTINE_SCAN_KEY),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'found-accounts scan read'
+    );
+    if (raw == null) return {};
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return {};
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+      return {};
+    const entries: Record<string, QuarantineScanEntry> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (!id || value === null || typeof value !== 'object') continue;
+      const entry = value as { address?: unknown; unreadable?: unknown };
+      if (entry.unreadable === true) entries[id] = { unreadable: true };
+      else if (
+        typeof entry.address === 'string' &&
+        algosdk.isValidAddress(entry.address)
+      )
+        entries[id] = { address: entry.address };
+    }
+    return entries;
+  }
+
+  /** The caller holds the key-mutation mutex. */
+  private static async writeQuarantineScanLocked(
+    entries: Record<string, QuarantineScanEntry>
+  ): Promise<void> {
+    if (Object.keys(entries).length === 0) {
+      await this.boundedStorageRemove(this.QUARANTINE_SCAN_KEY);
+      return;
+    }
+    await this.boundedStorageSet(
+      this.QUARANTINE_SCAN_KEY,
+      JSON.stringify(entries)
+    );
+  }
+
+  /** Ids the found-accounts notice has announced. Corrupt reads as `[]`. */
+  static async readFoundNoticeSeen(): Promise<string[]> {
+    const raw = await storage.getItem(this.QUARANTINE_NOTICE_SEEN_KEY);
+    if (raw == null) return [];
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed)
+        ? parsed.filter(
+            (id): id is string => typeof id === 'string' && id.length > 0
+          )
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static async markFoundNoticeSeen(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    return this.runKeyMutationExclusive(async () => {
+      const seen = await this.readFoundNoticeSeen();
+      const next = [...new Set([...seen, ...ids])];
+      if (next.length === seen.length) return;
+      await this.writeFoundNoticeSeenLocked(next);
+    });
+  }
+
+  /** The caller holds the key-mutation mutex. */
+  private static async writeFoundNoticeSeenLocked(
+    ids: string[]
+  ): Promise<void> {
+    if (ids.length === 0) {
+      await this.boundedStorageRemove(this.QUARANTINE_NOTICE_SEEN_KEY);
+      return;
+    }
+    await this.boundedStorageSet(
+      this.QUARANTINE_NOTICE_SEEN_KEY,
+      JSON.stringify(ids)
+    );
+  }
+
+  /**
+   * The display hint for a quarantined id: the address and label its secure
+   * metadata names, when that record is the id's own and the address is valid.
+   * Public data; a missing or unreadable record is no hint.
+   */
+  static async readQuarantineHint(
+    accountId: string
+  ): Promise<{ address: string; label?: string } | undefined> {
+    let raw: string | null;
+    try {
+      raw = await this.withTimeout(
+        storage.getItem(this.metadataKey(accountId)),
+        1500,
+        'found-account hint read'
+      );
+    } catch {
+      return undefined;
+    }
+    if (!raw) return undefined;
+    try {
+      const meta = JSON.parse(raw) as {
+        accountId?: unknown;
+        address?: unknown;
+        publicData?: { label?: unknown };
+      };
+      if (
+        meta?.accountId !== accountId ||
+        typeof meta.address !== 'string' ||
+        !algosdk.isValidAddress(meta.address)
+      )
+        return undefined;
+      const label = meta.publicData?.label;
+      return typeof label === 'string' && label.length > 0 && label.length <= 64
+        ? { address: meta.address, label }
+        : { address: meta.address };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * The quarantine registry minus `excludeIds` (the wallet's own ids), each
+   * with its presence and what is known about it publicly. Reads no key and
+   * takes no lock. A registry or presence read failure throws.
+   */
+  static async readQuarantineIndex(
+    excludeIds: Set<string>
+  ): Promise<QuarantineIndexRow[]> {
+    const ids = (await this.readQuarantinedIdsSalvaged()).filter(
+      (id) => !excludeIds.has(id)
+    );
+    if (ids.length === 0) return [];
+    const scan = await this.readQuarantineScanTolerant();
+    const rows: QuarantineIndexRow[] = [];
+    for (const id of ids) {
+      const row: QuarantineIndexRow = {
+        id,
+        present: await this.probeSecretPresenceStrict(id),
+      };
+      const entry = scan[id];
+      if (entry) row.scan = entry;
+      if (row.present && !(entry && 'address' in entry)) {
+        const hint = await this.readQuarantineHint(id);
+        if (hint) row.hint = hint;
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  /**
+   * THE decrypting reader for a quarantined key. The caller holds the
+   * key-mutation mutex and zeroes the returned key. It reads the primary slot
+   * only (a legacy-only slot would need a migration write) and opens it the way
+   * inspectSecretSlot does, with no cache, no lastAccessed write and no re-wrap.
+   *  - a read failure throws;
+   *  - a PIN with the vault locked throws VaultLockedError;
+   *  - a vault that changed during the read throws VaultChangedDuringReadError;
+   *  - anything that does not open to a 64-byte key returns null.
+   * It never logs.
+   */
+  private static async readQuarantinedKeyLocked(
+    accountId: string
+  ): Promise<Uint8Array | null> {
+    const raw = await this.withTimeout(
+      secureStorage.getItem(this.secretKey(accountId)),
+      1500,
+      'found-account secret read'
+    );
+    if (!raw) return null;
+    let payload: AccountSecretPayload;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (
+        parsed === null ||
+        typeof parsed !== 'object' ||
+        (typeof (parsed as { encryptedPrivateKey?: unknown })
+          .encryptedPrivateKey !== 'string' &&
+          !Array.isArray((parsed as { blobs?: unknown }).blobs))
+      )
+        return null;
+      payload = parsed as AccountSecretPayload;
+    } catch {
+      return null;
+    }
+    const vaultUnlocked = SessionKeyVault.isUnlocked();
+    if ((await this.hasPinStrict()) && !vaultUnlocked) {
+      throw new VaultLockedError();
+    }
+    const epoch = SessionKeyVault.currentEpoch();
+    // A failed device-id read must propagate, not read as "unreadable".
+    await this.getStableDeviceId();
+    let key: Uint8Array | undefined;
+    try {
+      if (
+        vaultUnlocked &&
+        Array.isArray(payload.blobs) &&
+        payload.blobs.length > 0
+      ) {
+        key = await this.tryDecryptV2Blobs(accountId, payload.blobs, undefined);
+      }
+      if (
+        !key &&
+        typeof payload.encryptedPrivateKey === 'string' &&
+        payload.encryptedPrivateKey.length > 0
+      ) {
+        key = await this.decryptPrivateKey(payload.encryptedPrivateKey);
+      }
+    } catch (error) {
+      if (error instanceof VaultLockedError) throw error;
+      return null;
+    }
+    if (!key) return null;
+    if (SessionKeyVault.currentEpoch() !== epoch) {
+      key.fill(0);
+      throw new VaultChangedDuringReadError();
+    }
+    if (key.length !== 64 || seedDerivedAddress(key) === null) {
+      key.fill(0);
+      return null;
+    }
+    return key;
+  }
+
+  /** Read one quarantined key, keep only the address it derives to. */
+  private static async scanQuarantinedKeyLocked(
+    accountId: string
+  ): Promise<QuarantineScanEntry> {
+    const key = await this.readQuarantinedKeyLocked(accountId);
+    if (!key) return { unreadable: true };
+    let address: string | null;
+    let ok: boolean;
+    try {
+      address = seedDerivedAddress(key);
+      ok = address !== null && keyBelongsToAddress(key, address);
+    } finally {
+      key.fill(0);
+    }
+    return ok && address !== null ? { address } : { unreadable: true };
+  }
+
+  /**
+   * Scan quarantined keys for their addresses (the caller has a fresh
+   * authentication). One mutex task; ids not in the registry are skipped. A
+   * locked or changed vault, or a read failure, stops the scan: the entries
+   * read so far are saved and the error is rethrown.
+   */
+  static async scanQuarantinedAddresses(
+    ids: string[]
+  ): Promise<Record<string, QuarantineScanEntry>> {
+    return this.runKeyMutationExclusive(async () => {
+      const registry = new Set(await this.readQuarantinedIdsSalvaged());
+      const results: Record<string, QuarantineScanEntry> = {};
+      let stopped: { error: unknown } | undefined;
+      for (const id of ids) {
+        if (!registry.has(id) || id in results) continue;
+        try {
+          results[id] = await this.scanQuarantinedKeyLocked(id);
+        } catch (error) {
+          stopped = { error };
+          break;
+        }
+      }
+      const scanned = Object.keys(results).length;
+      const unreadable = Object.values(results).filter(
+        (entry) => 'unreadable' in entry
+      ).length;
+      console.log(
+        `[foundAccounts] scanned ${scanned}, unreadable ${unreadable}`
+      );
+      if (scanned > 0) {
+        const saved = await this.readQuarantineScanTolerant();
+        await this.writeQuarantineScanLocked({ ...saved, ...results });
+      }
+      if (stopped) throw stopped.error;
+      return results;
+    });
+  }
+
+  /**
+   * The key of a quarantined id, for a restore to `listedAddress` (the caller
+   * has a fresh authentication and zeroes the key). A key that does not open is
+   * recorded as unreadable; a key that does not derive to `listedAddress` is
+   * zeroed and its scan entry dropped, so the next visit scans it again.
+   */
+  static async readQuarantinedKeyForRestore(
+    accountId: string,
+    listedAddress: string
+  ): Promise<Uint8Array> {
+    return this.runKeyMutationExclusive(async () => {
+      if (!(await this.readQuarantinedIdsSalvaged()).includes(accountId)) {
+        throw new FoundAccountNotQuarantinedError();
+      }
+      const key = await this.readQuarantinedKeyLocked(accountId);
+      if (!key) {
+        try {
+          const saved = await this.readQuarantineScanTolerant();
+          await this.writeQuarantineScanLocked({
+            ...saved,
+            [accountId]: { unreadable: true },
+          });
+        } catch {
+          console.warn('[foundAccounts] scan record not saved');
+        }
+        throw new AccountStorageError('This key could not be read');
+      }
+      if (!keyBelongsToAddress(key, listedAddress)) {
+        key.fill(0);
+        try {
+          const saved = await this.readQuarantineScanTolerant();
+          if (accountId in saved) {
+            delete saved[accountId];
+            await this.writeQuarantineScanLocked(saved);
+          }
+        } catch {
+          console.warn('[foundAccounts] scan record not cleared');
+        }
+        throw new FoundAccountMismatchError();
+      }
+      return key;
+    });
+  }
+
+  /**
+   * After a restore put the key into the new account `newId`: delete the found
+   * copy `oldId`, but only while it is still quarantined and once the new slot
+   * reads the key back for `address`. Anything short of that keeps the found
+   * copy ('kept'); only an unknown write outcome is rethrown.
+   */
+  static async releaseRestoredOrphan(
+    oldId: string,
+    newId: string,
+    address: string
+  ): Promise<'released' | 'kept'> {
+    return this.runKeyMutationExclusive(async () => {
+      try {
+        if (!(await this.readQuarantinedIdsSalvaged()).includes(oldId))
+          return 'kept' as const;
+        const slot = await this.inspectSlotUnderOneVaultState(newId, address);
+        if (slot.state !== 'key-matches') return 'kept' as const;
+        await this.deleteAccountLocked(oldId);
+        await this.dropQuarantineRecordsLocked(oldId);
+        return 'released' as const;
+      } catch (error) {
+        if (error instanceof WriteOutcomeUnknownError) throw error;
+        console.warn('[foundAccounts] found copy kept', errorKind(error));
+        return 'kept' as const;
+      }
+    });
+  }
+
+  /**
+   * Delete a quarantined key from this device (the caller has a fresh
+   * authentication). Refused while a storage write for its slot is unresolved.
+   * A delete failure throws and the id stays in the registry.
+   */
+  static async deleteQuarantinedOrphan(accountId: string): Promise<void> {
+    return this.runKeyMutationExclusive(async () => {
+      if (!(await this.readQuarantinedIdsSalvaged()).includes(accountId)) {
+        throw new FoundAccountNotQuarantinedError();
+      }
+      const primaryKey = this.secretKey(accountId);
+      const legacyKey = `${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`;
+      const unknownWrites = await this.readUnknownWritesStrict();
+      if (
+        unknownWrites[primaryKey] !== undefined ||
+        unknownWrites[legacyKey] !== undefined ||
+        hasPendingRecord(secureStorage, primaryKey) ||
+        hasPendingRecord(secureStorage, legacyKey)
+      ) {
+        throw new AccountStorageError(
+          'A storage write for this key is unresolved; restart the app'
+        );
+      }
+      await this.deleteAccountLocked(accountId);
+      await this.dropQuarantineRecordsLocked(accountId);
     });
   }
 
@@ -3206,25 +3654,50 @@ export class AccountSecureStorage {
         );
       }
       await this.deleteAccountLocked(accountId);
-      // The secret is gone. Bookkeeping cleanup is best-effort: a corrupt
-      // registry or record must never turn a completed delete into a failure.
-      try {
-        const quarantine = await this.readQuarantinedIdsSalvaged();
-        if (quarantine.includes(accountId)) {
-          const remaining = quarantine.filter((id) => id !== accountId);
-          if (remaining.length === 0)
-            await storage.removeItem(this.QUARANTINED_IDS_KEY);
-          else
-            await storage.setItem(
-              this.QUARANTINED_IDS_KEY,
-              JSON.stringify(remaining)
-            );
-        }
-        await this.clearUnexplainedRemoval(accountId);
-      } catch {
-        console.warn('[deleteAccount] reconcile record cleanup failed');
-      }
+      await this.dropQuarantineRecordsLocked(accountId);
     });
+  }
+
+  /**
+   * After a verified secret delete, drop the id's reconcile bookkeeping: the
+   * quarantine registry entry, the unexplained-removal record, and the
+   * found-accounts scan entry and notice record (TASK-478). Best-effort: a
+   * corrupt registry or record must never turn a completed delete into a
+   * failure. The caller holds the key-mutation mutex.
+   */
+  private static async dropQuarantineRecordsLocked(
+    accountId: string
+  ): Promise<void> {
+    try {
+      const quarantine = await this.readQuarantinedIdsSalvaged();
+      if (quarantine.includes(accountId)) {
+        const remaining = quarantine.filter((id) => id !== accountId);
+        if (remaining.length === 0)
+          await storage.removeItem(this.QUARANTINED_IDS_KEY);
+        else
+          await storage.setItem(
+            this.QUARANTINED_IDS_KEY,
+            JSON.stringify(remaining)
+          );
+      }
+      await this.clearUnexplainedRemoval(accountId);
+    } catch {
+      console.warn('[deleteAccount] reconcile record cleanup failed');
+    }
+    try {
+      const scan = await this.readQuarantineScanTolerant();
+      if (accountId in scan) {
+        delete scan[accountId];
+        await this.writeQuarantineScanLocked(scan);
+      }
+      const seen = await this.readFoundNoticeSeen();
+      if (seen.includes(accountId))
+        await this.writeFoundNoticeSeenLocked(
+          seen.filter((id) => id !== accountId)
+        );
+    } catch {
+      console.warn('[deleteAccount] found-accounts record cleanup failed');
+    }
   }
 
   /** Persist public account details for a blob account removed without a journaled user delete. */
@@ -5671,6 +6144,8 @@ export class AccountSecureStorage {
         for (const registryKey of [
           this.QUARANTINED_IDS_KEY,
           this.UNEXPLAINED_REMOVALS_KEY,
+          this.QUARANTINE_SCAN_KEY,
+          this.QUARANTINE_NOTICE_SEEN_KEY,
         ]) {
           try {
             await this.boundedStorageRemove(registryKey);
@@ -5742,6 +6217,8 @@ export class AccountSecureStorage {
           this.PENDING_CREATES_KEY,
           this.QUARANTINED_IDS_KEY,
           this.UNEXPLAINED_REMOVALS_KEY,
+          this.QUARANTINE_SCAN_KEY,
+          this.QUARANTINE_NOTICE_SEEN_KEY,
         ]);
         for (const id of idsToDelete) {
           coveredKeys.add(this.secretKey(id));

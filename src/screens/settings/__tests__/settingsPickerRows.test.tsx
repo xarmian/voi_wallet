@@ -18,6 +18,14 @@ const mockActive = {
 } as AccountMetadata;
 const mockNavigate = jest.fn();
 const mockNavigation = { navigate: mockNavigate, goBack: jest.fn() };
+// TASK-478: the found-accounts row reads storage on focus; not under test here.
+jest.mock('@/hooks/useFoundAccountsSummary', () => ({
+  useFoundAccountsSummary: () => ({
+    summary: null,
+    error: false,
+    reload: jest.fn(),
+  }),
+}));
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => mockNavigation,
 }));

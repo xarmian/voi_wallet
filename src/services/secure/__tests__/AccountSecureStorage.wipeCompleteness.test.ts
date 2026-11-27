@@ -453,3 +453,33 @@ test('a hung wipe-tombstone write is bounded: the wipe does not start, nothing i
     jest.useRealTimers();
   }
 });
+
+test('TASK-478: Delete Everything clears the found-accounts scan map and notice record', async () => {
+  mockPlainValues.set(service.METADATA_LIST_KEY, '[]');
+  mockPlainValues.set(
+    'voi_reconcile_quarantine_scan',
+    JSON.stringify({ q1: { unreadable: true } })
+  );
+  mockPlainValues.set(
+    'voi_reconcile_quarantine_notice_seen',
+    JSON.stringify(['q1'])
+  );
+  await expect(AccountSecureStorage.clearAll()).resolves.toBeUndefined();
+  expect(mockPlainValues.has('voi_reconcile_quarantine_scan')).toBe(false);
+  expect(mockPlainValues.has('voi_reconcile_quarantine_notice_seen')).toBe(
+    false
+  );
+});
+
+test('TASK-478: a failed removal of the scan map is reported by name', async () => {
+  mockPlainValues.set(service.METADATA_LIST_KEY, '[]');
+  mockPlainValues.set(
+    'voi_reconcile_quarantine_scan',
+    JSON.stringify({ q1: { unreadable: true } })
+  );
+  mockRemoveFailureKey = 'voi_reconcile_quarantine_scan';
+  await expect(AccountSecureStorage.clearAll()).rejects.toMatchObject({
+    name: 'WipeIncompleteError',
+    keys: expect.arrayContaining(['voi_reconcile_quarantine_scan']),
+  });
+});
