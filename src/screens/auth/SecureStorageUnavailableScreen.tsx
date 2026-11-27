@@ -14,7 +14,7 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { redactError } from '@/utils/logRedaction';
-import { isWipeInFlight, wipeAllLocalData } from '@/services/wipe';
+import { wipeAllLocalData } from '@/services/wipe';
 import {
   showWipeCompleteNotice,
   showWipeIncompleteNotice,
@@ -50,9 +50,24 @@ const showAlert = (
   }
 };
 
-// Bound each reset step so a wedged native call leaves the reset retry usable.
-// A timeout fails closed just like a rejected deletion.
+// Bound the recheck after a reset, so a wedged native call leaves the reset
+// retry usable. A timeout fails closed just like a rejected deletion.
 const RESET_STEP_TIMEOUT_MS = 8000;
+
+/**
+ * TASK-469: the longest this screen shows "Resetting…" for one wipe. The wipe
+ * bounds each of its own steps (5 s or 15 s) and runs many of them; on this
+ * screen the keychain is failing, so those bounds can run out and the wipe can
+ * take far longer than the step bound and still complete. So the screen never
+ * calls a wipe that is merely slow incomplete before this deadline. But a few
+ * waits inside the wipe have no bound (a storage read or a mutex wait in
+ * clearAll), and one that never settles keeps the wipe running for good. Past
+ * this deadline the screen reports the wipe incomplete and frees its buttons,
+ * and keeps following the same wipe: a late success shows the complete notice
+ * and re-runs the check. It is longer than the boot's 30 s finish bound, so a
+ * wipe the boot gave up on gets more time here.
+ */
+export const RECOVERY_WIPE_DEADLINE_MS = 120000;
 
 class StepTimeoutError extends Error {}
 
@@ -76,23 +91,6 @@ const withTimeout = <T,>(
       }
     );
   });
-
-/**
- * TASK-469: the wipe's outcome. The wipe bounds each of its own steps (5 s or
- * 15 s), and it runs many of them; on this screen the keychain is failing, so
- * those bounds can run out and the whole wipe can take far longer than the
- * step bound and still complete. So past the bound, while the wipe is still
- * running, keep waiting for it and show nothing new: the incomplete notice
- * only when it rejects, the complete one only when it resolves.
- */
-const waitForWipe = async (wipe: Promise<void>): Promise<void> => {
-  try {
-    await withTimeout(wipe, RESET_STEP_TIMEOUT_MS, 'wipe');
-  } catch (error) {
-    if (!(error instanceof StepTimeoutError) || !isWipeInFlight()) throw error;
-    await wipe;
-  }
-};
 
 interface SecureStorageUnavailableScreenProps {
   /**
@@ -151,6 +149,12 @@ export default function SecureStorageUnavailableScreen({
     };
   }, []);
 
+  // Each reset press is one attempt. A wipe that outlived the deadline is
+  // followed only while its attempt is the latest: a second press joins the
+  // same wipe (wipeAllLocalData returns the running one) and owns its outcome,
+  // so one outcome shows one notice.
+  const attemptRef = useRef(0);
+
   const busy = isRetrying || isResetting;
 
   const handleRetry = async () => {
@@ -168,7 +172,46 @@ export default function SecureStorageUnavailableScreen({
     }
   };
 
+  // Re-run the auth check: with local data wiped it resolves to genuine
+  // absence ⇒ unlocked setup ⇒ Onboarding (restore-from-recovery-phrase).
+  // Bounded too, so a recheck that never settles can't strand "Resetting…".
+  const recheckAfterWipe = () =>
+    withTimeout(onRetry(), RESET_STEP_TIMEOUT_MS, 'recheck');
+
+  /**
+   * The screen already reported this wipe incomplete at the deadline. If it
+   * later completes while this screen is mounted and no later press took it
+   * over, show the complete notice and re-run the check, as the success path
+   * does. A later failure shows nothing new.
+   */
+  const followLateWipe = (wipe: Promise<void>, attempt: number) => {
+    const current = () => mountedRef.current && attemptRef.current === attempt;
+    wipe.then(
+      async () => {
+        if (!current()) return;
+        setResetError(null);
+        setIsResetting(true);
+        showWipeCompleteNotice();
+        try {
+          await recheckAfterWipe();
+        } catch (error) {
+          console.error(
+            'Recheck after a late reset failed:',
+            redactError(error)
+          );
+        } finally {
+          if (mountedRef.current) {
+            setIsResetting(false);
+          }
+        }
+      },
+      () => {}
+    );
+  };
+
   const performReset = async () => {
+    attemptRef.current += 1;
+    const attempt = attemptRef.current;
     setIsResetting(true);
     // Mark the attempt BEFORE the wipe. A SUCCESSFUL reset unmounts this screen
     // (securityUnavailable cleared), discarding this flag; if we stay mounted the
@@ -176,17 +219,17 @@ export default function SecureStorageUnavailableScreen({
     setResetAttempted(true);
     setResetError(null);
     try {
+      let wipe: Promise<void> | undefined;
       try {
-        await waitForWipe(
-          // TASK-415 / TASK-469: reset fails closed when key material can't be
-          // verifiably erased. wipeAllLocalData records the wipe request first, then
-          // erases secure storage, the wallet blob and every other local record
-          // not on the allow-list, and clears the request only when all of it is
-          // complete; an incomplete wipe is finished by the next
-          // launch. A keychain that fails every read can't support wallet setup
-          // either; wiping metadata here would recreate TASK-413's orphan-PIN state.
-          wipeAllLocalData()
-        );
+        // TASK-415 / TASK-469: reset fails closed when key material can't be
+        // verifiably erased. wipeAllLocalData records the wipe request first, then
+        // erases secure storage, the wallet blob and every other local record
+        // not on the allow-list, and clears the request only when all of it is
+        // complete; an incomplete wipe is finished by the next
+        // launch. A keychain that fails every read can't support wallet setup
+        // either; wiping metadata here would recreate TASK-413's orphan-PIN state.
+        wipe = wipeAllLocalData();
+        await withTimeout(wipe, RECOVERY_WIPE_DEADLINE_MS, 'wipe');
       } catch (error) {
         if (mountedRef.current) {
           setResetError(
@@ -195,14 +238,14 @@ export default function SecureStorageUnavailableScreen({
         }
         // The same message as the lock screen; the user stays on this screen.
         showWipeIncompleteNotice();
+        // Past the deadline the wipe is still running: keep following it.
+        if (wipe && error instanceof StepTimeoutError)
+          followLateWipe(wipe, attempt);
         throw error;
       }
       // Only after the wipe reported complete.
       showWipeCompleteNotice();
-      // Re-run the auth check: with local data wiped it resolves to genuine
-      // absence ⇒ unlocked setup ⇒ Onboarding (restore-from-recovery-phrase).
-      // Bounded too, so a recheck that never settles can't strand "Resetting…".
-      await withTimeout(onRetry(), RESET_STEP_TIMEOUT_MS, 'recheck');
+      await recheckAfterWipe();
     } catch (error) {
       // A throw here (or a recheck that re-lands on recovery without throwing)
       // leaves this screen mounted; resetAttempted stays true and the inline
