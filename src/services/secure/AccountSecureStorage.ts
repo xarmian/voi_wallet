@@ -2626,10 +2626,12 @@ export class AccountSecureStorage {
   // the key back. Only that boolean is kept, as the `wallet` verdict on every
   // scan entry with the key's address: the scan records what it learned, a
   // remove records `false` when it refuses because the slot doesn't hold the
-  // key, and a release that keeps the found copy records the new account's
-  // answer. A locked vault records nothing. Deleting a slot clears the
-  // verdicts that name it. Everything else here works from ids, presence and
-  // public data, and never decrypts.
+  // key, a release that keeps the found copy records the new account's
+  // answer, and a release that deletes it records `true` for the new account
+  // on the remaining copies. A locked vault records nothing. A wallet
+  // account's delete clears the verdicts that name it before its slot is
+  // touched, and refuses if it can't. Everything else here works from ids,
+  // presence and public data, and never decrypts.
   // ───────────────────────────────────────────────────────────────────────────
 
   /** The public scan map. Missing is `{}`; a corrupt map or entry is dropped. */
@@ -3914,8 +3916,8 @@ export class AccountSecureStorage {
    * found-accounts scan entry and notice record (TASK-478). Every found key's
    * verdict that names the id as its wallet account loses it (the address
    * stays), since the slot it described is gone; the next scan checks again,
-   * and until then the key counts. deleteAccountLocked already cleared those
-   * verdicts before its first slot write; clearing again here is harmless.
+   * and until then the key counts. deleteAccount already cleared those
+   * verdicts strictly before the slot write; clearing again here is harmless.
    * Best-effort: a corrupt registry or record must never turn a completed
    * delete into a failure. The caller holds the key-mutation mutex.
    */
@@ -3957,14 +3959,13 @@ export class AccountSecureStorage {
 
   /**
    * Strips the `wallet` verdict (keeping the address) from every found key's
-   * scan entry that names `accountId` as its wallet account. Runs before that
-   * account's slot is deleted, so a delete that fails partway never leaves a
-   * verdict describing a slot that is gone: a missing verdict is always safe
-   * (the key counts and is scanned again). Best effort by default: a failure
-   * is logged without detail and never thrown, since the bulk wipe and the
-   * create rollbacks delete ids no verdict names. With `strict` (a wallet
-   * account's delete) a failure throws AccountStorageError before any slot is
-   * touched; a map with nothing to clear is never written, so it can't block.
+   * scan entry that names `accountId` as its wallet account. A missing verdict
+   * is always safe (the key counts and is scanned again). With `strict`, run
+   * by deleteAccount before the slot is touched, a failure throws
+   * AccountStorageError, so a wallet account's slot is never deleted while a
+   * verdict still describes it; a map with nothing to clear is never written,
+   * so it can't block. Otherwise best effort: a failure is logged without
+   * detail and never thrown.
    * The caller holds the key-mutation mutex.
    */
   private static async clearVerdictsNamingLocked(
@@ -4107,8 +4108,9 @@ export class AccountSecureStorage {
   /** RAW deleteAccount (no mutex acquire) — for callers already holding it
    *  (e.g. clearAll). */
   private static async deleteAccountLocked(accountId: string): Promise<void> {
-    // Before the first slot write: a later step can throw with the slot gone.
-    await this.clearVerdictsNamingLocked(accountId);
+    // A wallet account's found-key verdicts are cleared strictly by
+    // deleteAccount before this runs. The other callers (the bulk wipe, create
+    // rollbacks, found-key deletes) delete ids no verdict names.
     try {
       // Remove from secure storage
       await this.saveSecret(accountId, null);
