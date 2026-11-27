@@ -15,6 +15,7 @@ import {
   TouchableOpacity,
   TextInput,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -566,7 +567,13 @@ export default function LockScreen({
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <View style={styles.content}>
+      {/* Scrolls so a tall lockout layout is never clipped at either edge. */}
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        bounces={false}
+        alwaysBounceVertical={false}
+      >
         <View
           style={
             summary ? [styles.header, styles.headerWithSummary] : styles.header
@@ -653,7 +660,7 @@ export default function LockScreen({
             </TouchableOpacity>
           </View>
         )}
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -665,8 +672,9 @@ const createStyles = (theme: Theme) =>
       backgroundColor: theme.colors.background,
     },
     content: {
-      flex: 1,
+      flexGrow: 1,
       paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.lg,
       justifyContent: 'center',
     },
     header: {
