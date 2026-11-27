@@ -80,6 +80,11 @@ import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountType } from '@/types/wallet';
+import {
+  closeWipeWindow,
+  openWipeWindow,
+  runWipeResets,
+} from '@/services/wipe/gate';
 import { performFullRestore, restoreAccounts } from '../restorers';
 import type { BackupAccountData, BackupSettings } from '../types';
 
@@ -329,5 +334,34 @@ describe('TASK-504 step 2b: fresh is decided from strict reads', () => {
 
     const none = await restoreFile(keyed('f-9'), fileSettings(0));
     expect(none.pairedSignersNotRestored).toBe(0);
+  });
+});
+
+describe('TASK-492: a wipe that starts during a fresh restore', () => {
+  afterEach(() => closeWipeWindow());
+
+  it('a wipe that starts after the settings are written stops the restore: friends, signer settings and flags are never written', async () => {
+    const setItem = AsyncStorage.setItem as jest.Mock;
+    setItem.mockClear();
+    // The wipe starts while the file's display settings are being written.
+    multiSet.mockImplementationOnce(async () => {
+      openWipeWindow();
+      runWipeResets();
+    });
+    const restoring = performFullRestore(
+      [keyed('w-1')],
+      {
+        ...fileSettings(),
+        remoteSigner: { appMode: 'wallet', signerConfig: null },
+      } as unknown as BackupSettings,
+      [{ envoiName: 'bob' } as never],
+      { swapEnabled: true } as Parameters<typeof performFullRestore>[3]
+    );
+    await expect(restoring).rejects.toMatchObject({ code: 'RESTORE_FAILED' });
+    // Only the settings write ran; the signer settings write never did.
+    expect(multiSet).toHaveBeenCalledTimes(1);
+    const written = setItem.mock.calls.map(([key]) => key);
+    expect(written).not.toContain('@friends/list');
+    expect(written).not.toContain('experimental-features');
   });
 });

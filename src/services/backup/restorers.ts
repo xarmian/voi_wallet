@@ -1317,8 +1317,18 @@ export async function performFullRestore(
   validateRetainedKeys(stagedAccounts);
   // TASK-492: a restore that straddles a wipe writes none of the file's
   // settings, friends or flags after it (the accounts step has its own reset
-  // check).
+  // check). Each settings write below checks again, because a wipe can start
+  // while the one before it is awaited; the first that finds a wipe stops the
+  // restore with RESTORE_FAILED, so no count is reported for a wiped device.
   const epoch = wipeEpoch();
+  const stopIfWiped = () => {
+    if (wipedSince(epoch)) {
+      throw new BackupError(
+        'Failed to restore accounts: the wallet was deleted during the restore',
+        'RESTORE_FAILED'
+      );
+    }
+  };
 
   // Decide "fresh" BEFORE any account is added, from strict reads: a read
   // error stops the restore here, with nothing written. The decision runs
@@ -1344,12 +1354,7 @@ export async function performFullRestore(
   // boot into the fail-closed recovery screen (whose Reset WIPES this
   // just-restored wallet); the breadcrumb lets checkInitialAuthState route to
   // SecuritySetup (resume PIN setup) instead. setupPin clears it on success.
-  if (wipedSince(epoch)) {
-    throw new BackupError(
-      'Failed to restore accounts: the wallet was deleted during the restore',
-      'RESTORE_FAILED'
-    );
-  }
+  stopIfWiped();
   if (!hasPin) {
     await markPinSetupPending();
   }
@@ -1366,11 +1371,17 @@ export async function performFullRestore(
   let remoteSignerSettingsRestored = false;
   let friendsCount = 0;
   if (fresh) {
+    // None of these writes goes through a store with its own wipe check: each
+    // writes AsyncStorage directly.
+    stopIfWiped();
     await restoreSettings(settings);
+    stopIfWiped();
     remoteSignerSettingsRestored = await restoreRemoteSignerSettings(
       settings.remoteSigner
     );
+    stopIfWiped();
     friendsCount = await restoreFriends(friends);
+    stopIfWiped();
     await restoreExperimental(experimental);
   }
 
