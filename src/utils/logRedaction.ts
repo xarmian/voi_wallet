@@ -98,17 +98,30 @@ export const redactError = (error: unknown): string => {
   }
 };
 
+// Most specific first. Each label is a fixed literal, never read from the value.
+const BUILT_IN_ERROR_KINDS: readonly [ErrorConstructor, string][] = [
+  [TypeError, 'TypeError'],
+  [RangeError, 'RangeError'],
+  [ReferenceError, 'ReferenceError'],
+  [SyntaxError, 'SyntaxError'],
+  [EvalError, 'EvalError'],
+  [URIError, 'URIError'],
+  [Error, 'Error'],
+];
+
 /**
- * The error's kind only (its class name, or its typeof for a non-Error throw),
- * never its message. For catch sites next to session credentials: pattern
- * redaction can't recognise an arbitrary PIN or passphrase, so a message that
- * might carry one is not logged at all. Total, like redactError.
+ * The error's kind only, as a fixed label: the built-in Error type it is an
+ * instance of (a custom subclass reads as its built-in base), or its typeof for
+ * a non-Error throw. Nothing is read from the thrown value itself, not its
+ * message and not its constructor name, both of which the thrower controls. For
+ * catch sites next to session credentials: pattern redaction can't recognise an
+ * arbitrary PIN or passphrase, so nothing that might carry one is logged.
+ * Total, like redactError.
  */
 export const errorKind = (error: unknown): string => {
   try {
-    if (error instanceof Error) {
-      const name = error.constructor?.name;
-      return typeof name === 'string' && name.length > 0 ? name : 'Error';
+    for (const [ctor, label] of BUILT_IN_ERROR_KINDS) {
+      if (error instanceof ctor) return label;
     }
     return typeof error;
   } catch {

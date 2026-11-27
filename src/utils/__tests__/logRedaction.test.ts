@@ -178,12 +178,22 @@ describe('redactError never throws (final review, TASK-290)', () => {
 });
 
 describe('errorKind (TASK-561)', () => {
-  it('returns the class name of an Error, never its message', () => {
+  it('returns the built-in Error type, never its message', () => {
     expect(errorKind(new TypeError('pin 482913'))).toBe('TypeError');
+    expect(errorKind(new RangeError('pin 482913'))).toBe('RangeError');
+    expect(errorKind(new Error('pin 482913'))).toBe('Error');
+  });
+
+  it('reads nothing the thrower controls: a custom subclass or a forged constructor name reads as its built-in base', () => {
     class VaultListenerError extends Error {}
-    expect(errorKind(new VaultListenerError('pin 482913'))).toBe(
-      'VaultListenerError'
-    );
+    expect(errorKind(new VaultListenerError('pin 482913'))).toBe('Error');
+    const forged = Object.assign(new Error(), {
+      constructor: { name: 'pin 482913' },
+    });
+    expect(errorKind(forged)).toBe('Error');
+    const forgedName = new TypeError();
+    forgedName.name = 'pin 482913';
+    expect(errorKind(forgedName)).toBe('TypeError');
   });
 
   it('returns typeof for a non-Error throw, never its value', () => {
@@ -193,13 +203,16 @@ describe('errorKind (TASK-561)', () => {
   });
 
   it('never throws', () => {
-    const hostile = Object.create(Error.prototype, {
-      constructor: {
-        get() {
+    // instanceof walks the prototype chain; a proxy whose trap throws makes it
+    // throw.
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
           throw new Error('boom');
         },
-      },
-    });
+      }
+    );
     expect(errorKind(hostile)).toBe('[unloggable error]');
   });
 });
