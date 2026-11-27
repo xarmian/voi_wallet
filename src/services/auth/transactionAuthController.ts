@@ -2288,6 +2288,15 @@ export class TransactionAuthController {
         });
         return;
       }
+      if (flowLapsed) {
+        // A watched flow that lapsed ends here; it never re-arms a start.
+        this.updateState({
+          state: 'error',
+          result: null,
+          error: flowLapseOutcome(),
+        });
+        return;
+      }
       if (lockedReview) {
         this.updateState({
           state: 'error',

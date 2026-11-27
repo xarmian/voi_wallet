@@ -164,6 +164,7 @@ const transfer = (): UnifiedTransactionRequest => ({
 
 type Internals = {
   cancelledFlowGeneration: number;
+  pendingStartAfterReady: boolean;
   startSigning(pin?: string): Promise<void>;
 };
 const internals = (controller: TransactionAuthController) =>
@@ -324,6 +325,33 @@ describe.each(['lock', 'background'] as const)('lapse by %s', (reason) => {
     expectLapseError(controller, STOPPED);
     await finish({ success: false, error });
     expectLapseError(controller, STOPPED);
+  });
+
+  // A throw that reaches the controller's catch after a lapse ends the flow
+  // with the lapse text; it never re-arms a start for when the device is ready.
+  it('noGrantLapseThenThrowDoesNotRearm', async () => {
+    signer.mockImplementationOnce(
+      (
+        _req: UnifiedTransactionRequest,
+        callbacks: UnifiedSigningCallbacks,
+        options: { signal: AbortSignal }
+      ) =>
+        new Promise<void>((_resolve, reject) => {
+          runs.push({
+            callbacks,
+            signal: options.signal,
+            resolve: () => reject(new Error('Ledger device not connected')),
+          });
+          callbacks.onLedgerPrompt?.({ index: 1, total: 3 });
+        })
+    );
+    const controller = await signing(batch());
+    lapse(reason);
+    run().resolve();
+    await flush();
+    expectLapseError(controller, STOPPED);
+    expect(internals(controller).pendingStartAfterReady).not.toBe(true);
+    expect(signer).toHaveBeenCalledTimes(1);
   });
 
   // Keyed on signsSequentially, not on the Ledger flow: a software route that
