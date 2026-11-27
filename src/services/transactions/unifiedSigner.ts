@@ -330,12 +330,20 @@ export class UnifiedTransactionSigner {
         case 'asa_transfer':
         case 'arc200_transfer':
         case 'arc72_transfer':
-          result = await this.signStandardTransfer(request, callbacks);
+          result = await this.signStandardTransfer(
+            request,
+            callbacks,
+            options?.signal
+          );
           break;
 
         case 'rekey':
         case 'rekey_reverse':
-          result = await this.signRekeyTransaction(request, callbacks);
+          result = await this.signRekeyTransaction(
+            request,
+            callbacks,
+            options?.signal
+          );
           break;
 
         case 'batch_transaction':
@@ -348,11 +356,19 @@ export class UnifiedTransactionSigner {
           break;
 
         case 'keyreg':
-          result = await this.signKeyregTransaction(request, callbacks);
+          result = await this.signKeyregTransaction(
+            request,
+            callbacks,
+            options?.signal
+          );
           break;
 
         case 'appl':
-          result = await this.signApplTransaction(request, callbacks);
+          result = await this.signApplTransaction(
+            request,
+            callbacks,
+            options?.signal
+          );
           break;
 
         default:
@@ -381,7 +397,8 @@ export class UnifiedTransactionSigner {
    */
   private async signStandardTransfer(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
     if (!request.transferParams) {
       throw new Error('Transfer parameters required for standard transfers');
@@ -399,7 +416,8 @@ export class UnifiedTransactionSigner {
           onLedgerRejected: callbacks?.onLedgerRejected,
           onNetworkSubmit: callbacks?.onNetworkSubmit,
           onNetworkConfirmed: callbacks?.onNetworkConfirmed,
-        }
+        },
+        { signal }
       );
 
       return {
@@ -417,7 +435,8 @@ export class UnifiedTransactionSigner {
    */
   private async signRekeyTransaction(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
     if (!request.rekeyParams) {
       throw new Error('Rekey parameters required for rekey transactions');
@@ -444,7 +463,8 @@ export class UnifiedTransactionSigner {
               onLedgerRejected: callbacks?.onLedgerRejected,
               onNetworkSubmit: callbacks?.onNetworkSubmit,
               onNetworkConfirmed: callbacks?.onNetworkConfirmed,
-            }
+            },
+            { signal }
           ));
       } else {
         // Standard rekey to another account
@@ -467,7 +487,8 @@ export class UnifiedTransactionSigner {
             onLedgerRejected: callbacks?.onLedgerRejected,
             onNetworkSubmit: callbacks?.onNetworkSubmit,
             onNetworkConfirmed: callbacks?.onNetworkConfirmed,
-          }
+          },
+          { signal }
         ));
       }
 
@@ -1214,7 +1235,8 @@ export class UnifiedTransactionSigner {
    */
   private async signKeyregTransaction(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
     if (!request.keyregParams) {
       throw new Error('Keyreg parameters required');
@@ -1287,6 +1309,8 @@ export class UnifiedTransactionSigner {
       );
 
       callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
+      // Cancel stops the send up to here, never after it is issued.
+      if (signal?.aborted) throw new Error('Signing cancelled');
       callbacks?.onNetworkSubmit?.();
 
       const txId = await submitAndConfirm(networkService, signedTxnBlob);
@@ -1307,7 +1331,8 @@ export class UnifiedTransactionSigner {
    */
   private async signApplTransaction(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
     if (!request.applParams) {
       throw new Error('Application parameters required');
@@ -1353,6 +1378,8 @@ export class UnifiedTransactionSigner {
       );
 
       callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
+      // Cancel stops the send up to here, never after it is issued.
+      if (signal?.aborted) throw new Error('Signing cancelled');
       callbacks?.onNetworkSubmit?.();
 
       const txId = await submitAndConfirm(networkService, signedTxnBlob);
