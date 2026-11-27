@@ -39,6 +39,9 @@ const mockCtl = {
   asyncGetThrows: false,
   // Make the native delete THROW (a broken keystore can make deletion fail).
   nativeDeleteThrows: false,
+  // Make the AsyncStorage presence-sentinel WRITE throw (the native value write
+  // has already landed by then).
+  sentinelSetThrows: false,
 };
 
 jest.mock('expo-secure-store', () => ({
@@ -80,6 +83,9 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
       return mockAsyncBacking.has(k) ? mockAsyncBacking.get(k)! : null;
     }),
     setItem: jest.fn(async (k: string, v: string) => {
+      if (mockCtl.sentinelSetThrows && k.startsWith('__voi_ss_present__')) {
+        throw new Error('AsyncStorage write failed');
+      }
       mockAsyncBacking.set(k, v);
     }),
     removeItem: jest.fn(async (k: string) => {
@@ -112,6 +118,7 @@ beforeEach(() => {
   mockCtl.iosNativeThrows = false;
   mockCtl.asyncGetThrows = false;
   mockCtl.nativeDeleteThrows = false;
+  mockCtl.sentinelSetThrows = false;
   jest.clearAllMocks();
 });
 
@@ -209,6 +216,22 @@ describe('MobileSecureStorageAdapter — Android fail-closed (TASK-213)', () => 
     await expect(adapter.getItem(PIN_KEY)).rejects.toThrow(
       /secure storage read failed/i
     );
+  });
+
+  it('a throwing sentinel write rejects setItem with the value already stored; the next read returns it and writes the sentinel (TASK-573)', async () => {
+    const adapter = loadAdapter('android');
+    mockCtl.sentinelSetThrows = true;
+
+    await expect(adapter.setItem(PIN_KEY, 'opaque-credential')).rejects.toThrow(
+      'AsyncStorage write failed'
+    );
+    // The native write ran first, so the value landed even though setItem threw.
+    expect(mockSecureBacking.get(PIN_KEY)).toBe('opaque-credential');
+    expect(mockAsyncBacking.has(SENTINEL)).toBe(false);
+
+    mockCtl.sentinelSetThrows = false;
+    await expect(adapter.getItem(PIN_KEY)).resolves.toBe('opaque-credential');
+    expect(mockAsyncBacking.get(SENTINEL)).toBe('1');
   });
 
   it('propagates an AsyncStorage sentinel-read failure (fail closed, never coerced to absence)', async () => {

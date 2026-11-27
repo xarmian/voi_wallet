@@ -2,8 +2,10 @@
 // before the credential write. If that write then fails and a strict read-back
 // shows no credential exists, the breadcrumb is set again, so a later kill
 // boots to SecuritySetup (resume) and not to the recovery screen. If the write
-// landed, or the read-back cannot tell, nothing is re-marked. changePin never
-// reads back or marks. Real AccountSecureStorage + SessionKeyVault + envelope
+// landed, or the read-back cannot tell, nothing is re-marked; a write that
+// landed is treated as committed (TASK-573). changePin also reads the
+// credential back after a failed write, but never runs the breadcrumb
+// read-back or marks. Real AccountSecureStorage + SessionKeyVault + envelope
 // crypto; only platform storage is in memory.
 
 jest.mock('@/platform', () => {
@@ -249,18 +251,18 @@ describe('TASK-511: a definite first-PIN write failure re-marks the breadcrumb',
     expect(await readPinSetupPendingStrict()).toBe(false);
   });
 
-  it('(b) the credential write lands and then throws: no re-mark, the breadcrumb stays absent', async () => {
+  it('(b) the credential write lands and then throws: setupPin succeeds, no re-mark, the breadcrumb stays absent', async () => {
     mockPlatform.__ctl.credWrite = 'land-then-throw';
-    await expect(AccountSecureStorage.setupPin(PIN_1, 'pin')).rejects.toThrow(
-      'credential write failed'
-    );
+    await expect(
+      AccountSecureStorage.setupPin(PIN_1, 'pin')
+    ).resolves.toBeUndefined();
 
     expect(mockPlatform.__secure.has('voi_wallet_pin')).toBe(true);
     expect(marks()).toHaveLength(0);
     expect(await readPinSetupPendingStrict()).toBe(false);
   });
 
-  it('(c) the credential write throws and the strict PIN read throws: no re-mark (unknown outcome)', async () => {
+  it('(c) the credential write throws and the strict PIN read throws: no re-mark, the new blobs are kept (unknown outcome)', async () => {
     mockPlatform.__ctl.credWrite = 'throw';
     mockPlatform.__ctl.pinReadThrowsAfterCred = true;
     await expect(AccountSecureStorage.setupPin(PIN_1, 'pin')).rejects.toThrow(
@@ -273,6 +275,12 @@ describe('TASK-511: a definite first-PIN write failure re-marks the breadcrumb',
     expect(ev.slice(cred + 1).some((x) => x.e === 'hasPinStrict')).toBe(true);
     // ...and nothing was marked.
     expect(marks()).toHaveLength(0);
+    // The outcome is unknown, so the new-secret blob stays beside the
+    // device-key copy (TASK-573).
+    for (const key of [SLOT_A, SLOT_B]) {
+      expect(slot(key).blobs ?? []).toHaveLength(1);
+      expect(slot(key).encryptedPrivateKey).toBeTruthy();
+    }
     mockPlatform.__ctl.pinReadThrows = false;
     expect(await readPinSetupPendingStrict()).toBe(false);
   });
@@ -375,7 +383,7 @@ describe('TASK-511: a definite first-PIN write failure re-marks the breadcrumb',
     expect(await readPinSetupPendingStrict()).toBe(false);
   });
 
-  it('(f) changePin with a throwing credential write never reads back or marks', async () => {
+  it('(f) changePin with a throwing credential write never runs the breadcrumb read-back or marks', async () => {
     await AccountSecureStorage.setupPin(PIN_1, 'pin');
     SessionKeyVault.set(PIN_1, 'pin');
     mockPlatform.__events.length = 0;
