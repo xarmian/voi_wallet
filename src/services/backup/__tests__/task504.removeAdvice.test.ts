@@ -170,6 +170,15 @@ async function restoreAgain(file: BackupAccountData) {
   return result.records[0];
 }
 
+/** A restore on the old-PIN screen, where a missing key is not put back in
+ *  place (TASK-505), so a keyed entry with an empty slot keeps the advice row. */
+async function restoreOnOldPinScreen(file: BackupAccountData) {
+  const result = await restoreAccounts([file], {
+    oldPinSession: { epoch: SessionKeyVault.currentEpoch() },
+  });
+  return result.records[0];
+}
+
 beforeEach(() => {
   mockPlatform.__reset();
   SessionKeyVault.clear();
@@ -206,14 +215,15 @@ describe('TASK-504 remove advice: one entry at the address, removed by id, one r
     }
   });
 
-  it('device-key-unreadable (a keyed entry whose slot is empty): remove it, restore again, the key is added and reads', async () => {
+  it('device-key-unreadable (a keyed entry whose slot is empty, on the old-PIN screen where it is not repaired): remove it, restore again, the key is added and reads', async () => {
     const dev = keyedRecord('dev-1');
     await restoreAccounts([dev.record]);
     mockPlatform.__secure.delete(`${SECRET}dev-1`);
 
-    expect((await restoreAgain(fileRecordFor(dev))).outcome).toBe(
-      'device-key-unreadable'
-    );
+    const first = await restoreOnOldPinScreen(fileRecordFor(dev));
+    expect(first.outcome).toBe('device-key-unreadable');
+    expect(first.deviceEntries).toBe(1);
+    expect(mockPlatform.__secure.has(`${SECRET}dev-1`)).toBe(false);
     await removeById('dev-1');
     const row = await restoreAgain(fileRecordFor(dev));
 
@@ -229,7 +239,7 @@ describe('TASK-504 remove advice: one entry at the address, removed by id, one r
     const stored = (await deviceAccounts()).find((a) => a.id === 'dev-r')!;
     expect(await isListDeletionProtected(stored)).toBe(true);
 
-    expect((await restoreAgain(fileRecordFor(dev))).outcome).toBe(
+    expect((await restoreOnOldPinScreen(fileRecordFor(dev))).outcome).toBe(
       'device-key-unreadable'
     );
     await removeById('dev-r');
@@ -260,18 +270,22 @@ describe('TASK-504 remove advice: duplicates at one address (TASK-423)', () => {
     expect((await restoreAgain(fileRecordFor(incoming))).outcome).toBe('added');
   });
 
-  it('the mixed case, a key-less entry and a keyed entry with an empty slot: removing ONE leaves a blocking row', async () => {
+  it('the mixed case, a key-less entry and a keyed entry with an empty slot: two entries keep the row without advice; after removing the key-less one the key is put back in place', async () => {
     const dev = keyedRecord('dev-1');
     await restoreAccounts([dev.record]);
     addDuplicateEntry('dev-1', 'dev-w', AccountType.WATCH);
     mockPlatform.__secure.delete(`${SECRET}dev-1`);
 
+    const both = await restoreAgain(fileRecordFor(dev));
+    expect(both.outcome).toBe('device-key-unreadable');
+    expect(both.deviceEntries).toBe(2);
+    expect(mockPlatform.__secure.has(`${SECRET}dev-1`)).toBe(false);
+
     await removeById('dev-w');
     const afterOne = await restoreAgain(fileRecordFor(dev));
-    expect(afterOne.outcome).toBe('device-key-unreadable');
-
-    await removeById('dev-1');
-    expect((await restoreAgain(fileRecordFor(dev))).outcome).toBe('added');
+    expect(afterOne.outcome).toBe('key-repaired');
+    const key = await AccountSecureStorage.getPrivateKey('dev-1');
+    expect(Buffer.from(key.slice(32)).toString('hex')).toBe(dev.publicKey);
   });
 });
 

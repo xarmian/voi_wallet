@@ -193,27 +193,48 @@ async function restoreOne(file: BackupAccountData) {
   return result.records[0];
 }
 
+/** A restore that puts the file's key back into the device record's empty
+ *  slot (TASK-505): the slot is the only thing that changes. */
+async function restoreRepairing(file: BackupAccountData, slotId: string) {
+  getPrivateKeySpy.mockClear();
+  migrateSpy.mockClear();
+  const before = snapshot();
+  const result = await restoreAccounts([file]);
+  const after = snapshot();
+  expect(after.kv).toEqual(before.kv);
+  expect(after.secure.filter(([k]) => k !== `${SECRET}${slotId}`)).toEqual(
+    before.secure
+  );
+  expect(getPrivateKeySpy).not.toHaveBeenCalled();
+  expect(migrateSpy).not.toHaveBeenCalled();
+  expect(result.records).toHaveLength(1);
+  return result.records[0];
+}
+
 describe('TASK-504: rows for a record the device already has, the file holds its key', () => {
-  it('slot proven empty: "key can\'t be read here, this backup has the key"', async () => {
+  it('slot proven empty, one device record: the key is put back in place (TASK-505)', async () => {
     const dev = keyed('dev-1');
     const file = await deviceWith(dev.record);
     mockPlatform.__secure.delete(`${SECRET}dev-1`);
 
-    const row = await restoreOne(file);
+    const row = await restoreRepairing(file, 'dev-1');
 
-    expect(row.outcome).toBe('device-key-unreadable');
-    expect(row.deviceEntries).toBe(1);
+    expect(row.outcome).toBe('key-repaired');
+    expect(row.deviceEntries).toBeUndefined();
     expect(OUTCOME_TEXT['device-key-unreadable']).toBe(KEY_UNREADABLE_TEXT);
+    await expect(
+      AccountSecureStorage.inspectSecretSlot('dev-1', dev.address)
+    ).resolves.toMatchObject({ state: 'key-matches' });
   });
 
-  it('the same id as the device record reads the same way', async () => {
+  it('the same id as the device record is repaired the same way', async () => {
     const dev = keyed('dev-1');
     await restoreAccounts([dev.record]);
     mockPlatform.__secure.delete(`${SECRET}dev-1`);
 
-    const row = await restoreOne({ ...dev.record });
+    const row = await restoreRepairing({ ...dev.record }, 'dev-1');
 
-    expect(row.outcome).toBe('device-key-unreadable');
+    expect(row.outcome).toBe('key-repaired');
   });
 
   it('a readable key that derives to the address: still "Already on this device"', async () => {
@@ -421,7 +442,9 @@ describe('TASK-504: the report read is only trusted under a stable vault', () =>
     expect(await AccountSecureStorage.hasPinStrict()).toBe(false);
     expect(SessionKeyVault.isUnlocked()).toBe(false);
 
-    expect((await restoreOne(file)).outcome).toBe('device-key-unreadable');
+    expect((await restoreRepairing(file, 'dev-1')).outcome).toBe(
+      'key-repaired'
+    );
   });
 });
 

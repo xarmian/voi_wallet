@@ -425,6 +425,23 @@ export type RestoreRecordOutcome =
    */
   | 'device-key-problem'
   /**
+   * The address is on this device as one record whose key slot read empty. The
+   * file's key was written into that slot, under the record's own id, and read
+   * back as this account's key. The record itself is unchanged.
+   */
+  | 'key-repaired'
+  /**
+   * As for `key-repaired`, but a check before the write could not complete, or
+   * found a write for the slot still unresolved, so nothing was written.
+   */
+  | 'device-key-repair-skipped'
+  /**
+   * A write of the file's key into the record's empty slot was attempted, but
+   * reading it back did not show this account's key (or the read failed), so it
+   * may or may not have landed. Whatever was written stays.
+   */
+  | 'device-key-repair-unconfirmed'
+  /**
    * The address is on this device as a record that holds no key (Watch Only,
    * Ledger or Airgap). `deviceType` names which. The file's key was not added.
    */
