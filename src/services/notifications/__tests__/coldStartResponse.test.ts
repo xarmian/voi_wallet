@@ -205,6 +205,28 @@ describe('notificationService cold-start response (TASK-381)', () => {
       service.cleanup();
     });
 
+    it('a tap dropped by the wipe logs one fixed line and none of its payload', async () => {
+      const { service, gate } = loadWithGate();
+      await service.initialize();
+      const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        gate.openWipeWindow();
+        mockResponseListener!(
+          response('notif-10', { type: 'payment', txId: 'TXSECRET' })
+        );
+        gate.closeWipeWindow();
+        const logged = JSON.stringify(log.mock.calls);
+        expect(logged).not.toContain('TXSECRET');
+        const tapLines = log.mock.calls.filter((call) =>
+          /tap/i.test(String(call[0]))
+        );
+        expect(tapLines).toEqual([['[Notifications] Tap dropped by a wipe']]);
+      } finally {
+        log.mockRestore();
+        service.cleanup();
+      }
+    });
+
     it('ignores a tap that arrives while the wipe runs, queued or delivered', async () => {
       const { service, gate } = loadWithGate();
       await service.initialize();

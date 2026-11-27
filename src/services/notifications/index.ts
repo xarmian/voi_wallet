@@ -909,11 +909,15 @@ class NotificationService {
         const data = response.notification.request.content
           .data as unknown as NotificationData;
         const notificationId = response.notification.request.identifier;
-        console.log('Notification tapped:', data);
 
         // TASK-469: a tap that arrives while a wipe runs belongs to the wallet
-        // being wiped; it is neither delivered nor queued.
-        if (isWipeWindowOpen()) return;
+        // being wiped; it is neither delivered nor queued, and its payload is
+        // not logged.
+        if (isWipeWindowOpen()) {
+          console.log('[Notifications] Tap dropped by a wipe');
+          return;
+        }
+        console.log('Notification tapped:', data);
 
         if (this.onNotificationTap) {
           this.onNotificationTap(data, notificationId);
