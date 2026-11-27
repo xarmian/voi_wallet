@@ -3849,6 +3849,13 @@ export class AccountSecureStorage {
       // sets the breadcrumb again as above, so the accounts still read through
       // their device-key copy and no credential exists; the caller retries.
       //
+      // A credential write that throws is settled by reading the credential
+      // back (TASK-573). If the new credential is stored, the write counts as
+      // the commit and setupPin succeeds (no re-mark: a credential exists). If
+      // none is stored, the rollback above runs. If the read-back throws or
+      // times out, the error stands, but the new blobs are kept beside the
+      // device-key copies so the accounts read under either outcome.
+      //
       // Acquire the GLOBAL key-mutation mutex, then run the atomic rewrap+commit
       // under it (P1-3: no verify/commit races). setupPin has no current secret
       // to verify (first-secret setup).
@@ -4363,8 +4370,19 @@ export class AccountSecureStorage {
    *     stale old copies are inert; cleanup is idempotent.
    * At NO crash point does an account have zero readable copies.
    *
+   * A step-4 write that THROWS may still have landed (on Android the keystore
+   * value is written before the presence sentinel), so it is settled by a
+   * strict read-back of the credential (TASK-573):
+   *   - the NEW credential is stored → treated as the commit: the skipped
+   *     stale-copy cleanup runs, then step 5, and the call resolves;
+   *   - no credential, or a different one → rollback as below, original error;
+   *   - the read throws or times out → original error, and NO blob is dropped,
+   *     so every account keeps its old copy and its new blob and decrypts
+   *     under whichever credential is actually stored.
+   *
    * ROLLBACK on a pre-commit error drops ONLY the specific unproven new blob
-   * (by MAC), never a stale full-payload snapshot (P1-B). All plaintext buffers
+   * (by MAC), never a stale full-payload snapshot (P1-B); it is skipped only
+   * when a credential write's outcome is unknown (above). All plaintext buffers
    * are scrubbed in `finally`. Never logs the secret or key bytes.
    */
   private static async rewrapAndCommitCredentialLocked(opts: {
@@ -4402,6 +4420,9 @@ export class AccountSecureStorage {
     const ctxs = new Map<string, RewrapCtx>();
     let committed = false;
     let breadcrumbMayBeRemoved = false;
+    // Set only when the credential write threw: what its read-back showed.
+    let credentialWriteOutcome: 'landed' | 'not-landed' | 'unknown' | null =
+      null;
 
     try {
       // PHASE 1 — UNWRAP every key-bearing account under the OLD secret. Uses the
@@ -4561,12 +4582,31 @@ export class AccountSecureStorage {
       // POINT OF NO RETURN.
       const newSalt = await this.generateRandomHex(32);
       const hash = await this.hashPin(newSecret, newSalt, this.PIN_ITERATIONS);
-      await this.persistPinCredential({
+      const credential = {
         hash,
         iterations: this.PIN_ITERATIONS,
         salt: newSalt,
         secretSource: newSource,
-      });
+      };
+      try {
+        await this.persistPinCredential(credential);
+      } catch (writeError) {
+        // TASK-573: a throwing write may still have landed (on Android the
+        // keystore value is written before the presence sentinel). Read it
+        // back: if the new credential is stored, this IS the commit, so finish
+        // the stale-copy cleanup the write skipped and carry on as committed.
+        // The read-back's getItem also self-heals a missing Android sentinel.
+        const outcome = await this.readBackPinCredentialOutcome(credential);
+        credentialWriteOutcome = outcome;
+        if (outcome !== 'landed') {
+          throw writeError;
+        }
+        console.warn(
+          'PIN credential write threw, but a read-back shows it landed; treating it as committed',
+          redactError(writeError)
+        );
+        await this.dropStalePinCopies();
+      }
       committed = true;
       this.legacyCheckRequired = false;
 
@@ -4599,6 +4639,9 @@ export class AccountSecureStorage {
       // Drop ONLY the specific unproven new blob (by MAC) from each account we
       // appended to; never write a stale snapshot (P1-B). Old credential + old
       // copies remain intact → nothing stranded → retried on the next attempt.
+      // Exception (TASK-573): when the credential write threw and its
+      // read-back could not tell whether it landed, keep every blob; each
+      // account then decrypts under whichever credential is stored.
       if (!committed) {
         // TASK-511: a set breadcrumb may have been removed (a confirmed or an
         // unconfirmed clear) and the attempt then threw before the commit. Set
@@ -4628,7 +4671,11 @@ export class AccountSecureStorage {
           }
         }
         for (const [id, ctx] of ctxs) {
-          if (!ctx.appended || !ctx.newBlob) {
+          if (
+            !ctx.appended ||
+            !ctx.newBlob ||
+            credentialWriteOutcome === 'unknown'
+          ) {
             continue;
           }
           try {
@@ -5265,11 +5312,70 @@ export class AccountSecureStorage {
     // SINGLE atomic write of the whole credential.
     await secureStorage.setItem(this.PIN_KEY, payload);
 
-    // The salt is now inside the credential — drop stale standalone copies so a
-    // fallback getOrCreateSalt() can never return a mismatched salt.
+    await this.dropStalePinCopies();
+  }
+
+  /**
+   * Best-effort removal of the copies a folded credential supersedes: the salt
+   * is now inside the credential, so drop the standalone SALT_KEY (a fallback
+   * getOrCreateSalt() can then never return a mismatched salt) and the legacy
+   * `storage` PIN_KEY/SALT_KEY. Each failure is swallowed.
+   */
+  private static async dropStalePinCopies(): Promise<void> {
     await secureStorage.deleteItem(this.SALT_KEY).catch(() => {});
     await storage.removeItem(this.PIN_KEY).catch(() => {});
     await storage.removeItem(this.SALT_KEY).catch(() => {});
+  }
+
+  /**
+   * After a credential write threw, read the credential back to settle whether
+   * it landed (TASK-573). On Android the adapter writes the keystore value
+   * before the AsyncStorage presence sentinel, so a write can throw after the
+   * credential is already stored.
+   *   - 'landed': the stored credential's hash, salt, iterations and
+   *     secretSource all equal `expected`.
+   *   - 'not-landed': no credential, an unparseable value, or a different
+   *     credential (e.g. the old one on a PIN change).
+   *   - 'unknown': the read threw or outlived KEYCHAIN_READ_TIMEOUT_MS.
+   * On Android a successful read also writes the missing presence sentinel
+   * (best-effort self-heal in the adapter's getItem). A pure read; never logs
+   * the value.
+   */
+  private static async readBackPinCredentialOutcome(expected: {
+    hash: string;
+    iterations: number;
+    salt: string;
+    secretSource: SecretSource;
+  }): Promise<'landed' | 'not-landed' | 'unknown'> {
+    let raw: string | null;
+    try {
+      raw = await this.withTimeout(
+        secureStorage.getItem(this.PIN_KEY),
+        this.KEYCHAIN_READ_TIMEOUT_MS,
+        'PIN credential read-back'
+      );
+    } catch {
+      return 'unknown';
+    }
+    if (raw === null) {
+      return 'not-landed';
+    }
+    let stored: unknown;
+    try {
+      stored = JSON.parse(raw);
+    } catch {
+      return 'not-landed';
+    }
+    if (!stored || typeof stored !== 'object') {
+      return 'not-landed';
+    }
+    const record = stored as Record<string, unknown>;
+    return record.hash === expected.hash &&
+      record.salt === expected.salt &&
+      record.iterations === expected.iterations &&
+      record.secretSource === expected.secretSource
+      ? 'landed'
+      : 'not-landed';
   }
 
   static async clearSensitiveData(): Promise<void> {
