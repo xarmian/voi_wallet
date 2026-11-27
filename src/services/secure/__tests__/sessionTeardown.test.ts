@@ -100,23 +100,23 @@ describe('enterLockedState (Codex P1-E: sync lock signal BEFORE teardown)', () =
     cacheSpy.mockRestore();
   });
 
-  it('still runs the whole teardown when a lock listener throws, then rethrows', () => {
+  it('still runs the whole teardown when the lock-signal step throws, then rethrows', () => {
     (clearMessagingKeyCache as jest.Mock).mockClear();
     AppLockSignal.setUnlocked(true);
-    const failure = new Error('lock listener failed');
-    const unsubscribe = AppLockSignal.subscribe(() => {
-      if (!AppLockSignal.isUnlocked()) throw failure;
+    // AppLockSignal contains its listeners' throws (TASK-561), so inject the
+    // step failure directly: apply the real state change, then throw.
+    const failure = new Error('lock signal step failed');
+    const realSetUnlocked = AppLockSignal.setUnlocked.bind(AppLockSignal);
+    jest.spyOn(AppLockSignal, 'setUnlocked').mockImplementation((value) => {
+      realSetUnlocked(value);
+      throw failure;
     });
     const vaultSpy = jest.spyOn(SessionKeyVault, 'clear');
     const cacheSpy = jest
       .spyOn(AccountSecureStorage, 'clearPrivateKeyCache')
       .mockImplementation(() => {});
 
-    try {
-      expect(() => enterLockedState()).toThrow(failure);
-    } finally {
-      unsubscribe();
-    }
+    expect(() => enterLockedState()).toThrow(failure);
 
     expect(AppLockSignal.isUnlocked()).toBe(false);
     expect(vaultSpy).toHaveBeenCalledTimes(1);

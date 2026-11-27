@@ -570,7 +570,8 @@ describe('guards', () => {
   // A lock listener that throws must not stop the verdict landing, nor cut the
   // teardown short: the recheck resolves, the state and the signal are locked,
   // and the vault and both caches are still cleared. The listener throws once,
-  // on the unlocked-to-locked transition.
+  // on the unlocked-to-locked transition. AppLockSignal contains the throw and
+  // logs it redacted (TASK-561), so the teardown itself does not fail.
   it('throwingLockListener_stillLandsLocked', async () => {
     const rendered = await mount();
     await unlockLive(rendered);
@@ -599,21 +600,27 @@ describe('guards', () => {
       authChecked: true,
     });
     expectTornDown(seeded);
-    expect(console.error).toHaveBeenCalledWith(
+    expect(console.warn).toHaveBeenCalledWith(
+      '[AppLockSignal] listener failed',
+      'listener failed'
+    );
+    expect(console.error).not.toHaveBeenCalledWith(
       'Session teardown failed while locking:',
       expect.anything()
     );
     // Nothing logged carries the session secret.
     const logged = JSON.stringify(
-      (console.error as jest.Mock).mock.calls.map((args) =>
-        args.map((a: unknown) => String(a))
-      )
+      [
+        ...(console.error as jest.Mock).mock.calls,
+        ...(console.warn as jest.Mock).mock.calls,
+      ].map((args) => args.map((a: unknown) => String(a)))
     );
     expect(logged).not.toContain(FIXTURE_PIN);
   });
 
   // The same for an explicit lock(): a throwing lock listener must not leave
-  // the React state unlocked over a torn-down session.
+  // the React state unlocked over a torn-down session. AppLockSignal contains
+  // the throw and logs it redacted (TASK-561).
   it('throwingLockListener_explicitLock_stillLandsLocked', async () => {
     const rendered = await mount();
     await unlockLive(rendered);
@@ -643,7 +650,11 @@ describe('guards', () => {
       isAuthenticated: false,
     });
     expectTornDown(seeded);
-    expect(console.error).toHaveBeenCalledWith(
+    expect(console.warn).toHaveBeenCalledWith(
+      '[AppLockSignal] listener failed',
+      'listener failed'
+    );
+    expect(console.error).not.toHaveBeenCalledWith(
       'Session teardown failed while locking:',
       expect.anything()
     );

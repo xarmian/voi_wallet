@@ -30,8 +30,14 @@
  * cache (clear / rotate / re-set) or when an epoch-abort discards a fresh
  * derivation. JS strings (the secret) cannot be reliably wiped; the vault holds
  * exactly one reference and drops it on clear.
+ *
+ * LISTENER ISOLATION (TASK-561): set / rotate / clear apply their state before
+ * notifying, and each listener runs in its own try/catch over a snapshot of the
+ * set. A throwing listener is logged (redacted) and never escapes into the
+ * caller, so it cannot cut an unlock or lock short.
  */
 
+import { redactError } from '@/utils/logRedaction';
 import { deriveWrapKey, AT_REST_KDF_PARAMS } from './envelopeV2';
 import type { ScryptKdfParams } from '../backup/types';
 
@@ -114,7 +120,7 @@ class SessionKeyVaultImpl {
     this.secret = secret;
     this.secretSource = source;
     this.epoch++;
-    this.listeners.forEach((listener) => listener());
+    this.notify();
   }
 
   /**
@@ -130,7 +136,7 @@ class SessionKeyVaultImpl {
       this.secretSource = newSource;
     }
     this.epoch++;
-    this.listeners.forEach((listener) => listener());
+    this.notify();
   }
 
   /**
@@ -218,7 +224,20 @@ class SessionKeyVaultImpl {
     this.zeroWrapKeys();
     this.secret = null;
     this.epoch++;
-    this.listeners.forEach((listener) => listener());
+    this.notify();
+  }
+
+  /** Notify every listener of a secret-state change. Each runs in its own
+   *  try/catch over a snapshot, so one that throws, subscribes or unsubscribes
+   *  cannot skip or double-call a sibling, and nothing escapes into the caller. */
+  private notify(): void {
+    for (const listener of Array.from(this.listeners)) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn('[SessionKeyVault] listener failed', redactError(error));
+      }
+    }
   }
 
   /** Composite memo key for the (accountId, salt) pair. The salt is a fixed-

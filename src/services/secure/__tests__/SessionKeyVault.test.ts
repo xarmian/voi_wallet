@@ -194,3 +194,107 @@ describe('SessionKeyVault epoch-abort guard (Codex P1-D)', () => {
     expect(mockDerive).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('SessionKeyVault listener isolation (TASK-561)', () => {
+  const unsubscribers: (() => void)[] = [];
+  let warnSpy: jest.SpyInstance;
+
+  function subscribe(listener: () => void): void {
+    unsubscribers.push(SessionKeyVault.subscribe(listener));
+  }
+
+  beforeEach(() => {
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    warnSpy.mockRestore();
+  });
+
+  /** Assert one redacted-string log per listener failure, never the Error. */
+  function expectRedactedStringLogs(count: number): void {
+    expect(warnSpy).toHaveBeenCalledTimes(count);
+    warnSpy.mock.calls.forEach((args: unknown[]) => {
+      args.forEach((arg) => {
+        expect(typeof arg).toBe('string');
+      });
+      expect(args.join(' ')).not.toContain('deadbeef');
+    });
+  }
+
+  const throwing = (): void => {
+    throw new Error('listener failed for wc:abc@2?symKey=deadbeef');
+  };
+
+  it('set(): a throwing listener does not escape; state applied; later listener notified; logged redacted', () => {
+    const later = jest.fn();
+    subscribe(throwing);
+    subscribe(later);
+    const before = SessionKeyVault.currentEpoch();
+
+    expect(() => SessionKeyVault.set('123456', 'pin')).not.toThrow();
+    expect(SessionKeyVault.isUnlocked()).toBe(true);
+    expect(SessionKeyVault.getSecret()).toBe('123456');
+    expect(SessionKeyVault.currentEpoch()).toBe(before + 1);
+    expect(later).toHaveBeenCalledTimes(1);
+    expectRedactedStringLogs(1);
+  });
+
+  it('rotate(): a throwing listener does not escape; state applied; later listener notified; logged redacted', () => {
+    SessionKeyVault.set('111111', 'pin');
+    const later = jest.fn();
+    subscribe(throwing);
+    subscribe(later);
+    const before = SessionKeyVault.currentEpoch();
+
+    expect(() =>
+      SessionKeyVault.rotate('a-long-passphrase', 'passphrase')
+    ).not.toThrow();
+    expect(SessionKeyVault.getSecret()).toBe('a-long-passphrase');
+    expect(SessionKeyVault.getSecretSource()).toBe('passphrase');
+    expect(SessionKeyVault.currentEpoch()).toBe(before + 1);
+    expect(later).toHaveBeenCalledTimes(1);
+    expectRedactedStringLogs(1);
+  });
+
+  it('clear(): a throwing listener does not escape; state applied; later listener notified; logged redacted', () => {
+    SessionKeyVault.set('123456', 'pin');
+    const later = jest.fn();
+    subscribe(throwing);
+    subscribe(later);
+    const before = SessionKeyVault.currentEpoch();
+
+    expect(() => SessionKeyVault.clear()).not.toThrow();
+    expect(SessionKeyVault.isUnlocked()).toBe(false);
+    expect(SessionKeyVault.getSecret()).toBeNull();
+    expect(SessionKeyVault.currentEpoch()).toBe(before + 1);
+    expect(later).toHaveBeenCalledTimes(1);
+    expectRedactedStringLogs(1);
+  });
+
+  it('notifies a snapshot: a listener added during notification is not called in the same round', () => {
+    const added = jest.fn();
+    subscribe(() => {
+      subscribe(added);
+    });
+
+    SessionKeyVault.set('123456', 'pin');
+
+    expect(added).not.toHaveBeenCalled();
+  });
+
+  it('notifies a snapshot: a sibling removed during notification is still called in that round', () => {
+    const sibling = jest.fn();
+    let removeSibling: () => void = () => {};
+    subscribe(() => {
+      removeSibling();
+    });
+    removeSibling = SessionKeyVault.subscribe(sibling);
+    unsubscribers.push(removeSibling);
+
+    SessionKeyVault.set('123456', 'pin');
+
+    expect(sibling).toHaveBeenCalledTimes(1);
+  });
+});
