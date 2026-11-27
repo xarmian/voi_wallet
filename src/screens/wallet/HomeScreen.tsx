@@ -81,6 +81,8 @@ import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsMod
 import SignerModeBanner from '@/components/remoteSigner/SignerModeBanner';
 import { useHomeBackupReminder } from '@/store/useHomeBackupReminder';
 import BackupWarningBanner from '@/components/wallet/BackupWarningBanner';
+import NotificationsOfferBanner from '@/components/notifications/NotificationsOfferBanner';
+import { useNotificationsOffer } from '@/hooks/useNotificationsOffer';
 import ControlledByNotice from '@/components/wallet/ControlledByNotice';
 import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
@@ -1243,6 +1245,17 @@ export default function HomeScreen() {
     navigation.navigate('ClaimableTokens');
   }, [navigation]);
 
+  const notificationsOffer = useNotificationsOffer();
+
+  const handleNotificationsOfferPress = useCallback(() => {
+    navigation.dispatch(
+      CommonActions.navigate({
+        name: 'Settings',
+        params: { screen: 'NotificationSettings' },
+      })
+    );
+  }, [navigation]);
+
   // Navigate to sign request scanner (signer mode)
   const handleScanSigningRequest = useCallback(() => {
     navigation.navigate('SignRequestScanner');
@@ -1751,6 +1764,14 @@ export default function HomeScreen() {
                 <ClaimableBanner
                   count={visibleClaimableCount}
                   onPress={handleClaimableBannerPress}
+                />
+              )}
+
+              {/* Offer to turn on notifications (TASK-565) */}
+              {notificationsOffer.visible && (
+                <NotificationsOfferBanner
+                  onPress={handleNotificationsOfferPress}
+                  onDismiss={notificationsOffer.dismiss}
                 />
               )}
 

@@ -249,7 +249,9 @@ describe('notificationService.registerPushToken (TASK-433)', () => {
     expect(mockUpsert).not.toHaveBeenCalled();
   });
 
-  it('logs the permission state when permission blocks registration', async () => {
+  // TASK-565: a denied permission names the skipped step once, not on every
+  // launch-time call.
+  it('logs a denied permission once as the skip cause', async () => {
     jest
       .mocked(Notifications.getPermissionsAsync)
       .mockResolvedValue(permissions('denied'));
@@ -257,10 +259,16 @@ describe('notificationService.registerPushToken (TASK-433)', () => {
     expect(
       await notificationService.registerPushToken({ prompt: false })
     ).toBeNull();
+    expect(
+      await notificationService.registerPushToken({ prompt: false })
+    ).toBeNull();
 
-    expect(console.log).toHaveBeenCalledWith(
-      'Push notification permissions not granted'
-    );
+    expect(jest.mocked(console.warn).mock.calls).toEqual([
+      [
+        '[Notifications] Push registration skipped:',
+        'notification permission not granted',
+      ],
+    ]);
   });
 
   it('still requests permission by default for the explicit Settings opt-in', async () => {

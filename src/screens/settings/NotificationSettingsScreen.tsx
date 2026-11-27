@@ -4,7 +4,7 @@
  * Allows users to configure push notification preferences for their wallet accounts.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,9 @@ import {
   Alert,
   ActivityIndicator,
   TextInput,
+  AppState,
+  Linking,
+  TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -310,6 +313,11 @@ export default function NotificationSettingsScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  // Not granted and the system will not ask again: only the device settings
+  // can turn notifications on (TASK-565).
+  const [blockedInDeviceSettings, setBlockedInDeviceSettings] = useState(false);
+  // Permission reads can resolve out of order; only the newest sets the notice.
+  const permissionReadSeq = useRef(0);
   const [preferences, setPreferences] = useState<NotificationPreferences>(
     DEFAULT_NOTIFICATION_PREFERENCES
   );
@@ -351,8 +359,15 @@ export default function NotificationSettingsScreen() {
     setIsLoading(true);
     try {
       // Check if notifications are enabled
-      const enabled = await notificationService.areNotificationsEnabled();
-      setNotificationsEnabled(enabled);
+      const seq = ++permissionReadSeq.current;
+      const { status, canAskAgain } =
+        await notificationService.getPermissionState();
+      setNotificationsEnabled(status === 'granted');
+      if (seq === permissionReadSeq.current) {
+        setBlockedInDeviceSettings(
+          status !== 'granted' && canAskAgain === false
+        );
+      }
 
       // Load preferences from server for selected account
       const prefs = await notificationService.getPreferences(
@@ -370,6 +385,33 @@ export default function NotificationSettingsScreen() {
       setIsLoading(false);
     }
   };
+
+  // Re-read the permission when the app returns to the foreground, so a
+  // change made in the device settings updates the notice. The switch keeps
+  // its own state.
+  useEffect(() => {
+    if (!isConfigured) return;
+    let active = true;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      const seq = ++permissionReadSeq.current;
+      notificationService.getPermissionState().then(
+        ({ status, canAskAgain }) => {
+          if (!active || seq !== permissionReadSeq.current) return;
+          setBlockedInDeviceSettings(
+            status !== 'granted' && canAskAgain === false
+          );
+        },
+        (error: unknown) => {
+          console.warn('Failed to read notification permission:', error);
+        }
+      );
+    });
+    return () => {
+      active = false;
+      subscription.remove();
+    };
+  }, [isConfigured]);
 
   const handleEnableNotifications = async () => {
     if (!selectedAccount) return;
@@ -556,6 +598,36 @@ export default function NotificationSettingsScreen() {
               }}
               disabled={isSaving}
             />
+            {blockedInDeviceSettings && (
+              <View style={styles.deviceSettingsNotice}>
+                <View style={styles.deviceSettingsNoticeRow}>
+                  <Ionicons
+                    name="information-circle"
+                    size={16}
+                    color={theme.colors.warning}
+                    style={{ marginRight: theme.spacing.xs }}
+                  />
+                  <Text style={styles.deviceSettingsNoticeText}>
+                    Notifications are off for Voi Wallet in your device
+                    settings.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => {
+                    Linking.openSettings().catch((error: unknown) => {
+                      console.warn('Failed to open device settings:', error);
+                    });
+                  }}
+                  style={styles.openSettingsButton}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open Settings"
+                >
+                  <Text style={styles.openSettingsButtonText}>
+                    Open Settings
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </GlassCard>
 
           {/* Message Notifications */}
@@ -750,5 +822,30 @@ const createStyles = (theme: Theme) =>
       flex: 1,
       fontSize: theme.typography.caption.fontSize,
       color: theme.colors.warning,
+    },
+    deviceSettingsNotice: {
+      paddingVertical: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.md,
+      backgroundColor: `${theme.colors.warning}15`,
+    },
+    deviceSettingsNoticeRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    deviceSettingsNoticeText: {
+      flex: 1,
+      fontSize: theme.typography.caption.fontSize,
+      color: theme.colors.text,
+    },
+    openSettingsButton: {
+      alignSelf: 'flex-start',
+      minHeight: 44,
+      justifyContent: 'center',
+      marginTop: theme.spacing.xs,
+    },
+    openSettingsButtonText: {
+      fontSize: theme.typography.body.fontSize,
+      fontWeight: '600',
+      color: theme.colors.primary,
     },
   });
