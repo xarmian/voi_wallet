@@ -1,5 +1,9 @@
 import { SignClientTypes } from '@walletconnect/types';
-import { getSdkError, buildApprovedNamespaces } from '@walletconnect/utils';
+import {
+  getSdkError,
+  buildApprovedNamespaces,
+  parseExpirerTarget,
+} from '@walletconnect/utils';
 import { EventEmitter } from 'events';
 import algosdk from 'algosdk';
 import { Platform } from 'react-native';
@@ -250,7 +254,21 @@ export class WalletConnectService extends EventEmitter {
         signClient.auth.authKeys.delete(key, reason)
       ),
     ];
-    for (const key of core.expirer.keys) core.expirer.del(key);
+    // The expirer's keys are formatted targets (`topic:<topic>`, `id:<id>`),
+    // and its `del` formats its argument again: it takes the topic string or
+    // the numeric id, so a target passed back as is never matches (an id
+    // target becomes `topic:id:<id>`). sdkSubscriberShape.test.ts checks this.
+    for (const target of core.expirer.keys) {
+      let parsed: { topic?: string; id?: number };
+      try {
+        parsed = parseExpirerTarget(target);
+      } catch {
+        continue; // Left in place: the check below fails the purge.
+      }
+      if (parsed.topic !== undefined) core.expirer.del(parsed.topic);
+      else if (parsed.id !== undefined) core.expirer.del(parsed.id);
+    }
+    const expiriesLeft = core.expirer.keys.length;
     for (const topic of new Set(core.history.values.map((r) => r.topic)))
       core.history.delete(topic);
     const subscriber = core.relayer.subscriber;
@@ -278,7 +296,12 @@ export class WalletConnectService extends EventEmitter {
       engine.sessionRequestQueue.queue = [];
     }
     engine.emittedSessionRequests?.set?.clear();
-    return Promise.all(writes).then(() => undefined);
+    return Promise.all(writes).then(() => {
+      if (expiriesLeft > 0)
+        throw new Error(
+          `WalletConnect expirer kept ${expiriesLeft} entries after the purge`
+        );
+    });
   }
 
   constructor() {

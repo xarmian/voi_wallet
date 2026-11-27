@@ -28,10 +28,22 @@ const mockKeychain = new Map([
   ['s1', 'k1'],
   ['p1', 'k2'],
 ]);
-const mockExpirer = new Map([
-  ['topic:s1', 1],
-  ['id:7', 2],
-]);
+// The expirer's map is keyed by formatted target (`topic:<topic>`, `id:<id>`),
+// and `set`, `has` and `del` format their argument again, as the SDK does
+// (2.26.0 core controllers/expirer.ts; sdkSubscriberShape.test.ts checks it).
+const mockFormatTarget = (key: string | number): string => {
+  const utils = jest.requireActual('@walletconnect/utils');
+  if (typeof key === 'string') return utils.formatTopicTarget(key);
+  if (typeof key === 'number') return utils.formatIdTarget(key);
+  throw new Error(`Target type: ${typeof key}`);
+};
+const mockExpirer = new Map<string, { target: string; expiry: number }>();
+const mockSetExpiry = (key: string | number, expiry: number) => {
+  const target = mockFormatTarget(key);
+  mockExpirer.set(target, { target, expiry });
+};
+mockSetExpiry('s1', 1);
+mockSetExpiry(7, 2);
 const mockHistory = new Map([[7, { id: 7, topic: 's1' }]]);
 const mockMessages = new Map([['s1', {}]]);
 const mockSubscriptions = new Map([['sub1', { topic: 's1' }]]);
@@ -80,8 +92,11 @@ const mockCore = {
     get keys() {
       return [...mockExpirer.keys()];
     },
-    del: jest.fn((key: string) => {
-      mockExpirer.delete(key);
+    has: (key: string | number) => mockExpirer.has(mockFormatTarget(key)),
+    set: mockSetExpiry,
+    del: jest.fn((key: string | number) => {
+      if (!mockCore.expirer.has(key)) return;
+      mockExpirer.delete(mockFormatTarget(key));
     }),
   },
   history: {
@@ -138,6 +153,8 @@ jest.mock('../messagesRetention', () => ({
 }));
 jest.mock('@walletconnect/utils', () => ({
   getSdkError: (key: string) => ({ code: 6000, message: key }),
+  parseExpirerTarget: jest.requireActual('@walletconnect/utils')
+    .parseExpirerTarget,
 }));
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: { getAllAccounts: jest.fn(async () => []) },
@@ -185,6 +202,35 @@ test('sessions, proposals, requests, pairings, keys, expiries, history and messa
   expect(mockTransportClose).toHaveBeenCalledTimes(1);
   expect(mockV1Reset).toHaveBeenCalled();
   expect(WalletConnectService.getInstance().getActiveSessions()).toEqual([]);
+});
+
+test('the expirer drops its topic and id targets through the key its del takes', async () => {
+  WalletConnectService.getInstance();
+  mockSetExpiry('s2', 3);
+  mockSetExpiry(9, 4);
+  mockSetExpiry(10, 5);
+  expect([...mockExpirer.keys()]).toEqual(['topic:s2', 'id:9', 'id:10']);
+  mockCore.expirer.del.mockClear();
+  const run = await settle();
+  expect(run.failed).toEqual([]);
+  expect(mockExpirer.size).toBe(0);
+  expect(mockCore.expirer.del.mock.calls).toEqual([['s2'], [9], [10]]);
+});
+
+test('an expirer target in neither form fails the purge instead of staying behind', async () => {
+  WalletConnectService.getInstance();
+  mockExpirer.set('other:x', { target: 'other:x', expiry: 1 });
+  mockSetExpiry(12, 2);
+  try {
+    const run = runWipeResets();
+    const purge = run.pending.find((p) => p.name === 'walletconnect');
+    await Promise.allSettled(run.pending.map((p) => p.done));
+    await expect(purge!.done).rejects.toThrow('expirer');
+    // The entries it can read are still removed.
+    expect([...mockExpirer.keys()]).toEqual(['other:x']);
+  } finally {
+    mockExpirer.clear();
+  }
 });
 
 test('the relay subscriber forgets its pending and cached topics, so a later reconnect does not subscribe them again', async () => {
