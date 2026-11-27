@@ -36,6 +36,11 @@ jest.mock('@/store/walletStore', () => ({
     selector({ importAccount: mockImportAccount }),
 }));
 
+const mockHasPin = jest.fn(async () => true);
+jest.mock('@/services/secure', () => ({
+  AccountSecureStorage: { hasPin: () => mockHasPin() },
+}));
+
 jest.mock('@react-navigation/native', () => ({
   CommonActions: { reset: jest.fn(), navigate: jest.fn() },
   useFocusEffect: () => {},
@@ -88,7 +93,10 @@ jest.mock('react-native/Libraries/Lists/FlatList', () => {
 });
 
 import MnemonicImportScreen from '../MnemonicImportScreen';
-import { clearAllAccountSecrets } from '@/utils/accountQRParser';
+import {
+  clearAllAccountSecrets,
+  getAccountSecret,
+} from '@/utils/accountQRParser';
 
 const MNEMONIC = algosdk.secretKeyToMnemonic(algosdk.generateAccount().sk);
 const WORDS = MNEMONIC.split(' ');
@@ -170,6 +178,7 @@ afterEach(() => {
   clearAllAccountSecrets();
   jest.restoreAllMocks();
   jest.clearAllMocks();
+  mockHasPin.mockReset().mockResolvedValue(true);
 });
 
 describe('MnemonicImportScreen — add-account entry method (TASK-556)', () => {
@@ -349,6 +358,94 @@ describe('MnemonicImportScreen — onboarding phraseTyped hand-off (TASK-556)', 
       'SecuritySetup',
       expect.objectContaining({ source: 'mnemonic', phraseTyped: false })
     );
+  });
+});
+
+describe('MnemonicImportScreen — adding to a wallet with no PIN (TASK-522)', () => {
+  it('routes a typed phrase to SecuritySetup by secret id and stores nothing', async () => {
+    mockHasPin.mockResolvedValue(false);
+    const { navigation, screen } = await renderScreen(false);
+
+    await fireEvent.changeText(
+      screen.getByPlaceholderText('Imported account name'),
+      'Savings'
+    );
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(navigation.navigate).toHaveBeenCalledTimes(1);
+    const [route, params] = navigation.navigate.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(route).toBe('SecuritySetup');
+    expect(params).toEqual({
+      source: 'mnemonic',
+      addingAccount: true,
+      accountLabel: 'Savings',
+      phraseTyped: true,
+      mnemonicSecretId: expect.any(String),
+    });
+    expect(JSON.stringify(params)).not.toContain(WORDS[0]);
+    expect(getAccountSecret(params.mnemonicSecretId as string)?.mnemonic).toBe(
+      MNEMONIC
+    );
+    expect(mockImportAccount).not.toHaveBeenCalled();
+    expect(Alert.alert).not.toHaveBeenCalled();
+    // The words stay on screen: going back from SecuritySetup loses nothing.
+    expect(field(screen, 0).props.value).toBe(WORDS[0]);
+  });
+
+  it('a pasted phrase carries phraseTyped false', async () => {
+    mockHasPin.mockResolvedValue(false);
+    const { navigation, screen } = await renderScreen(false);
+
+    await insertWords(screen, 0, WORDS);
+    await pressImport(screen);
+
+    expect(navigation.navigate).toHaveBeenCalledWith(
+      'SecuritySetup',
+      expect.objectContaining({ addingAccount: true, phraseTyped: false })
+    );
+    expect(mockImportAccount).not.toHaveBeenCalled();
+  });
+
+  it('with a PIN imports directly, as before', async () => {
+    const { navigation, screen } = await renderScreen(false);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(mockHasPin).toHaveBeenCalledTimes(1);
+    expect(mockImportAccount).toHaveBeenCalledTimes(1);
+    expect(navigation.navigate).not.toHaveBeenCalled();
+  });
+
+  it('a failed PIN read alerts, routes nowhere and imports nothing', async () => {
+    mockHasPin.mockRejectedValue(new Error('keychain unavailable'));
+    const { navigation, screen } = await renderScreen(false);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Import Failed',
+      expect.any(String)
+    );
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(mockImportAccount).not.toHaveBeenCalled();
+  });
+
+  it('onboarding never asks about the PIN', async () => {
+    mockHasPin.mockResolvedValue(false);
+    const { navigation, screen } = await renderScreen(true);
+
+    await typeWords(screen, 0, 25);
+    await pressImport(screen);
+
+    expect(mockHasPin).not.toHaveBeenCalled();
+    const params = navigation.navigate.mock.calls[0][1] as object;
+    expect(params).not.toHaveProperty('addingAccount');
   });
 });
 

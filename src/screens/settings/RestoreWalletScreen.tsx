@@ -30,6 +30,7 @@ import OldPinStep from '@/components/backup/OldPinStep';
 import ForgottenPinConsent from '@/components/backup/ForgottenPinConsent';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { ENTER_PIN_INSTEAD_TEXT } from '@/services/backup/forgottenPinCopy';
+import { ORPHAN_PIN_UNVERIFIABLE_MESSAGE } from '@/services/secure/orphanPin';
 import {
   BackupService,
   RestoreProgress,
@@ -344,7 +345,31 @@ export default function RestoreWalletScreen() {
               void recheckAuthState();
             } else {
               await useWalletStore.getState().refresh();
-              navigation.goBack();
+              // TASK-522: a wallet with no PIN (its accounts all keyless)
+              // now holds restored keys, so it sets a PIN before going on.
+              // A failed read goes back: the restore left the pending-PIN
+              // marker, so the next launch asks for the PIN.
+              let pinSet = true;
+              try {
+                pinSet = await AccountSecureStorage.hasPin();
+              } catch {
+                Alert.alert('Error', ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
+              }
+              if (pinSet) {
+                navigation.goBack();
+              } else {
+                navigation.dispatch(
+                  CommonActions.reset({
+                    index: 0,
+                    routes: [
+                      {
+                        name: 'SecuritySetup',
+                        params: { source: 'restore' },
+                      },
+                    ],
+                  })
+                );
+              }
             }
           },
         },

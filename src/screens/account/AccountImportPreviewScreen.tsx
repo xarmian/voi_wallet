@@ -161,6 +161,9 @@ export default function AccountImportPreviewScreen({
         navigation.navigate('SecuritySetup', {
           accounts: selectedAccounts,
           source: 'qr',
+          // TASK-522: outside onboarding this wallet already has accounts, so
+          // SecuritySetup adds them and never heals a PIN it finds.
+          ...(isOnboarding ? {} : { addingAccount: true as const }),
         });
         return;
       }

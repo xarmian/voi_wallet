@@ -26,6 +26,9 @@ import { render, fireEvent, act } from '@testing-library/react-native';
 import { computeRevealOffset } from '@/utils/scrollReveal';
 
 jest.mock('@/services/wallet', () => ({}));
+jest.mock('@/services/secure', () => ({
+  AccountSecureStorage: { hasPin: jest.fn(async () => true) },
+}));
 
 jest.mock('@/store/walletStore', () => ({
   useWalletStore: (selector: (state: unknown) => unknown) =>

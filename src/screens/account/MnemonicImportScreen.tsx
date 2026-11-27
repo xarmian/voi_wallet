@@ -39,6 +39,7 @@ import { AccountType, backupVerifiedAtImport } from '@/types/wallet';
 import { useWalletStore } from '@/store/walletStore';
 import { BIP39Utils, WordSuggestion } from '@/utils/bip39';
 import { storeMnemonicSecret } from '@/utils/accountQRParser';
+import { AccountSecureStorage } from '@/services/secure';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColors } from '@/hooks/useThemedStyles';
@@ -542,6 +543,17 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
           accountLabel: normalizedLabel || undefined,
           // TASK-556: SecuritySetup counts the phrase as backed up only on a
           // literal true (typed in; no paste or autofill detected).
+          phraseTyped: !phrasePastedRef.current,
+        });
+      } else if (!(await AccountSecureStorage.hasPin())) {
+        // TASK-522: a wallet with no PIN sets one before any key is stored.
+        // The words stay on this screen, so going back loses nothing. A
+        // failed read lands in the catch below: nothing routed or stored.
+        navigation.navigate('SecuritySetup', {
+          mnemonicSecretId: storeMnemonicSecret(mnemonic),
+          source: 'mnemonic',
+          addingAccount: true,
+          accountLabel: normalizedLabel || undefined,
           phraseTyped: !phrasePastedRef.current,
         });
       } else {

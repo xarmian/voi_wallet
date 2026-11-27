@@ -40,7 +40,13 @@ const mockNavigation = {
   getState: jest.fn(() => ({ type: 'stack', index: 0, routes: [] })),
   reset: jest.fn(),
   goBack: jest.fn(),
+  navigate: jest.fn(),
 };
+
+const mockHasPin = jest.fn(async () => true);
+jest.mock('@/services/secure', () => ({
+  AccountSecureStorage: { hasPin: () => mockHasPin() },
+}));
 
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => mockNavigation,
@@ -74,6 +80,10 @@ jest.mock('@/components/wallet/MnemonicDisplay', () => {
 import { Alert } from 'react-native';
 import CreateAccountScreen from '../CreateAccountScreen';
 import { completeQuiz } from '@/__tests__/fixtures/mnemonicQuiz';
+import {
+  clearAllAccountSecrets,
+  getAccountSecret,
+} from '@/utils/accountQRParser';
 
 const MOCK_WORDS = MOCK_MNEMONIC.split(' ');
 
@@ -97,6 +107,9 @@ beforeEach(() => {
 
 afterEach(() => {
   jest.restoreAllMocks();
+  jest.clearAllMocks();
+  mockHasPin.mockReset().mockResolvedValue(true);
+  clearAllAccountSecrets();
 });
 
 /** Generate the account and advance to the backup step. */
@@ -161,6 +174,81 @@ describe('CreateAccountScreen — backupVerified carrier (DR-11)', () => {
     await fireEvent.press(screen.getByTestId('backup-verification-skip'));
     await pressAlertButton('Cancel');
 
+    expect(mockImportAccount).not.toHaveBeenCalled();
+  });
+});
+
+describe('CreateAccountScreen — a wallet with no PIN (TASK-522)', () => {
+  it('routes to SecuritySetup with only a secret id and stores nothing', async () => {
+    mockHasPin.mockResolvedValue(false);
+    const screen = await renderAtBackupStep();
+    await fireEvent.press(screen.getByTestId('backup-continue'));
+    await completeQuiz(screen, 'backup-verification', MOCK_WORDS);
+    await pressAlertButton('Continue');
+
+    await waitFor(() =>
+      expect(mockNavigation.navigate).toHaveBeenCalledTimes(1)
+    );
+    const [route, params] = mockNavigation.navigate.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(route).toBe('SecuritySetup');
+    expect(params).toEqual({
+      source: 'create',
+      addingAccount: true,
+      backupVerified: true,
+      mnemonicSecretId: expect.any(String),
+    });
+    expect(JSON.stringify(params)).not.toContain(MOCK_WORDS[0]);
+    expect(getAccountSecret(params.mnemonicSecretId as string)?.mnemonic).toBe(
+      MOCK_MNEMONIC
+    );
+    expect(mockImportAccount).not.toHaveBeenCalled();
+    expect(mockSetActiveAccount).not.toHaveBeenCalled();
+  });
+
+  it('a skipped quiz carries backupVerified false', async () => {
+    mockHasPin.mockResolvedValue(false);
+    const screen = await renderAtBackupStep();
+    await fireEvent.press(screen.getByTestId('backup-continue'));
+    await fireEvent.press(screen.getByTestId('backup-verification-skip'));
+    await pressAlertButton('Skip for now');
+
+    await waitFor(() =>
+      expect(mockNavigation.navigate).toHaveBeenCalledWith(
+        'SecuritySetup',
+        expect.objectContaining({ backupVerified: false })
+      )
+    );
+    expect(mockImportAccount).not.toHaveBeenCalled();
+  });
+
+  it('with a PIN imports directly, as before', async () => {
+    const screen = await renderAtBackupStep();
+    await fireEvent.press(screen.getByTestId('backup-continue'));
+    await completeQuiz(screen, 'backup-verification', MOCK_WORDS);
+    await pressAlertButton('Continue');
+
+    await waitFor(() => expect(mockImportAccount).toHaveBeenCalledTimes(1));
+    expect(mockHasPin).toHaveBeenCalledTimes(1);
+    expect(mockNavigation.navigate).not.toHaveBeenCalled();
+  });
+
+  it('a failed PIN read alerts, routes nowhere and imports nothing', async () => {
+    mockHasPin.mockRejectedValue(new Error('keychain unavailable'));
+    const screen = await renderAtBackupStep();
+    await fireEvent.press(screen.getByTestId('backup-continue'));
+    await completeQuiz(screen, 'backup-verification', MOCK_WORDS);
+    await pressAlertButton('Continue');
+
+    await waitFor(() =>
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Error',
+        'Failed to create new account'
+      )
+    );
+    expect(mockNavigation.navigate).not.toHaveBeenCalled();
     expect(mockImportAccount).not.toHaveBeenCalled();
   });
 });

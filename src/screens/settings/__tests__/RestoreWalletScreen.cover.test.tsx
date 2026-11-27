@@ -35,6 +35,9 @@ jest.mock('@/contexts/AuthContext', () => ({
 }));
 let mockHasPin = false;
 let mockLockedUntil: number | null = null;
+// orphanPin (for its message) imports the wallet services; nothing here runs them.
+jest.mock('@/services/wallet', () => ({}));
+jest.mock('@/services/wallet/crossStoreReconcile', () => ({}));
 jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
     hasPinStrict: async () => mockHasPin,
