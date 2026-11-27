@@ -330,6 +330,30 @@ describe('TASK-573: a credential write that throws is settled by a read-back', (
     await expectKeysUnder(NEW_PIN);
   });
 
+  it('(h) setupPin, the credential lands and the read-back throws: rejects, nothing re-marked, each account keeps its device-key copy and the new blob, and every key reads under the NEW PIN once reads recover', async () => {
+    await markPinSetupPending();
+    mockPlatform.__events.length = 0;
+    mockPlatform.__ctl.credWrite = 'land-then-throw';
+    mockPlatform.__ctl.pinReadThrowsAfterCred = true;
+
+    await expect(AccountSecureStorage.setupPin(NEW_PIN, 'pin')).rejects.toThrow(
+      'credential write failed'
+    );
+
+    // The breadcrumb read-back threw too (unknown), so nothing is re-marked.
+    expect(marks()).toHaveLength(0);
+    for (const key of SLOTS) {
+      expect(slot(key).blobs ?? []).toHaveLength(1);
+      expect(slot(key).encryptedPrivateKey).toBeTruthy();
+    }
+    mockPlatform.__ctl.credWrite = null;
+    mockPlatform.__ctl.pinReadThrowsAfterCred = false;
+    mockPlatform.__ctl.pinReadThrows = false;
+    expect(await readPinSetupPendingStrict()).toBe(false);
+    expect(await AccountSecureStorage.verifyPin(NEW_PIN)).toBe(true);
+    await expectKeysUnder(NEW_PIN);
+  });
+
   it('(g) the landed path logs no hash, salt or PIN', async () => {
     await withOldPin();
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
