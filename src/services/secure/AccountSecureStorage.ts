@@ -3837,8 +3837,10 @@ export class AccountSecureStorage {
       // after the clear started and a strict read-back shows no credential, a
       // breadcrumb that was set before it is set again (TASK-511). Recovery then
       // remains for a kill between the clear and the end of that read-back and
-      // re-mark, and for a store that cannot answer: the breadcrumb read before
-      // the clear, the read-back or the re-mark itself throws.
+      // re-mark, and for a store that cannot answer: the read-back or the
+      // re-mark itself throws or times out. A breadcrumb read before the clear
+      // that throws counts as set, so on a device that had none this can leave
+      // one with no PIN; the next setupPin clears it.
       //
       // If removal cannot be CONFIRMED (a wedged/unhealthy store), the commit is
       // ABORTED and the pre-commit rollback drops this attempt's new blobs and
@@ -4534,11 +4536,17 @@ export class AccountSecureStorage {
         // (clearPinSetupPending also confirms when there was nothing to clear).
         // It is recorded BEFORE the clear: an unconfirmed clear may still have
         // removed it, and that throw takes the same rollback. A read that
-        // throws counts as absent: no re-mark, the safe direction.
+        // throws or times out counts as possibly set: the clear below may
+        // still remove a breadcrumb it could not see, and the rollback's
+        // read-back alone keeps a re-mark from ever meeting a credential.
         try {
-          breadcrumbMayBeRemoved = await readPinSetupPendingStrict();
+          breadcrumbMayBeRemoved = await this.withTimeout(
+            readPinSetupPendingStrict(),
+            this.KEYCHAIN_READ_TIMEOUT_MS,
+            'restore setup marker read'
+          );
         } catch {
-          breadcrumbMayBeRemoved = false;
+          breadcrumbMayBeRemoved = true;
         }
         if (!(await clearPinSetupPending())) {
           throw new AccountStorageError(
@@ -4593,12 +4601,16 @@ export class AccountSecureStorage {
         // TASK-511: a set breadcrumb may have been removed (a confirmed or an
         // unconfirmed clear) and the attempt then threw before the commit. Set
         // it again ONLY when a strict read RESOLVES false (no credential
-        // exists); a credential that landed, or a read that throws (unknown
-        // outcome), must never coexist with a live breadcrumb.
+        // exists); a credential that landed, or a read that throws or times
+        // out (unknown outcome), must never coexist with a live breadcrumb.
         if (breadcrumbMayBeRemoved) {
           let credentialAbsent = false;
           try {
-            credentialAbsent = !(await this.hasPinStrict());
+            credentialAbsent = !(await this.withTimeout(
+              this.hasPinStrict(),
+              this.KEYCHAIN_READ_TIMEOUT_MS,
+              'PIN read-back after a failed setup'
+            ));
           } catch {
             credentialAbsent = false;
           }

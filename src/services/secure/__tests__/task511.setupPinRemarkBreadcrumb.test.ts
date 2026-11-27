@@ -18,6 +18,7 @@ jest.mock('@/platform', () => {
     markFails: false,
     clearFails: false,
     pendingReadThrows: false,
+    pendingReadThrowsOnce: false,
     pendingVerifyThrows: false,
     removedPending: false,
   };
@@ -36,6 +37,7 @@ jest.mock('@/platform', () => {
       ctl.markFails = false;
       ctl.clearFails = false;
       ctl.pendingReadThrows = false;
+      ctl.pendingReadThrowsOnce = false;
       ctl.pendingVerifyThrows = false;
       ctl.removedPending = false;
     },
@@ -80,6 +82,10 @@ jest.mock('@/platform', () => {
       getItem: async (k: string) => {
         if (k === 'pin_setup_pending') {
           if (ctl.pendingReadThrows) throw new Error('storage read failed');
+          if (ctl.pendingReadThrowsOnce) {
+            ctl.pendingReadThrowsOnce = false;
+            throw new Error('storage read failed once');
+          }
           if (ctl.pendingVerifyThrows && ctl.removedPending) {
             throw new Error('storage read timed out');
           }
@@ -135,6 +141,7 @@ const mockPlatform = platform as unknown as {
     markFails: boolean;
     clearFails: boolean;
     pendingReadThrows: boolean;
+    pendingReadThrowsOnce: boolean;
     pendingVerifyThrows: boolean;
     removedPending: boolean;
   };
@@ -321,14 +328,19 @@ describe('TASK-511: a definite first-PIN write failure re-marks the breadcrumb',
     }
   });
 
-  it('(i) the breadcrumb read before the clear throws: counted as absent, never marks', async () => {
-    mockPlatform.__ctl.pendingReadThrows = true;
+  it('(i) the breadcrumb read before the clear throws once, the clear then confirms and the credential write throws: counted as set, the breadcrumb is set again', async () => {
+    mockPlatform.__ctl.pendingReadThrowsOnce = true;
+    mockPlatform.__ctl.credWrite = 'throw';
     await expect(AccountSecureStorage.setupPin(PIN_1, 'pin')).rejects.toThrow(
-      'restore setup marker'
+      'credential write failed'
     );
 
-    expect(mockPlatform.__events.some((x) => x.e === 'cred')).toBe(false);
-    expect(marks()).toHaveLength(0);
+    const order = mockPlatform.__events
+      .map((x) => x.e)
+      .filter((e) => e === 'clear' || e === 'cred' || e === 'mark');
+    expect(order).toEqual(['clear', 'cred', 'mark']);
+    expect(await AccountSecureStorage.hasPinStrict()).toBe(false);
+    expect(await readPinSetupPendingStrict()).toBe(true);
   });
 
   it('(e) a throwing re-mark is swallowed: the rejection still carries the original credential-write error', async () => {
