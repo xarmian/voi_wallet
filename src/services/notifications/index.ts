@@ -15,7 +15,12 @@ import * as Device from 'expo-device';
 import { Platform, AppState, AppStateStatus } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { wipeEpoch, wipedSince } from '@/services/wipe/gate';
+import {
+  isWipeWindowOpen,
+  registerWipeReset,
+  wipeEpoch,
+  wipedSince,
+} from '@/services/wipe/gate';
 import algosdk from 'algosdk';
 import {
   getSupabaseClient,
@@ -98,7 +103,13 @@ class NotificationService {
    */
   static getInstance(): NotificationService {
     if (!NotificationService.instance) {
-      NotificationService.instance = new NotificationService();
+      const instance = new NotificationService();
+      NotificationService.instance = instance;
+      // TASK-469: a queued tap carries the previous wallet's addresses,
+      // transaction id and amount; a wipe drops it.
+      registerWipeReset('notifications', () =>
+        instance.clearPendingNotificationTap()
+      );
     }
     return NotificationService.instance;
   }
@@ -154,7 +165,12 @@ class NotificationService {
               notificationId
             );
 
-          if (this.onNotificationTap) {
+          // TASK-469: a launch tap read across a wipe belongs to the wiped
+          // wallet; it is neither delivered nor queued.
+          const wiped = wipedSince(epoch) || isWipeWindowOpen();
+          if (wiped) {
+            console.log('[Notifications] Launch tap dropped by a wipe');
+          } else if (this.onNotificationTap) {
             this.onNotificationTap(data, notificationId);
           } else {
             this.pendingNotificationTap = data;
@@ -894,6 +910,10 @@ class NotificationService {
           .data as unknown as NotificationData;
         const notificationId = response.notification.request.identifier;
         console.log('Notification tapped:', data);
+
+        // TASK-469: a tap that arrives while a wipe runs belongs to the wallet
+        // being wiped; it is neither delivered nor queued.
+        if (isWipeWindowOpen()) return;
 
         if (this.onNotificationTap) {
           this.onNotificationTap(data, notificationId);

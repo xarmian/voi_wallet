@@ -71,6 +71,21 @@ const loadService = () => {
   return service!;
 };
 
+/** A fresh singleton and the wipe gate from the same module registry. */
+const loadWithGate = () => {
+  let loaded: {
+    service: typeof import('../index').notificationService;
+    gate: typeof import('@/services/wipe/gate');
+  };
+  jest.isolateModules(() => {
+    loaded = {
+      service: require('../index').notificationService,
+      gate: require('@/services/wipe/gate'),
+    };
+  });
+  return loaded!;
+};
+
 describe('notificationService cold-start response (TASK-381)', () => {
   beforeEach(() => {
     mockSupabaseConfigured = true;
@@ -139,5 +154,78 @@ describe('notificationService cold-start response (TASK-381)', () => {
     expect(mockGetLastResponse).not.toHaveBeenCalled();
     expect(mockAddResponseListener).not.toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  describe('a wipe (TASK-469)', () => {
+    // A launch response queued by an earlier test that never read it must not
+    // leak in here.
+    beforeEach(() => {
+      mockGetLastResponse.mockReset();
+      mockGetLastResponse.mockImplementation(async () => null);
+    });
+
+    it('drops a tap queued before the wipe, so a later tap handler does not get it', async () => {
+      mockGetLastResponse.mockResolvedValueOnce(
+        response('notif-5', { type: 'payment', txId: 'TX1' })
+      );
+      const { service, gate } = loadWithGate();
+      await service.initialize();
+      expect(service.getPendingNotificationTap()).not.toBeNull();
+
+      gate.runWipeResets();
+      expect(service.getPendingNotificationTap()).toBeNull();
+      const handler = jest.fn();
+      service.setNotificationTapHandler(handler);
+      expect(handler).not.toHaveBeenCalled();
+      service.cleanup();
+    });
+
+    it('does not queue a launch tap read while a wipe runs', async () => {
+      const read: { answer?: (value: unknown) => void } = {};
+      mockGetLastResponse.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            read.answer = resolve;
+          })
+      );
+      const { service, gate } = loadWithGate();
+      const starting = service.initialize();
+      for (let i = 0; i < 50 && !read.answer; i++) await Promise.resolve();
+      expect(read.answer).toBeDefined();
+      gate.openWipeWindow();
+      gate.runWipeResets();
+      read.answer!(response('notif-9', { type: 'payment' }));
+      await starting;
+      gate.closeWipeWindow();
+
+      expect(service.getPendingNotificationTap()).toBeNull();
+      const handler = jest.fn();
+      service.setNotificationTapHandler(handler);
+      expect(handler).not.toHaveBeenCalled();
+      service.cleanup();
+    });
+
+    it('ignores a tap that arrives while the wipe runs, queued or delivered', async () => {
+      const { service, gate } = loadWithGate();
+      await service.initialize();
+
+      gate.openWipeWindow();
+      mockResponseListener!(response('notif-6', { type: 'payment' }));
+      gate.closeWipeWindow();
+      expect(service.getPendingNotificationTap()).toBeNull();
+      const handler = jest.fn();
+      service.setNotificationTapHandler(handler);
+      expect(handler).not.toHaveBeenCalled();
+
+      gate.openWipeWindow();
+      mockResponseListener!(response('notif-7', { type: 'payment' }));
+      gate.closeWipeWindow();
+      expect(handler).not.toHaveBeenCalled();
+
+      // Once the wipe has settled, taps are delivered again.
+      mockResponseListener!(response('notif-8', { type: 'payment' }));
+      expect(handler).toHaveBeenCalledWith({ type: 'payment' }, 'notif-8');
+      service.cleanup();
+    });
   });
 });
