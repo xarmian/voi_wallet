@@ -5,6 +5,9 @@
  *    connect;
  *  - sign-client Engine `sessionRequestQueue` ({ state, queue }) and
  *    `emittedSessionRequests` (a LimitedSet over a private `set`).
+ * It also deletes every core Expirer entry, whose `keys` are formatted targets
+ * that its `del` does not accept back: the purge parses each one with utils'
+ * `parseExpirerTarget` first.
  * An SDK upgrade that renamed or moved them would make those writes silent
  * no-ops. This test reads the TypeScript sources of the installed packages
  * (from their source maps) and checks, in the files that own them, that each
@@ -55,6 +58,9 @@ const CACHED = 'cached';
 const REQUEST_QUEUE = 'sessionRequestQueue';
 const EMITTED = 'emittedSessionRequests';
 const LIMITED_SET_FIELD = 'set';
+const EXPIRATIONS = 'expirations';
+const FORMAT_TARGET = 'formatTarget';
+const PARSE_TARGET = 'parseExpirerTarget';
 
 const CORE = '@walletconnect/core';
 const SIGN = '@walletconnect/sign-client';
@@ -167,6 +173,68 @@ describe('installed WalletConnect SDK, the fields the wipe purge writes', () => 
       expect(limitedSet).toMatch(
         new RegExp(`return this\\.${set}\\.has\\(item\\)`)
       );
+    });
+  });
+
+  describe('core Expirer (src/controllers/expirer.ts)', () => {
+    const source = sdkSource(CORE, 'controllers/expirer.ts');
+    const map = escape(EXPIRATIONS);
+    const format = escape(FORMAT_TARGET);
+
+    it(`keys \`${EXPIRATIONS}\` by the formatted target, and \`keys\` returns those`, () => {
+      expect(source).toMatch(new RegExp(`\\n {2}public ${map} = new Map<`));
+      const set = member(source, /\n {2}public set: /);
+      expect(set).toMatch(
+        new RegExp(`const target = this\\.${format}\\(key\\);`)
+      );
+      expect(set).toMatch(new RegExp(`this\\.${map}\\.set\\(target,`));
+      expect(member(source, /\n {2}get keys\(\)/)).toMatch(
+        new RegExp(`return Array\\.from\\(this\\.${map}\\.keys\\(\\)\\);`)
+      );
+    });
+
+    it(`formats the argument of \`del\` again: a topic string or a numeric id`, () => {
+      const del = member(source, /\n {2}public del: /);
+      expect(del).toContain('this.has(key)');
+      expect(del).toMatch(
+        new RegExp(`const target = this\\.${format}\\(key\\);`)
+      );
+      expect(del).toMatch(new RegExp(`this\\.${map}\\.delete\\(target\\)`));
+      expect(member(source, /\n {2}public has: /)).toMatch(
+        new RegExp(`this\\.${format}\\(key\\)`)
+      );
+      const formatTarget = member(
+        source,
+        new RegExp(`\\n {2}private ${format}\\(`)
+      );
+      expect(formatTarget).toMatch(
+        /typeof key === "string"\) \{\s*return formatTopicTarget\(key\);/
+      );
+      expect(formatTarget).toMatch(
+        /typeof key === "number"\) \{\s*return formatIdTarget\(key\);/
+      );
+    });
+
+    it(`utils' \`${PARSE_TARGET}\` turns a target back into what \`del\` takes`, () => {
+      const misc = sdkSource('@walletconnect/utils', 'misc.ts');
+      expect(misc).toMatch(
+        new RegExp(
+          `export function ${escape(PARSE_TARGET)}\\(target: string\\)`
+        )
+      );
+      // The installed functions, not mocked here.
+      const utils = jest.requireActual('@walletconnect/utils');
+      expect(utils[PARSE_TARGET]('topic:abc')).toEqual({
+        topic: 'abc',
+        id: undefined,
+      });
+      expect(utils[PARSE_TARGET]('id:7')).toEqual({ id: 7, topic: undefined });
+      expect(() => utils[PARSE_TARGET]('other:x')).toThrow();
+      // Round trip: the parsed value formats back to the same target, while
+      // an id target passed back as a string does not.
+      expect(utils.formatTopicTarget('abc')).toBe('topic:abc');
+      expect(utils.formatIdTarget(7)).toBe('id:7');
+      expect(utils.formatTopicTarget('id:7')).toBe('topic:id:7');
     });
   });
 
