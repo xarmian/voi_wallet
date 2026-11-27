@@ -14,7 +14,7 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { redactError } from '@/utils/logRedaction';
-import { wipeAllLocalData } from '@/services/wipe';
+import { isWipeInFlight, wipeAllLocalData } from '@/services/wipe';
 import {
   showWipeCompleteNotice,
   showWipeIncompleteNotice,
@@ -54,6 +54,8 @@ const showAlert = (
 // A timeout fails closed just like a rejected deletion.
 const RESET_STEP_TIMEOUT_MS = 8000;
 
+class StepTimeoutError extends Error {}
+
 const withTimeout = <T,>(
   promise: Promise<T>,
   ms: number,
@@ -61,7 +63,7 @@ const withTimeout = <T,>(
 ): Promise<T> =>
   new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${ms}ms`));
+      reject(new StepTimeoutError(`${label} timed out after ${ms}ms`));
     }, ms);
     promise.then(
       (value) => {
@@ -74,6 +76,23 @@ const withTimeout = <T,>(
       }
     );
   });
+
+/**
+ * TASK-469: the wipe's outcome. The wipe bounds each of its own steps (5 s or
+ * 15 s), and it runs many of them; on this screen the keychain is failing, so
+ * those bounds can run out and the whole wipe can take far longer than the
+ * step bound and still complete. So past the bound, while the wipe is still
+ * running, keep waiting for it and show nothing new: the incomplete notice
+ * only when it rejects, the complete one only when it resolves.
+ */
+const waitForWipe = async (wipe: Promise<void>): Promise<void> => {
+  try {
+    await withTimeout(wipe, RESET_STEP_TIMEOUT_MS, 'wipe');
+  } catch (error) {
+    if (!(error instanceof StepTimeoutError) || !isWipeInFlight()) throw error;
+    await wipe;
+  }
+};
 
 interface SecureStorageUnavailableScreenProps {
   /**
@@ -158,7 +177,7 @@ export default function SecureStorageUnavailableScreen({
     setResetError(null);
     try {
       try {
-        await withTimeout(
+        await waitForWipe(
           // TASK-415 / TASK-469: reset fails closed when key material can't be
           // verifiably erased. wipeAllLocalData records the wipe request first, then
           // erases secure storage, the wallet blob and every other local record
@@ -166,9 +185,7 @@ export default function SecureStorageUnavailableScreen({
           // complete; an incomplete wipe is finished by the next
           // launch. A keychain that fails every read can't support wallet setup
           // either; wiping metadata here would recreate TASK-413's orphan-PIN state.
-          wipeAllLocalData(),
-          RESET_STEP_TIMEOUT_MS,
-          'wipe'
+          wipeAllLocalData()
         );
       } catch (error) {
         if (mountedRef.current) {
