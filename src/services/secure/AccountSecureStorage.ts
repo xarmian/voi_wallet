@@ -58,7 +58,7 @@ import {
 import { SECURITY_CONFIG } from '../../config/security';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { pbkdf2Hex } from './pbkdf2Kdf';
-import { redactError } from '@/utils/logRedaction';
+import { errorKind, redactAddress, redactError } from '@/utils/logRedaction';
 import {
   boundedSet,
   boundedDelete,
@@ -125,6 +125,17 @@ export interface SecretSlotInspection {
   state: 'empty' | 'key-matches' | 'key-other' | 'occupied-unreadable';
   vault: 'locked' | 'unlocked';
 }
+
+/** TASK-505: what AccountSecureStorage.repairMissingKeyForRestore did. */
+export type RepairResult =
+  | { kind: 'repaired' }
+  | { kind: 'not-eligible' }
+  | {
+      kind: 'not-empty';
+      state: Exclude<SecretSlotInspection['state'], 'empty'>;
+    }
+  | { kind: 'skipped' }
+  | { kind: 'unconfirmed' };
 
 /**
  * TASK-504: the session vault was locked, unlocked or replaced while a restore's
@@ -1743,6 +1754,183 @@ export class AccountSecureStorage {
         throw new WriteOutcomeUnknownError(error.journaled, context);
       }
       throw error;
+    });
+  }
+
+  /**
+   * Put a restored key back into the empty secret slot of an account already
+   * on this device (TASK-505). The key goes into the record's own slot under
+   * its own id, as a device-key envelope, and nothing else is written: no
+   * metadata, no account-list entry, no pending-creation entry. The id is
+   * already listed, so a wipe covers the slot and the boot reconcile sees a
+   * secret and a record that agree.
+   *
+   * One key-mutation task, in this order:
+   *  - a reset since `creationGen` throws ResetRacedError;
+   *  - `not-eligible`: a record that holds no key of its own (watch, Ledger,
+   *    remote signer, a rekeyed record that does not hold its original key);
+   *    nothing is read;
+   *  - `skipped`: the key does not derive to the record's own address;
+   *  - a PIN set with the vault locked throws VaultChangedDuringReadError;
+   *  - `not-eligible`: `stillListed` is false, or the secure metadata or the
+   *    account-list entry is missing or names another account;
+   *  - `skipped`: a pending creation or an unresolved write exists for the
+   *    slot, or any of these reads fails or times out;
+   *  - `not-empty`: the slot holds anything (it is not written). A vault that
+   *    changed while it was read throws VaultChangedDuringReadError.
+   * Every read before the write is bounded and none of them writes.
+   *
+   * After the write the slot is read again: only a key that derives to the
+   * record's own address is `repaired`. A write refused before it reached
+   * storage, or one that failed and left the slot empty, is `skipped`; anything
+   * else is `unconfirmed`. What was written is never deleted. A write whose
+   * outcome is unknown throws WriteOutcomeUnknownError.
+   */
+  static async repairMissingKeyForRestore(
+    entry: AccountMetadata,
+    privateKey: Uint8Array,
+    creationGen: number,
+    stillListed: () => Promise<boolean>
+  ): Promise<RepairResult> {
+    const context: WriteContext = 'restore';
+    const bound = <T>(promise: Promise<T>, label: string): Promise<T> =>
+      this.withTimeout(promise, this.KEYCHAIN_READ_TIMEOUT_MS, label);
+    const skipped = (step: string, error?: unknown): RepairResult => {
+      console.warn(
+        `[restore] key repair skipped at ${step} for ${redactAddress(entry.address)}`,
+        error === undefined ? '' : errorKind(error)
+      );
+      return { kind: 'skipped' };
+    };
+    return this.runKeyMutationExclusive(async (): Promise<RepairResult> => {
+      if (this.secureResetGeneration !== creationGen) {
+        throw new ResetRacedError();
+      }
+      const id = entry.id;
+      const ownsKey =
+        entry.type === AccountType.STANDARD ||
+        (entry.type === AccountType.REKEYED && entry.originalOwner === true);
+      if (!ownsKey) return { kind: 'not-eligible' };
+      if (!keyBelongsToAddress(privateKey, entry.address)) {
+        return skipped('key check');
+      }
+
+      let hasPin: boolean;
+      try {
+        hasPin = await bound(this.hasPinStrict(), 'repair PIN presence read');
+      } catch (error) {
+        return skipped('PIN read', error);
+      }
+      if (hasPin && !SessionKeyVault.isUnlocked()) {
+        throw new VaultChangedDuringReadError();
+      }
+      const epochBefore = SessionKeyVault.currentEpoch();
+
+      const primaryKey = this.secretKey(id);
+      const legacyKey = `${this.LEGACY_STORAGE_KEY_PREFIX}${id}`;
+      let slot: SecretSlotInspection;
+      try {
+        if (!(await bound(stillListed(), 'repair wallet read'))) {
+          return { kind: 'not-eligible' };
+        }
+        const rawMetadata = await bound(
+          storage.getItem(this.metadataKey(id)),
+          'repair metadata read'
+        );
+        const listed = await bound(
+          this.readAccountListStrict(),
+          'repair account list read'
+        );
+        let metadata: { accountId?: unknown; address?: unknown } | null = null;
+        try {
+          metadata = rawMetadata ? JSON.parse(rawMetadata) : null;
+        } catch {
+          metadata = null;
+        }
+        if (
+          !metadata ||
+          typeof metadata !== 'object' ||
+          metadata.accountId !== id ||
+          metadata.address !== entry.address ||
+          !listed.includes(id)
+        ) {
+          return { kind: 'not-eligible' };
+        }
+        const pendingCreates = await this.readPendingCreatesStrict(
+          this.KEYCHAIN_READ_TIMEOUT_MS
+        );
+        if (pendingCreates[id] !== undefined) {
+          return skipped('pending creation');
+        }
+        const unknownWrites = await this.readUnknownWritesStrict();
+        if (
+          unknownWrites[primaryKey] !== undefined ||
+          unknownWrites[legacyKey] !== undefined ||
+          hasPendingRecord(secureStorage, primaryKey) ||
+          hasPendingRecord(secureStorage, legacyKey)
+        ) {
+          return skipped('unresolved write');
+        }
+        slot = await bound(
+          this.inspectSecretSlot(id, entry.address),
+          'repair slot read'
+        );
+      } catch (error) {
+        return skipped('read', error);
+      }
+      if (SessionKeyVault.currentEpoch() !== epochBefore) {
+        throw new VaultChangedDuringReadError();
+      }
+      if (slot.state !== 'empty') {
+        return { kind: 'not-empty', state: slot.state };
+      }
+
+      let writeThrew = false;
+      try {
+        const encryptedPrivateKey = await this.encryptPrivateKey(privateKey);
+        await this.saveSecret(
+          id,
+          {
+            accountId: id,
+            encryptedPrivateKey,
+            authMethod: hasPin ? 'pin' : 'biometric',
+          },
+          context
+        );
+      } catch (error) {
+        if (error instanceof WriteOutcomeUnknownError) {
+          throw new WriteOutcomeUnknownError(error.journaled, context);
+        }
+        // Refused before the set was issued: nothing reached storage.
+        if (error instanceof WriteUnresolvedError) {
+          return skipped('write guard', error);
+        }
+        // A rejected set may still have landed: the read-back decides.
+        writeThrew = true;
+      }
+
+      let after: SecretSlotInspection['state'];
+      try {
+        after = (
+          await bound(
+            this.inspectSecretSlot(id, entry.address),
+            'repair read-back'
+          )
+        ).state;
+      } catch (error) {
+        console.warn(
+          `[restore] key repair not confirmed for ${redactAddress(entry.address)}`,
+          errorKind(error)
+        );
+        return { kind: 'unconfirmed' };
+      }
+      if (after === 'key-matches') return { kind: 'repaired' };
+      if (after === 'empty' && writeThrew) return skipped('write');
+      console.warn(
+        `[restore] key repair not confirmed for ${redactAddress(entry.address)}`,
+        after
+      );
+      return { kind: 'unconfirmed' };
     });
   }
 

@@ -13,10 +13,12 @@ import {
   AccountSecureStorage,
   VaultChangedDuringReadError,
 } from '@/services/secure/AccountSecureStorage';
+import type { RepairResult } from '@/services/secure/AccountSecureStorage';
 import { NOTHING_TO_ADD_TEXT, NO_KEYS_TEXT } from './forgottenPinTexts';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { markPinSetupPending } from '@/services/secure/pinSetupPending';
 import {
+  AccountMetadata,
   AccountType,
   StandardAccountMetadata,
   WatchAccountMetadata,
@@ -317,6 +319,51 @@ async function reportOutcomeForDeviceRecord(
 }
 
 /**
+ * TASK-505: put the file's key back into the empty slot of the one device
+ * record at this address, under that record's own id. The caller has already
+ * reached `device-key-unreadable` for the record; this returns what the record
+ * reports instead. The derived key is zeroed whatever happens.
+ */
+async function repairDeviceRecordKey(
+  backupAccount: BackupAccountData,
+  entry: AccountMetadata,
+  conflict: RestoreRecordOutcome,
+  creationGen: number
+): Promise<RestoreRecordOutcome> {
+  const derived = algosdk.mnemonicToSecretKey(backupAccount.mnemonic!);
+  let result: RepairResult;
+  try {
+    result = await AccountSecureStorage.repairMissingKeyForRestore(
+      entry,
+      derived.sk,
+      creationGen,
+      async () => {
+        // The device record must still be the one entry at this address.
+        const wallet = await MultiAccountWalletService.readWalletStrict();
+        const atAddress = (wallet?.accounts ?? []).filter(
+          (a) => a.address === entry.address
+        );
+        return atAddress.length === 1 && atAddress[0].id === entry.id;
+      }
+    );
+  } finally {
+    derived.sk.fill(0);
+  }
+  switch (result.kind) {
+    case 'repaired':
+      return 'key-repaired';
+    case 'not-eligible':
+      return 'device-key-unreadable';
+    case 'not-empty':
+      return result.state === 'key-matches' ? conflict : 'device-key-problem';
+    case 'skipped':
+      return 'device-key-repair-skipped';
+    case 'unconfirmed':
+      return 'device-key-repair-unconfirmed';
+  }
+}
+
+/**
  * TASK-504 (DOC-507 5.2): a read-only classification of the file for the
  * forgotten-PIN consent screen. Nothing is read from or written to the device.
  * `total` (T) is the accounts in the file after records that share an address are
@@ -413,11 +460,12 @@ function fileHoldsKey(account: BackupAccountData): boolean {
 
 /**
  * Add-only restore of the file's accounts (TASK-504). Nothing already on the
- * device is deleted or overwritten. Each record is decided against the device
- * and gets exactly one result. Key slots are read and written inside one
- * key-mutation task, a record whose id names an occupied slot is stored under a
- * fresh id, and the wallet blob is merged once, at the end, into the latest
- * blob re-read inside the write queue. Rollback touches only what this attempt
+ * device is deleted or overwritten; a key is written for an account already
+ * here only into its own slot, and only when that slot reads empty (TASK-505).
+ * Each record is decided against the device and gets exactly one result. Key
+ * slots are read and written inside one key-mutation task, a record whose id
+ * names an occupied slot is stored under a fresh id, and the wallet blob is
+ * merged once, at the end, into the latest blob re-read inside the write queue. Rollback touches only what this attempt
  * wrote: journaled key slots, and metadata it added for key-less records.
  */
 async function restoreAccountsNow(
@@ -542,6 +590,25 @@ async function restoreAccountsNow(
             record.deviceEntries = deviceAccounts.filter(
               (a) => a.address === address
             ).length;
+          }
+          // One device record whose slot read empty: put the file's key back
+          // into it. Not with duplicates (which record gets the key is not
+          // clear) and not on the old-PIN screen.
+          if (
+            record.outcome === 'device-key-unreadable' &&
+            record.deviceEntries === 1 &&
+            options.oldPinSession === undefined
+          ) {
+            const entry = deviceAccounts.find((a) => a.address === address)!;
+            record.outcome = await repairDeviceRecordKey(
+              backupAccount,
+              entry,
+              conflict,
+              creationGen
+            );
+            if (record.outcome !== 'device-key-unreadable') {
+              delete record.deviceEntries;
+            }
           }
         }
         counts.records.push(record);

@@ -17,7 +17,7 @@ import type {
 
 /** What the restore screen and its confirmation say before anything is added. */
 export const RESTORE_ADDS_TEXT =
-  'This adds the accounts in this backup to this wallet. Nothing on this device is removed or replaced.';
+  'This adds the accounts in this backup to this wallet, and puts back a missing key for an account already here. Nothing on this device is removed or replaced.';
 export const SETTINGS_STAY_TEXT = 'Your settings stay as they are.';
 
 export const NOT_FRESH_LINE =
@@ -73,6 +73,12 @@ export const NEW_ID_SUFFIX =
 export const OUTCOME_TEXT: Record<RestoreRecordOutcome, string> = {
   'device-key-unreadable': KEY_UNREADABLE_TEXT,
   'device-key-problem': KEY_PROBLEM_TEXT,
+  'key-repaired':
+    'On this device without its key. The key from this backup was put back.',
+  'device-key-repair-skipped':
+    "On this device, but its key can't be read here. This backup has the key, but we couldn't safely check this account on this phone, so nothing was changed. Restore this backup again later.",
+  'device-key-repair-unconfirmed':
+    "On this device. We put back the key from this backup but couldn't confirm it. Restore this backup again to check.",
   // The text depends on the device record's type: see keylessDeviceText. This
   // entry is the type-less fallback and is not shown when a type is known.
   'device-keyless':
@@ -151,6 +157,9 @@ export function buildRestoreReport(result: RestoreResult): RestoreReport {
     ALREADY_ON_DEVICE.has(r.outcome)
   ).length;
   const other = records.length - added - already;
+  // A key put back onto an account already here is neither added nor "already
+  // on this device"; it counts with `other`.
+  const repaired = records.filter((r) => r.outcome === 'key-repaired').length;
 
   // A record added without its key is never "Restore complete" (e7912207 item 3).
   const withoutKey = records.some((r) => r.withoutKey !== undefined);
@@ -163,6 +172,13 @@ export function buildRestoreReport(result: RestoreResult): RestoreReport {
   } else if (added === 0 && other === 0) {
     title = 'Nothing to add';
     summary = 'Every account in this backup is already on this device.';
+  } else if (repaired > 0 && added === 0 && other === repaired) {
+    // The only changes are keys put back.
+    title = 'Restore finished';
+    summary =
+      repaired === 1
+        ? 'The key from this backup was put back for 1 account already on this device.'
+        : `Keys from this backup were put back for ${repaired} accounts already on this device.`;
   } else {
     title = 'Restore finished';
     summary = `Added ${added} of ${records.length} accounts. Check the list below.`;

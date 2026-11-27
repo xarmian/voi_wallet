@@ -8,6 +8,8 @@ import {
   NOT_FRESH_LINE,
   OUTCOME_TEXT,
   PAIRINGS_LINE,
+  REMOVE_ADVICE,
+  RESTORE_ADDS_TEXT,
 } from '../restoreReport';
 import type {
   RestoreRecordOutcome,
@@ -123,6 +125,9 @@ describe('restore report rows', () => {
       'rejected-slot-occupied',
       'rejected-no-safe-slot',
       'rejected-invalid',
+      'key-repaired',
+      'device-key-repair-skipped',
+      'device-key-repair-unconfirmed',
     ];
     for (const o of outcomes) expect(OUTCOME_TEXT[o]).toBeTruthy();
   });
@@ -253,5 +258,86 @@ describe('TASK-504: a record added without its key (product e7912207 item 3)', (
     expect(report).not.toHaveProperty('notInBackup');
     expect(formatRestoreReport(report)).not.toContain('Not in this backup');
     expect(formatRestoreReport(report).endsWith(NOT_FRESH_LINE)).toBe(true);
+  });
+});
+
+describe('TASK-505: a key put back onto an account already on this device', () => {
+  const withEntries = (
+    outcome: RestoreRecordOutcome,
+    label = 'Acct'
+  ): RestoreRecordResult => ({ ...rec(outcome, label), deviceEntries: 1 });
+
+  it('the three rows, verbatim, and never with the remove advice', () => {
+    const report = buildRestoreReport(
+      result([
+        withEntries('key-repaired', 'A'),
+        withEntries('device-key-repair-skipped', 'B'),
+        withEntries('device-key-repair-unconfirmed', 'C'),
+      ])
+    );
+    expect(report.rows.map((r) => r.text)).toEqual([
+      'On this device without its key. The key from this backup was put back.',
+      "On this device, but its key can't be read here. This backup has the key, but we couldn't safely check this account on this phone, so nothing was changed. Restore this backup again later.",
+      "On this device. We put back the key from this backup but couldn't confirm it. Restore this backup again to check.",
+    ]);
+    for (const row of report.rows)
+      expect(row.text).not.toContain(REMOVE_ADVICE);
+  });
+
+  it('only repairs: "Restore finished" with the repair summary, singular and plural', () => {
+    const one = buildRestoreReport(result([rec('key-repaired')]));
+    expect(one.title).toBe('Restore finished');
+    expect(one.summary).toBe(
+      'The key from this backup was put back for 1 account already on this device.'
+    );
+    const two = buildRestoreReport(
+      result([rec('key-repaired'), rec('key-repaired', 'B')])
+    );
+    expect(two.title).toBe('Restore finished');
+    expect(two.summary).toBe(
+      'Keys from this backup were put back for 2 accounts already on this device.'
+    );
+  });
+
+  it('repairs alongside accounts already on this device: still the repair summary', () => {
+    const r = buildRestoreReport(
+      result([rec('key-repaired'), rec('already-present', 'B')])
+    );
+    expect(r.title).toBe('Restore finished');
+    expect(r.summary).toBe(
+      'The key from this backup was put back for 1 account already on this device.'
+    );
+  });
+
+  it('repairs with other outcomes follow the existing summary, counting a repair as neither added nor already there', () => {
+    const r = buildRestoreReport(
+      result([rec('key-repaired'), rec('added', 'B'), rec('added', 'C')])
+    );
+    expect(r.title).toBe('Restore finished');
+    expect(r.summary).toBe('Added 2 of 3 accounts. Check the list below.');
+    const skipped = buildRestoreReport(
+      result([rec('key-repaired'), rec('device-key-repair-skipped', 'B')])
+    );
+    expect(skipped.title).toBe('Restore finished');
+    expect(skipped.summary).toBe(
+      'Added 0 of 2 accounts. Check the list below.'
+    );
+  });
+
+  it('a skipped or unconfirmed repair alone is never "Nothing to add" or "Restore complete"', () => {
+    for (const o of [
+      'device-key-repair-skipped',
+      'device-key-repair-unconfirmed',
+    ] as const) {
+      const r = buildRestoreReport(result([rec(o)]));
+      expect(r.title).toBe('Restore finished');
+      expect(r.summary).toBe('Added 0 of 1 accounts. Check the list below.');
+    }
+  });
+
+  it('the text before a restore says a missing key is put back', () => {
+    expect(RESTORE_ADDS_TEXT).toBe(
+      'This adds the accounts in this backup to this wallet, and puts back a missing key for an account already here. Nothing on this device is removed or replaced.'
+    );
   });
 });
