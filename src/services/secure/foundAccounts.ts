@@ -50,16 +50,6 @@ export interface FoundSummary {
   unscannedIds: string[];
 }
 
-/** Every present id the summary names (ready rows count each copy). */
-export function presentIdsOf(summary: FoundSummary): string[] {
-  return [
-    ...summary.rows.flatMap((row) =>
-      row.kind === 'ready' ? row.ids : [row.id]
-    ),
-    ...summary.unreadableIds,
-  ];
-}
-
 // The counting rule lives in a module with no storage imports, so a screen
 // can count without loading the wallet service.
 export { actionableCount, actionableOf } from './foundAccountsCount';

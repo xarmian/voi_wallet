@@ -9,6 +9,7 @@ import SettingsScreen from '../SettingsScreen';
 import FoundAccountsNoticeHost from '@/components/account/FoundAccountsNoticeHost';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 import type { FoundSummary } from '@/services/secure/foundAccounts';
+import { actionableOf } from '@/services/secure/foundAccountsCount';
 
 const READY = 'AAAAREADYADDRESSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const WALLET = 'BBBBWALLETADDRESSBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
@@ -95,6 +96,31 @@ jest.mock('@/components/common/NFTBackground', () => ({
 jest.mock('@/components/common/GlassCard', () => ({
   GlassCard: ({ children }: { children: React.ReactNode }) => children,
 }));
+
+it('an in-wallet copy whose wallet account has no key counts; one with a key does not', () => {
+  const onlyCopy: FoundSummary = {
+    ...mockSummary,
+    presentCount: 2,
+    rows: [
+      {
+        kind: 'in-wallet',
+        id: 'w2',
+        address: READY,
+        walletLabel: 'Watched',
+        walletType: AccountType.WATCH,
+        walletHasKey: false,
+      },
+      mockSummary.rows[1],
+    ],
+  };
+  // The watch account's found key is its only usable copy: Settings must
+  // still list it, and the notice must announce it.
+  expect(actionableOf(onlyCopy)).toEqual({
+    count: 1,
+    ids: ['w2'],
+    address: READY,
+  });
+});
 
 it('Settings and Home show the same count', async () => {
   const settings = await render(<SettingsScreen />);
