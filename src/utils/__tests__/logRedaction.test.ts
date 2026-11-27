@@ -8,6 +8,7 @@ import {
   redactAddress,
   redactSensitiveForLog,
   redactError,
+  errorKind,
 } from '../logRedaction';
 
 // Throwaway vectors — not real keys or accounts.
@@ -173,5 +174,45 @@ describe('redactError never throws (final review, TASK-290)', () => {
       },
     };
     expect(redactError(hostile)).toBe('[unloggable error]');
+  });
+});
+
+describe('errorKind (TASK-561)', () => {
+  it('returns the built-in Error type, never its message', () => {
+    expect(errorKind(new TypeError('pin 482913'))).toBe('TypeError');
+    expect(errorKind(new RangeError('pin 482913'))).toBe('RangeError');
+    expect(errorKind(new Error('pin 482913'))).toBe('Error');
+  });
+
+  it('reads nothing the thrower controls: a custom subclass or a forged constructor name reads as its built-in base', () => {
+    class VaultListenerError extends Error {}
+    expect(errorKind(new VaultListenerError('pin 482913'))).toBe('Error');
+    const forged = Object.assign(new Error(), {
+      constructor: { name: 'pin 482913' },
+    });
+    expect(errorKind(forged)).toBe('Error');
+    const forgedName = new TypeError();
+    forgedName.name = 'pin 482913';
+    expect(errorKind(forgedName)).toBe('TypeError');
+  });
+
+  it('returns typeof for a non-Error throw, never its value', () => {
+    expect(errorKind('pin 482913')).toBe('string');
+    expect(errorKind({ message: 'pin 482913' })).toBe('object');
+    expect(errorKind(undefined)).toBe('undefined');
+  });
+
+  it('never throws', () => {
+    // instanceof walks the prototype chain; a proxy whose trap throws makes it
+    // throw.
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error('boom');
+        },
+      }
+    );
+    expect(errorKind(hostile)).toBe('[unloggable error]');
   });
 });

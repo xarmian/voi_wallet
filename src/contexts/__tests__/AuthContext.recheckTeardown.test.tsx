@@ -570,7 +570,8 @@ describe('guards', () => {
   // A lock listener that throws must not stop the verdict landing, nor cut the
   // teardown short: the recheck resolves, the state and the signal are locked,
   // and the vault and both caches are still cleared. The listener throws once,
-  // on the unlocked-to-locked transition.
+  // on the unlocked-to-locked transition. AppLockSignal contains the throw and
+  // logs its error kind only (TASK-561), so the teardown itself does not fail.
   it('throwingLockListener_stillLandsLocked', async () => {
     const rendered = await mount();
     await unlockLive(rendered);
@@ -599,21 +600,27 @@ describe('guards', () => {
       authChecked: true,
     });
     expectTornDown(seeded);
-    expect(console.error).toHaveBeenCalledWith(
+    expect(console.warn).toHaveBeenCalledWith(
+      '[AppLockSignal] listener failed',
+      'Error'
+    );
+    expect(console.error).not.toHaveBeenCalledWith(
       'Session teardown failed while locking:',
       expect.anything()
     );
     // Nothing logged carries the session secret.
     const logged = JSON.stringify(
-      (console.error as jest.Mock).mock.calls.map((args) =>
-        args.map((a: unknown) => String(a))
-      )
+      [
+        ...(console.error as jest.Mock).mock.calls,
+        ...(console.warn as jest.Mock).mock.calls,
+      ].map((args) => args.map((a: unknown) => String(a)))
     );
     expect(logged).not.toContain(FIXTURE_PIN);
   });
 
   // The same for an explicit lock(): a throwing lock listener must not leave
-  // the React state unlocked over a torn-down session.
+  // the React state unlocked over a torn-down session. AppLockSignal contains
+  // the throw and logs its error kind only (TASK-561).
   it('throwingLockListener_explicitLock_stillLandsLocked', async () => {
     const rendered = await mount();
     await unlockLive(rendered);
@@ -638,6 +645,75 @@ describe('guards', () => {
     }
 
     expect(thrown).toBe(1);
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: true,
+      isAuthenticated: false,
+    });
+    expectTornDown(seeded);
+    expect(console.warn).toHaveBeenCalledWith(
+      '[AppLockSignal] listener failed',
+      'Error'
+    );
+    expect(console.error).not.toHaveBeenCalledWith(
+      'Session teardown failed while locking:',
+      expect.anything()
+    );
+  });
+
+  // A teardown step that throws (a cache clear; listener throws are contained
+  // and can no longer get here) must still land the locked state: the
+  // teardown's catch logs it and setAuthState runs regardless. The step clears
+  // for real before throwing, so the torn-down checks stay meaningful.
+  function throwOnceAfterClearingPrivateKeyCache() {
+    const real = RealAccountSecureStorage.clearPrivateKeyCache.bind(
+      RealAccountSecureStorage
+    );
+    return jest
+      .spyOn(RealAccountSecureStorage, 'clearPrivateKeyCache')
+      .mockImplementationOnce(() => {
+        real();
+        throw new Error('cache clear failed');
+      });
+  }
+
+  it('throwingTeardownStep_recheck_stillLandsLocked', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    const seeded = seedCaches();
+    const spy = throwOnceAfterClearingPrivateKeyCache();
+
+    await recheck(rendered);
+
+    expect(spy).toHaveBeenCalled();
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: true,
+      isAuthenticated: false,
+      authChecked: true,
+    });
+    expectTornDown(seeded);
+    expect(console.error).toHaveBeenCalledWith(
+      'Session teardown failed while locking:',
+      expect.anything()
+    );
+  });
+
+  it('throwingTeardownStep_explicitLock_stillLandsLocked', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    const seeded = seedCaches();
+    const spy = throwOnceAfterClearingPrivateKeyCache();
+    probe.renders = [];
+    probe.armed = true;
+    try {
+      await act(async () => {
+        rendered.result.current.lock();
+      });
+      await flush();
+    } finally {
+      probe.armed = false;
+    }
+
+    expect(spy).toHaveBeenCalled();
     expect(rendered.result.current.authState).toMatchObject({
       isLocked: true,
       isAuthenticated: false,

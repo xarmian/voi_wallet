@@ -255,10 +255,11 @@ const withTimeout = <T,>(
 
 // The session teardown for every path that locks (lock signal to locked, then
 // vault, 60 s cache and messaging cache cleared), run synchronously before the
-// locked state is set. A throwing lock or vault listener does not cut the
-// teardown short (enterLockedState runs every step, then rethrows); the error
-// is logged through redactError, as elsewhere in this file, and the caller
-// still sets the locked state, so a listener can never leave the UI unlocked.
+// locked state is set. A throwing teardown step (a cache clear) does not cut
+// the teardown short (enterLockedState runs every step, then rethrows); the
+// error is logged through redactError, as elsewhere in this file, and the
+// caller still sets the locked state, so a failure can never leave the UI
+// unlocked. Lock and vault listener throws are contained by their notifiers.
 const runLockTeardown = () => {
   try {
     enterLockedState();
@@ -1182,7 +1183,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // (not via the effect below) closes the post-lock re-cache race: an
       // in-flight key derivation resolving during teardown sees the locked
       // signal and refuses to repopulate the messaging cache. A throwing
-      // listener is logged and the state update below still runs (TASK-557).
+      // teardown step is logged and the state update below still runs
+      // (TASK-557).
       runLockTeardown();
     }
 

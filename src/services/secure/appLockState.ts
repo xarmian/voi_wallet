@@ -15,7 +15,15 @@
  *
  * Defaults to `false` (locked) so a poll that fires before AuthContext has
  * synced defers rather than deriving keys while the lock state is unknown.
+ *
+ * LISTENER ISOLATION (TASK-561): the state is set before any listener runs, and
+ * each listener runs in its own try/catch over a snapshot of the set. A throwing
+ * listener is logged by error kind only (never its message, which could carry a
+ * session credential that redaction can't recognise) and never escapes into the
+ * writer, so it cannot cut an unlock or lock short.
  */
+
+import { errorKind } from '@/utils/logRedaction';
 
 let unlocked = false;
 const listeners = new Set<() => void>();
@@ -24,7 +32,13 @@ export const AppLockSignal = {
   /** AuthContext writes the current unlock state here on every transition. */
   setUnlocked(value: boolean): void {
     unlocked = value;
-    listeners.forEach((listener) => listener());
+    for (const listener of Array.from(listeners)) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn('[AppLockSignal] listener failed', errorKind(error));
+      }
+    }
   },
   subscribe(listener: () => void): () => void {
     listeners.add(listener);
