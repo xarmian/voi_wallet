@@ -561,7 +561,11 @@ const createStyles = (theme: Theme) =>
       borderWidth: 1,
       borderColor: theme.colors.primary,
     },
-    dangerButton: { borderColor: theme.colors.error },
+    dangerButton: {
+      backgroundColor: 'transparent',
+      borderWidth: 1,
+      borderColor: theme.colors.error,
+    },
     disabled: { opacity: 0.5 },
     buttonText: { color: theme.colors.buttonText, fontWeight: '600' },
     secondaryButtonText: { color: theme.colors.primary },
