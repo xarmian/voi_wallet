@@ -106,10 +106,18 @@ class NotificationService {
       const instance = new NotificationService();
       NotificationService.instance = instance;
       // TASK-469: a queued tap carries the previous wallet's addresses,
-      // transaction id and amount; a wipe drops it.
-      registerWipeReset('notifications', () =>
-        instance.clearPendingNotificationTap()
-      );
+      // transaction id and amount; a wipe drops it. The native layer also
+      // holds the launch tap for the life of the process, and the wipe
+      // removes the last-handled id, so a later initialize() in this process
+      // would deliver it again: clear it too. The queued tap is dropped
+      // first; a throw from the native clear fails only this reset (the wipe
+      // reports it). The web build has no native response to clear (its
+      // module throws UnavailabilityError).
+      registerWipeReset('notifications', () => {
+        instance.clearPendingNotificationTap();
+        if (Platform.OS !== 'web')
+          Notifications.clearLastNotificationResponse();
+      });
     }
     return NotificationService.instance;
   }

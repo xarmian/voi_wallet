@@ -20,6 +20,7 @@ let mockResponseListener: ((response: unknown) => void) | null = null;
 // Shared across jest.isolateModules registries (each re-runs this factory), so
 // the spies below are the ones the freshly loaded service actually calls.
 const mockGetLastResponse = jest.fn(async (): Promise<unknown> => null);
+const mockClearLastResponse = jest.fn((): void => {});
 const mockAddResponseListener = jest.fn(
   (listener: (response: unknown) => void) => {
     mockResponseListener = listener;
@@ -33,6 +34,7 @@ jest.mock('expo-notifications', () => ({
     listener: (response: unknown) => void
   ) => mockAddResponseListener(listener),
   getLastNotificationResponseAsync: () => mockGetLastResponse(),
+  clearLastNotificationResponse: () => mockClearLastResponse(),
   AndroidImportance: { HIGH: 4, DEFAULT: 3 },
 }));
 
@@ -162,6 +164,56 @@ describe('notificationService cold-start response (TASK-381)', () => {
     beforeEach(() => {
       mockGetLastResponse.mockReset();
       mockGetLastResponse.mockImplementation(async () => null);
+      mockClearLastResponse.mockReset();
+    });
+
+    // expo-notifications holds the launch response natively for the whole
+    // process: every read returns it until it is cleared.
+    const holdLaunchResponse = (held: unknown) => {
+      let current = held;
+      mockGetLastResponse.mockImplementation(async () => current);
+      mockClearLastResponse.mockImplementation(() => {
+        current = null;
+      });
+    };
+
+    it('a launch tap is not delivered again by an initialize after a wipe', async () => {
+      holdLaunchResponse(
+        response('notif-11', { type: 'payment', txId: 'TXOLD' })
+      );
+      const { service, gate } = loadWithGate();
+      const handler = jest.fn();
+      service.setNotificationTapHandler(handler);
+      await service.initialize();
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      // The wipe: the resets run, then the sweep removes the last-handled id.
+      gate.openWipeWindow();
+      const run = gate.runWipeResets();
+      mockStorage.clear();
+      gate.closeWipeWindow();
+      expect(run.failed).toEqual([]);
+
+      // Re-enabling notifications in Settings runs initialize() again.
+      await service.initialize();
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(mockClearLastResponse).toHaveBeenCalledTimes(1);
+      service.cleanup();
+    });
+
+    it('a failed native clear is reported as the notifications reset failing, and the queued tap is still dropped', async () => {
+      holdLaunchResponse(response('notif-12', { type: 'payment' }));
+      mockClearLastResponse.mockImplementation(() => {
+        throw new Error('native clear failed');
+      });
+      const { service, gate } = loadWithGate();
+      await service.initialize();
+      expect(service.getPendingNotificationTap()).not.toBeNull();
+
+      const run = gate.runWipeResets();
+      expect(run.failed).toEqual(['notifications']);
+      expect(service.getPendingNotificationTap()).toBeNull();
+      service.cleanup();
     });
 
     it('drops a tap queued before the wipe, so a later tap handler does not get it', async () => {
