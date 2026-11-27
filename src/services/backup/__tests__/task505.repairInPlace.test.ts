@@ -342,7 +342,7 @@ describe('TASK-505: after a repair', () => {
     expect(again.records[0].outcome).toBe('already-present');
   });
 
-  it('two overlapping restores: one slot write', async () => {
+  it('two overlapping restores run one after the other (the restore chain): one slot write', async () => {
     const dev = standard('dev-1');
     await restoreAccounts([dev]);
     mockPlatform.__secure.delete(SECRET('dev-1'));

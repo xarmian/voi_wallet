@@ -436,8 +436,9 @@ export type RestoreRecordOutcome =
    */
   | 'device-key-repair-skipped'
   /**
-   * The file's key was written into the record's empty slot, but reading it
-   * back did not show this account's key. What was written stays.
+   * A write of the file's key into the record's empty slot was attempted, but
+   * reading it back did not show this account's key (or the read failed), so it
+   * may or may not have landed. Whatever was written stays.
    */
   | 'device-key-repair-unconfirmed'
   /**

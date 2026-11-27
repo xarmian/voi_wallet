@@ -278,7 +278,7 @@ describe('TASK-505: a key put back onto an account already on this device', () =
     expect(report.rows.map((r) => r.text)).toEqual([
       'On this device without its key. The key from this backup was put back.',
       "On this device, but its key can't be read here. This backup has the key, but we couldn't safely check this account on this phone, so nothing was changed. Restore this backup again later.",
-      "On this device. We put back the key from this backup but couldn't confirm it. Restore this backup again to check.",
+      "On this device. We tried to put back the key from this backup but couldn't confirm it worked, so this account may still be missing its key. Keep this backup, and restore it again to check.",
     ]);
     for (const row of report.rows)
       expect(row.text).not.toContain(REMOVE_ADVICE);

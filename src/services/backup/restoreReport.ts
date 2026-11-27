@@ -78,7 +78,7 @@ export const OUTCOME_TEXT: Record<RestoreRecordOutcome, string> = {
   'device-key-repair-skipped':
     "On this device, but its key can't be read here. This backup has the key, but we couldn't safely check this account on this phone, so nothing was changed. Restore this backup again later.",
   'device-key-repair-unconfirmed':
-    "On this device. We put back the key from this backup but couldn't confirm it. Restore this backup again to check.",
+    "On this device. We tried to put back the key from this backup but couldn't confirm it worked, so this account may still be missing its key. Keep this backup, and restore it again to check.",
   // The text depends on the device record's type: see keylessDeviceText. This
   // entry is the type-less fallback and is not shown when a type is known.
   'device-keyless':
