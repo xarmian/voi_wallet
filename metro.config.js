@@ -1,6 +1,12 @@
 const { getDefaultConfig } = require('expo/metro-config');
 const { NON_INLINED_REQUIRES } = require('./metro.inlineRequires');
 const { createDevOnlyResolver } = require('./metro.devOnlyResolver');
+const { assertRnFetchFlag } = require('./metro.rnFetchGuard');
+
+// Refuse to bundle without EXPO_PUBLIC_USE_RN_FETCH, so no bundle (including an
+// OTA update published from a checkout without .env) swaps React Native's
+// fetch for expo/fetch. See ./metro.rnFetchGuard.js.
+assertRnFetchFlag();
 
 const config = getDefaultConfig(__dirname);
 
