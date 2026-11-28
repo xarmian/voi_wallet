@@ -3,6 +3,7 @@ import { AccountType } from '@/types/wallet';
 import { AccountSecureStorage } from '../AccountSecureStorage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { reconcileCrossStoreHalfState } from '@/services/wallet/crossStoreReconcile';
+import { clearSessionSecurity } from '../sessionTeardown';
 import {
   clearOrphanPin,
   onboardingNeedsSecuritySetup,
@@ -69,6 +70,10 @@ jest.mock('@/services/wallet', () => ({
 
 jest.mock('@/services/wallet/crossStoreReconcile', () => ({
   reconcileCrossStoreHalfState: jest.fn(),
+}));
+
+jest.mock('../sessionTeardown', () => ({
+  clearSessionSecurity: jest.fn(),
 }));
 
 beforeEach(() => {
@@ -560,4 +565,128 @@ it('a reconcile pass that skipped unresolved UNKNOWN-write ids is unverifiable (
     ORPHAN_PIN_UNVERIFIABLE_MESSAGE
   );
   expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
+});
+
+describe('session vault teardown (TASK-605)', () => {
+  const reconcileResult = {
+    ran: true,
+    orphanSecretsDeleted: [],
+    orphanSecretsQuarantined: [],
+    phantomAccountsPruned: [],
+    phantomAccountsSkippedLive: [],
+    staleJournalDropped: [],
+  };
+
+  it('clears the session vault once, after deletePin and before the biometric cleanup', async () => {
+    await expect(clearOrphanPin()).resolves.toBeUndefined();
+    expect(clearSessionSecurity).toHaveBeenCalledTimes(1);
+    const order = (fn: unknown) =>
+      jest.mocked(fn as jest.Mock).mock.invocationCallOrder[0];
+    const calls = [
+      order(AccountSecureStorage.deletePin),
+      order(clearSessionSecurity),
+      order(AccountSecureStorage.clearBiometricSecret),
+      order(AccountSecureStorage.setBiometricEnabled),
+    ];
+    expect(calls.every((c) => typeof c === 'number')).toBe(true);
+    expect(calls).toEqual([...calls].sort((a, b) => a - b));
+  });
+
+  it.each<[string, () => void]>([
+    [
+      'a key-bearing account',
+      () =>
+        jest
+          .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+          .mockResolvedValue(true),
+    ],
+    [
+      'a strict account read throwing',
+      () =>
+        jest
+          .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+          .mockRejectedValue(new Error('read failed')),
+    ],
+    [
+      'reconcile not ran',
+      () =>
+        jest
+          .mocked(reconcileCrossStoreHalfState)
+          .mockResolvedValue({ ...reconcileResult, ran: false }),
+    ],
+    [
+      'a report-only reconcile',
+      () =>
+        jest
+          .mocked(reconcileCrossStoreHalfState)
+          .mockResolvedValue({ ...reconcileResult, reportOnly: true }),
+    ],
+    [
+      'reconcile skipping unresolved ids',
+      () =>
+        jest
+          .mocked(reconcileCrossStoreHalfState)
+          .mockResolvedValue({ ...reconcileResult, skippedUnresolved: 1 }),
+    ],
+    [
+      'a secret still present',
+      () =>
+        jest
+          .mocked(AccountSecureStorage.probeSecretPresenceStrict)
+          .mockResolvedValue(true),
+    ],
+    [
+      'a strict secret probe throwing',
+      () =>
+        jest
+          .mocked(AccountSecureStorage.probeSecretPresenceStrict)
+          .mockRejectedValue(new Error('keychain timeout')),
+    ],
+    [
+      'a strict index read throwing',
+      () =>
+        jest
+          .mocked(AccountSecureStorage.readAccountListStrict)
+          .mockRejectedValue(new Error('timeout')),
+    ],
+    [
+      'deletePin returning a non-undefined value',
+      () =>
+        jest
+          .mocked(AccountSecureStorage.deletePin)
+          .mockResolvedValue(false as never),
+    ],
+    [
+      'deletePin throwing',
+      () =>
+        jest
+          .mocked(AccountSecureStorage.deletePin)
+          .mockRejectedValue(new Error('delete failed')),
+    ],
+  ])('leaves the session vault untouched on %s', async (_label, setup) => {
+    setup();
+    await expect(clearOrphanPin()).rejects.toThrow(
+      ORPHAN_PIN_UNVERIFIABLE_MESSAGE
+    );
+    expect(clearSessionSecurity).not.toHaveBeenCalled();
+  });
+
+  it('still runs the biometric cleanup and resolves when the vault teardown throws', async () => {
+    const pin = '482916';
+    jest.mocked(clearSessionSecurity).mockImplementation(() => {
+      throw new Error(`teardown failed for ${pin}`);
+    });
+    await expect(clearOrphanPin()).resolves.toBeUndefined();
+    expect(clearSessionSecurity).toHaveBeenCalledTimes(1);
+    expect(AccountSecureStorage.clearBiometricSecret).toHaveBeenCalledTimes(1);
+    expect(AccountSecureStorage.setBiometricEnabled).toHaveBeenCalledWith(
+      false
+    );
+    expect(console.warn).toHaveBeenCalledWith(
+      'Failed to clear the session vault during orphan PIN cleanup'
+    );
+    for (const call of jest.mocked(console.warn).mock.calls) {
+      expect(JSON.stringify(call)).not.toContain(pin);
+    }
+  });
 });
