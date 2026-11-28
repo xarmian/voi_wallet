@@ -47,6 +47,8 @@ import { redactSensitiveForLog, redactError } from '@/utils/logRedaction';
 import {
   isWipeWindowOpen,
   registerWipeReset,
+  wipeEpoch,
+  wipedSince,
   wipeWindowClosed,
 } from '@/services/wipe/gate';
 import { WRITE_TIMEOUT_MS } from '@/services/secure/boundedWrites';
@@ -219,12 +221,15 @@ export class WalletConnectService extends EventEmitter {
   }
 
   /**
-   * Purge again once a start the wipe stopped waiting for settles (resolved or
-   * rejected): it restores the wiped sessions into the SDK, `activeSessions`
+   * Purge again once a start the wipe stopped waiting for settles: a start
+   * that finishes restores the wiped sessions into the SDK, `activeSessions`
    * and the v1 bridge. Registered at the timeout directly on the start's own
-   * promise, so it runs before anything that awaits that start afterwards
-   * (e.g. `pair()` awaiting `initializing`) gets to act. Not awaited by the
-   * wipe, which has already reported the timeout; a failure here is logged.
+   * promise, so it runs before anything that starts awaiting that start after
+   * the timeout. A `pair()` already waiting resumes first; it refuses on its
+   * own wipe check. On a rejected start the SDK client is not initialized, so
+   * only the service's own sessions and the v1 client are reset here. Not
+   * awaited by the wipe, which has already reported the timeout; a failure
+   * here is logged.
    */
   private purgeWhenStartSettles(starting: Promise<void>): void {
     const purge = () => {
@@ -728,6 +733,10 @@ export class WalletConnectService extends EventEmitter {
   }
 
   async pair(uri: string): Promise<void> {
+    // A pairing asked for before or during a wipe belongs to the wiped wallet:
+    // if a wipe started since, it is refused rather than created on the
+    // emptied client (its awaits can resume after the wipe's purge).
+    const epoch = wipeEpoch();
     try {
       // Startup race: `serviceBootstrap` starts WalletConnect and DeepLink init
       // in PARALLEL, so a cold-start `wc:` link can reach us while init is
@@ -743,6 +752,7 @@ export class WalletConnectService extends EventEmitter {
       if (this.initializing) {
         await this.initializing;
       }
+      if (wipedSince(epoch)) throw new Error('the wallet was wiped');
 
       const provider = this.client.getProvider();
       const signClient = provider.client;

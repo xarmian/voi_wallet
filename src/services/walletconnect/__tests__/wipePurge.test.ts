@@ -78,6 +78,7 @@ const mockAuthPairingTopics = fakeStore(['ap1']);
 const mockAuthKeys = fakeStore(['PUBLIC_KEY']);
 let mockInitialized = true;
 const mockClientInitialize = jest.fn(async () => {});
+const mockSignClientPair = jest.fn(async (_args: { uri: string }) => {});
 const mockCore = {
   pairing: { pairings: mockPairings },
   crypto: {
@@ -142,6 +143,7 @@ jest.mock('../client', () => ({
             authKeys: mockAuthKeys,
           },
           on: jest.fn(),
+          pair: (args: { uri: string }) => mockSignClientPair(args),
         },
       }),
       getCore: () => mockCore,
@@ -440,7 +442,62 @@ describe('an initialize() and a wipe at the same time', () => {
       }
     });
 
-    test('the v1 bridge the late start restores is dropped once it finishes', async () => {
+    test('a pair() that was already waiting on the late start does not pair after the wipe', async () => {
+      notStarted();
+      mockInitialized = false;
+      mockSignClientPair.mockClear();
+      let finishStart: () => void = () => {};
+      mockClientInitialize.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishStart = resolve;
+          })
+      );
+      const starting = service().initialize();
+      await flush();
+      // A wc: link that arrives during the start, before the wipe.
+      const pairing = service()
+        .pair('wc:topic@2?relay-protocol=irn&symKey=00')
+        .then(
+          () => 'paired',
+          () => 'refused'
+        );
+      await flush();
+      const purge = runWipeResets().pending.find(
+        (p) => p.name === 'walletconnect'
+      );
+      void purge!.done.catch(() => undefined);
+      await jest.advanceTimersByTimeAsync(WRITE_TIMEOUT_MS + 1);
+      mockInitialized = true;
+      finishStart();
+      await starting;
+      expect(await pairing).toBe('refused');
+      expect(mockSignClientPair).not.toHaveBeenCalled();
+    });
+
+    test('a pair() waiting on a start with no wipe still pairs', async () => {
+      notStarted();
+      mockInitialized = false;
+      mockSignClientPair.mockClear();
+      let finishStart: () => void = () => {};
+      mockClientInitialize.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishStart = resolve;
+          })
+      );
+      const starting = service().initialize();
+      await flush();
+      const pairing = service().pair('wc:topic@2?relay-protocol=irn&symKey=00');
+      await flush();
+      mockInitialized = true;
+      finishStart();
+      await starting;
+      await pairing;
+      expect(mockSignClientPair).toHaveBeenCalledTimes(1);
+    });
+
+    test('the v1 client is reset once the late start finishes', async () => {
       const late = await startOutlastingThePurge();
       mockV1Reset.mockClear();
       await flush();
