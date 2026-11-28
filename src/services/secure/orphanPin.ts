@@ -1,4 +1,5 @@
 import { AccountSecureStorage } from './AccountSecureStorage';
+import { clearSessionSecurity } from './sessionTeardown';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { reconcileCrossStoreHalfState } from '@/services/wallet/crossStoreReconcile';
 
@@ -90,7 +91,15 @@ export async function clearOrphanPin(): Promise<void> {
     throw new Error(ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
   }
 
-  // TASK-413 DR-1: try both cleanup operations even if either one fails.
+  // TASK-605: the PIN is gone, so the session vault must not keep it. Enabling
+  // biometrics stores the vault's secret, and the kept-session guard trusts an
+  // unlocked vault; a stale secret would outlive the PIN in both. Runs first.
+  // TASK-413 DR-1: try every cleanup operation even if one fails.
+  try {
+    clearSessionSecurity();
+  } catch {
+    console.warn('Failed to clear the session vault during orphan PIN cleanup');
+  }
   try {
     await AccountSecureStorage.clearBiometricSecret();
   } catch {
