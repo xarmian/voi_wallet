@@ -91,9 +91,12 @@ export async function clearOrphanPin(): Promise<void> {
     throw new Error(ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
   }
 
-  // TASK-605: the PIN is gone, so the session vault must not keep it. Enabling
-  // biometrics stores the vault's secret, and the kept-session guard trusts an
-  // unlocked vault; a stale secret would outlive the PIN in both. Runs first.
+  // TASK-605: the PIN is gone, so the session vault must not keep its secret.
+  // Nothing trusts it while no PIN exists, and the next credential commit
+  // rotates an unlocked vault, but until then the session would hold a deleted
+  // credential. Clearing it leaves the state of a fresh install's setup session
+  // (vault empty until the next unlock), which the auth recheck's kept-session
+  // guard assumes. Runs first.
   // TASK-413 DR-1: try every cleanup operation even if one fails.
   try {
     clearSessionSecurity();
