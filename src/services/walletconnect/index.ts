@@ -192,10 +192,12 @@ export class WalletConnectService extends EventEmitter {
    * Delete Everything removes it.
    *
    * An initialize() under way restores the stored sessions into the SDK and
-   * then loads them here, so the purge waits for it (bounded; a timeout
-   * rejects and the wipe reports incomplete) and purges what it loaded. An
-   * initialize() that starts during the wipe waits for the wipe to settle
-   * (see runInitialization), so it finds nothing to restore.
+   * then loads them here, so the purge waits for it (bounded) and purges what
+   * it loaded. A timeout rejects and the wipe reports incomplete; the purge
+   * still runs when that late start finishes, so what it restores does not
+   * stay live (see purgeWhenStartSettles). An initialize() that starts during
+   * the wipe waits for the wipe to settle (see runInitialization), so it finds
+   * nothing to restore.
    */
   purgeLocalForWipe(): Promise<void> {
     this.forgetLocalSessions();
@@ -204,10 +206,36 @@ export class WalletConnectService extends EventEmitter {
     return withTimeout(
       starting.catch(() => undefined),
       WRITE_TIMEOUT_MS,
-      () => new Error('WalletConnect start did not finish')
+      () => {
+        // Called only when the deadline fires, i.e. the start has not settled:
+        // the purge below never runs for it, so nothing is purged twice.
+        this.purgeWhenStartSettles(starting);
+        return new Error('WalletConnect start did not finish');
+      }
     ).then(() => {
       this.forgetLocalSessions();
       return this.purgeClient();
+    });
+  }
+
+  /**
+   * Purge again once a start the wipe stopped waiting for settles (resolved or
+   * rejected): it restores the wiped sessions into the SDK, `activeSessions`
+   * and the v1 bridge. Registered at the timeout directly on the start's own
+   * promise, so it runs before anything that awaits that start afterwards
+   * (e.g. `pair()` awaiting `initializing`) gets to act. Not awaited by the
+   * wipe, which has already reported the timeout; a failure here is logged.
+   */
+  private purgeWhenStartSettles(starting: Promise<void>): void {
+    const purge = () => {
+      this.forgetLocalSessions();
+      return this.purgeClient();
+    };
+    void starting.then(purge, purge).catch((error: unknown) => {
+      console.warn(
+        'WalletConnect purge after a late start rejected:',
+        redactError(error)
+      );
     });
   }
 

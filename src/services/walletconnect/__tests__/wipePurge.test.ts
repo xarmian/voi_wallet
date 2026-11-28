@@ -175,6 +175,7 @@ import {
   openWipeWindow,
   runWipeResets,
 } from '@/services/wipe/gate';
+import { WRITE_TIMEOUT_MS } from '@/services/secure/boundedWrites';
 import { WalletConnectService } from '../index';
 import { HandledStore } from '../handledStore';
 
@@ -355,6 +356,100 @@ describe('an initialize() and a wipe at the same time', () => {
       jest.useRealTimers();
       (service() as unknown as { initializing: unknown }).initializing = null;
     }
+  });
+
+  describe('a start that finishes after the purge gave up waiting', () => {
+    // Starts an initialize() whose client.initialize resolves only when the
+    // test calls `finish`, runs the wipe resets, and lets the purge's bounded
+    // wait run out (it rejects: the wipe reports it). The SDK then restores
+    // the stored session into memory, as it does when its start finishes.
+    const startOutlastingThePurge = async () => {
+      notStarted();
+      mockInitialized = false;
+      let finishStart: () => void = () => {};
+      mockClientInitialize.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishStart = resolve;
+          })
+      );
+      const starting = service().initialize();
+      await flush();
+      expect(mockClientInitialize).toHaveBeenCalledTimes(1);
+      const purge = runWipeResets().pending.find(
+        (p) => p.name === 'walletconnect'
+      );
+      const outcome = purge!.done.then(
+        () => 'resolved',
+        () => 'rejected'
+      );
+      await jest.advanceTimersByTimeAsync(WRITE_TIMEOUT_MS + 1);
+      expect(await outcome).toBe('rejected');
+      mockSession.map.set('restored', {});
+      mockKeychain.set('restored', 'k3');
+      mockInitialized = true;
+      return { finish: () => finishStart(), starting, outcome };
+    };
+    // loadExistingSessions reads the SDK's sessions through getAll: hand it
+    // the restored one, so the start fills activeSessions as it would.
+    const originalGetAll = mockSession.getAll;
+    beforeEach(() => {
+      jest.useFakeTimers();
+      (mockSession as { getAll: () => unknown[] }).getAll = () =>
+        mockSession.keys.map((topic) => ({ topic, expiry: 2 ** 31 }));
+    });
+    afterEach(() => {
+      jest.useRealTimers();
+      mockSession.getAll = originalGetAll;
+      mockExpirer.clear();
+      (service() as unknown as { initializing: unknown }).initializing = null;
+    });
+
+    test('a start that finishes after the purge bound still leaves nothing behind', async () => {
+      const late = await startOutlastingThePurge();
+      late.finish();
+      await late.starting;
+      await flush();
+      expect(mockSession.keys).toEqual([]);
+      expect(mockKeychain.size).toBe(0);
+      expect(service().getActiveSessions()).toEqual([]);
+    });
+
+    test('a late purge that fails is logged, not left unhandled, and the purge still just reports the timeout', async () => {
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const late = await startOutlastingThePurge();
+        // A target in neither form: the late purge's client purge rejects.
+        mockExpirer.set('other:x', { target: 'other:x', expiry: 1 });
+        late.finish();
+        await late.starting;
+        await flush();
+        // Let Node report an unhandled rejection, if any, while this test
+        // runs: Jest fails the test with it (a process listener here does not
+        // see it, Jest's sandbox has its own `process`).
+        await new Promise((resolve) =>
+          jest.requireActual('timers').setImmediate(resolve)
+        );
+        expect(warn).toHaveBeenCalledWith(
+          'WalletConnect purge after a late start rejected:',
+          expect.stringContaining('expirer')
+        );
+        expect(await late.outcome).toBe('rejected');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    test('the v1 bridge the late start restores is dropped once it finishes', async () => {
+      const late = await startOutlastingThePurge();
+      mockV1Reset.mockClear();
+      await flush();
+      expect(mockV1Reset).not.toHaveBeenCalled();
+      late.finish();
+      await late.starting;
+      await flush();
+      expect(mockV1Reset).toHaveBeenCalledTimes(1);
+    });
   });
 
   test('an initialize that starts during a wipe does not restore anything until the wipe settles', async () => {
