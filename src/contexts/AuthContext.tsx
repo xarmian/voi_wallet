@@ -390,15 +390,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // TASK-557: every checkInitialAuthState verdict that lands LOCKED runs the
   // same teardown as lock(), on boot and on every recheckAuthState(). No await
   // and no storage read, so the boot verdict is unchanged, and authChecked
-  // always arrives.
+  // always arrives. Like lock(), it nulls the sessionId (TASK-560): a locked
+  // verdict ends the session, so no later recheck can take the old id for a
+  // live one. A recheck from a live unlocked session whose vault was left
+  // filled and unchanged during the check (after a PIN or passphrase change)
+  // does not land locked (TASK-560; the guard is at the wallet + PIN verdict).
   const landLocked = (
     fields: Partial<AuthState> & { isLocked: true; isAuthenticated: false }
   ) => {
     runLockTeardown();
-    setAuthState((prev) => ({ ...prev, ...fields }));
+    setAuthState((prev) => ({ ...prev, ...fields, sessionId: null }));
   };
 
   const checkInitialAuthState = async () => {
+    // The vault epoch this check started under (TASK-560). Every vault set,
+    // rotate and clear bumps it, so the kept-session branch below can tell a
+    // vault left alone during this check's awaits from one cleared and refilled.
+    const vaultEpochAtStart = SessionKeyVault.currentEpoch();
     try {
       // ── Interrupted wipe (TASK-469) ────────────────────────────────────────
       // A persisted wipe request means Delete Everything started and did not
@@ -492,6 +500,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       let biometricEnabled = false;
       let biometricAvailable = false;
       let timeoutMinutes: number | 'never' = 5;
+      let nonCriticalReadsOk = false;
       try {
         // Wrapped in a timeout (no-stuck): these non-critical reads are NEWLY on
         // the app-render-gating path, so a hang here would stall boot just like a
@@ -509,6 +518,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         biometricAvailable = biometric.hasHardware && biometric.isEnrolled;
         biometricEnabled = isBiometricEnabled;
         timeoutMinutes = pinTimeout;
+        nonCriticalReadsOk = true;
       } catch (error) {
         // Non-security-critical — this must NOT affect the fail-closed lock
         // decision, so keep the safe display defaults and continue.
@@ -768,6 +778,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Genuine ABSENCE of a wallet or PIN — allow access for setup (UNCHANGED
         // behavior). securityUnavailable is cleared: a transient failure that
         // recovered on retry lands here and never shows the recovery screen.
+        // The setup session has no sessionId (TASK-560): an id left from an
+        // earlier session (a live session whose recheck failed, then Retry and
+        // Delete Everything) is cleared, so the kept-session guard never takes
+        // the setup session for an unlocked one.
         setAuthState((prev) => ({
           ...prev,
           isLocked: false,
@@ -780,11 +794,67 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           backgroundedAt: null,
           timeoutMinutes,
           hasPin,
+          sessionId: null,
         }));
         return;
       }
 
-      // Wallet exists and has a PIN — require authentication (UNCHANGED).
+      // Wallet exists and has a PIN. A live session is kept (TASK-560): a PIN
+      // or passphrase change rotates the vault and then rechecks, and the
+      // session survives the change. Every part of the guard is required:
+      //  - Authenticated, unlocked, and holding a sessionId: only unlock and
+      //    unlockWithBiometrics set a sessionId, and lock(), every locked
+      //    verdict (landLocked) and the setup verdict null it, so this is a
+      //    real unlocked session. The unlocked setup session (no PIN yet) can
+      //    hold a vault filled by unlockForRestore but has no sessionId, and is
+      //    not kept. Liveness is read again here, not taken from sessionIsLive
+      //    above: a lock that landed during this check's awaits (inactivity,
+      //    background, explicit) flipped the state and cleared the vault, so
+      //    that session stays locked and is not resurrected.
+      //  - The vault is filled: Restore's onboarding recheck clears it first,
+      //    and first-time PIN setup never fills it (the unlock that follows
+      //    does), so both land locked.
+      //  - The vault epoch is the one this check started under: the change
+      //    rotates the vault BEFORE it rechecks, so a legitimate kept session
+      //    has an unchanged epoch, and a clear and refill during this check's
+      //    awaits lands locked.
+      // The updater checks the session again: a lock whose state update is
+      // still queued wins, and the state is left as it is (never unlocked).
+      // biometricEnabled and timeoutMinutes come from this pass's reads, so a
+      // biometric disable made by the change shows on the kept session. When
+      // those display reads failed, the session keeps its own settings rather
+      // than the display defaults (5 min, no biometrics).
+      const stillLive =
+        authStateRef.current.isAuthenticated &&
+        !authStateRef.current.isLocked &&
+        authStateRef.current.sessionId !== null &&
+        SessionKeyVault.isUnlocked() &&
+        SessionKeyVault.currentEpoch() === vaultEpochAtStart;
+      if (stillLive) {
+        setAuthState((prev) => {
+          if (prev.isLocked || !prev.isAuthenticated || prev.sessionId === null)
+            return prev;
+          return {
+            ...prev,
+            isLocked: false,
+            isAuthenticated: true,
+            securityUnavailable: false,
+            authChecked: true,
+            pinSetupResume: false,
+            hasWallet,
+            hasPin,
+            biometricEnabled: nonCriticalReadsOk
+              ? biometricEnabled && biometricAvailable
+              : prev.biometricEnabled,
+            timeoutMinutes: nonCriticalReadsOk
+              ? timeoutMinutes
+              : prev.timeoutMinutes,
+          };
+        });
+        return;
+      }
+
+      // Otherwise require authentication.
       landLocked({
         isLocked: true,
         isAuthenticated: false,

@@ -339,13 +339,67 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-describe('recheck from a live session lands locked with the session torn down', () => {
-  // L733: wallet + PIN (ChangePin, onboarding restore OK).
-  it('walletAndPin_recheckFromLiveSession_tearsDown', async () => {
+// TASK-560: the wallet + PIN verdict from a live session. A PIN or passphrase
+// change rotates the session vault and then rechecks, so the session is kept.
+// A session whose vault was cleared before the verdict (the Restore onboarding
+// recheck, or a lock that landed while the recheck was awaiting) lands locked.
+describe('recheck from a live session with a wallet and a PIN', () => {
+  function expectKept(seeded: ReturnType<typeof seedCaches>) {
+    expect(probe.renders.length).toBeGreaterThan(0);
+    expect(probe.renders.every((r) => !r.isLocked && r.signal && r.vault)).toBe(
+      true
+    );
+    expect(AppLockSignal.isUnlocked()).toBe(true);
+    expect(privateKeyCache().size).toBe(1);
+    expect(seeded.cachedKey.every((b) => b === 0xaa)).toBe(true);
+    expect(getCachedKeyPair(ADDR)).toBe(seeded.keyPair);
+  }
+
+  it('walletAndPin_recheckFromLiveSessionVaultUnlocked_keepsSession', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    // What changePin leaves: the vault rotated to the new secret.
+    SessionKeyVault.rotate('654321', 'pin');
+    const epoch = SessionKeyVault.currentEpoch();
+    const seeded = seedCaches();
+    const before = rendered.result.current.authState;
+    (AccountSecureStorage.getPinTimeout as jest.Mock).mockResolvedValue(15);
+
+    await recheck(rendered);
+
+    expectKept(seeded);
+    expect(SessionKeyVault.isUnlocked()).toBe(true);
+    expect(SessionKeyVault.getSecret()).toBe('654321');
+    expect(SessionKeyVault.currentEpoch()).toBe(epoch);
+    expect(rendered.result.current.authState).toEqual<AuthState>({
+      ...before,
+      isLocked: false,
+      isAuthenticated: true,
+      securityUnavailable: false,
+      authChecked: true,
+      pinSetupResume: false,
+      hasWallet: true,
+      hasPin: true,
+      biometricEnabled: true,
+      timeoutMinutes: 15,
+    });
+    // sessionId, lastActivity and backgroundedAt are the session's own.
+    expect(rendered.result.current.authState.sessionId).toBe(before.sessionId);
+    expect(rendered.result.current.authState.lastActivity).toBe(
+      before.lastActivity
+    );
+    expect(rendered.result.current.authState.backgroundedAt).toBe(
+      before.backgroundedAt
+    );
+  });
+
+  it('walletAndPin_recheckFromLiveSessionVaultCleared_tearsDown', async () => {
     const rendered = await mount();
     await unlockLive(rendered);
     const seeded = seedCaches();
     const before = rendered.result.current.authState;
+    // The Restore onboarding shape: the old session's vault is cleared first.
+    SessionKeyVault.clear();
 
     await recheck(rendered);
 
@@ -362,9 +416,293 @@ describe('recheck from a live session lands locked with the session torn down', 
       backgroundedAt: null,
       timeoutMinutes: 5,
       hasPin: true,
+      sessionId: null,
     });
   });
 
+  it('walletAndPin_lockDuringRecheck_staysLocked', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    const seeded = seedCaches();
+    let resolvePin!: (value: boolean) => void;
+    (AccountSecureStorage.hasPinStrict as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolvePin = resolve;
+        })
+    );
+
+    probe.renders = [];
+    probe.armed = true;
+    let settled = false;
+    await act(async () => {
+      void rendered.result.current.recheckAuthState().then(() => {
+        settled = true;
+      });
+    });
+    await flush();
+    expect(settled).toBe(false);
+    expect(resolvePin).toBeDefined();
+
+    // A lock (inactivity, background, explicit) lands while the read is pending.
+    await act(async () => {
+      rendered.result.current.lock();
+    });
+    await flush();
+    expect(rendered.result.current.authState.isLocked).toBe(true);
+
+    await act(async () => {
+      resolvePin(true);
+    });
+    await flush();
+    probe.armed = false;
+
+    expect(settled).toBe(true);
+    expectTornDown(seeded);
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: true,
+      isAuthenticated: false,
+      authChecked: true,
+      hasWallet: true,
+      hasPin: true,
+    });
+    // Never resurrected: no render after the lock saw the session unlocked.
+    const lockedAt = probe.renders.findIndex((r) => r.isLocked);
+    expect(lockedAt).toBeGreaterThanOrEqual(0);
+    expect(probe.renders.slice(lockedAt).every((r) => r.isLocked)).toBe(true);
+  });
+
+  it('walletAndPin_keptSession_reflectsBiometricDisabled', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    expect(rendered.result.current.authState.biometricEnabled).toBe(true);
+    const seeded = seedCaches();
+    // A fail-safe biometric disable inside changePin.
+    (AccountSecureStorage.isBiometricEnabled as jest.Mock).mockResolvedValue(
+      false
+    );
+
+    await recheck(rendered);
+
+    expectKept(seeded);
+    expect(SessionKeyVault.isUnlocked()).toBe(true);
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: false,
+      isAuthenticated: true,
+      biometricEnabled: false,
+    });
+  });
+
+  // The display reads fall back to defaults (5 min, no biometrics) when they
+  // fail. A kept session keeps its own settings instead.
+  it('keptSession_nonCriticalReadFails_keepsSessionSettings', async () => {
+    (AccountSecureStorage.getPinTimeout as jest.Mock).mockResolvedValue(1);
+    const rendered = await mount();
+    await unlockLive(rendered);
+    expect(rendered.result.current.authState).toMatchObject({
+      timeoutMinutes: 1,
+      biometricEnabled: true,
+    });
+    SessionKeyVault.rotate('654321', 'pin');
+    const seeded = seedCaches();
+    (AccountSecureStorage.getPinTimeout as jest.Mock).mockRejectedValue(
+      new Error('keychain slow')
+    );
+
+    await recheck(rendered);
+
+    expect(console.warn).toHaveBeenCalledWith(
+      'Non-critical auth-init reads failed; using display defaults',
+      expect.anything()
+    );
+    expectKept(seeded);
+    expect(SessionKeyVault.getSecret()).toBe('654321');
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: false,
+      isAuthenticated: true,
+      timeoutMinutes: 1,
+      biometricEnabled: true,
+    });
+  });
+
+  // A clear and a refill of the vault while the recheck awaits (the auth state
+  // still reads unlocked) moves the vault epoch, so the verdict lands locked.
+  it('walletAndPin_vaultRefilledDuringRecheck_landsLocked', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    const seeded = seedCaches();
+    let resolvePin!: (value: boolean) => void;
+    (AccountSecureStorage.hasPinStrict as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolvePin = resolve;
+        })
+    );
+
+    probe.renders = [];
+    probe.armed = true;
+    let settled = false;
+    await act(async () => {
+      void rendered.result.current.recheckAuthState().then(() => {
+        settled = true;
+      });
+    });
+    await flush();
+    expect(settled).toBe(false);
+    expect(resolvePin).toBeDefined();
+
+    SessionKeyVault.clear();
+    SessionKeyVault.set('999999', 'pin');
+    expect(rendered.result.current.authState.isLocked).toBe(false);
+
+    await act(async () => {
+      resolvePin(true);
+    });
+    await flush();
+    probe.armed = false;
+
+    expect(settled).toBe(true);
+    expectTornDown(seeded);
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: true,
+      isAuthenticated: false,
+      authChecked: true,
+      hasWallet: true,
+      hasPin: true,
+    });
+  });
+
+  // The unlocked setup session (no PIN yet) has no sessionId, even with a
+  // vault filled by unlockForRestore. It is not a session to keep.
+  it('walletAndPin_setupSessionWithFilledVault_landsLocked', async () => {
+    (
+      MultiAccountWalletService.hasWalletWithAccountsStrict as jest.Mock
+    ).mockResolvedValue(false);
+    (AccountSecureStorage.hasPinStrict as jest.Mock).mockResolvedValue(false);
+    const rendered = await mount();
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: false,
+      isAuthenticated: true,
+      sessionId: null,
+    });
+    SessionKeyVault.set('fixture-restore-secret', 'pin');
+    const seeded = seedCaches();
+    expect(seeded.keyPair).not.toBeNull();
+    (
+      MultiAccountWalletService.hasWalletWithAccountsStrict as jest.Mock
+    ).mockResolvedValue(true);
+    (AccountSecureStorage.hasPinStrict as jest.Mock).mockResolvedValue(true);
+
+    await recheck(rendered);
+
+    expectTornDown(seeded);
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: true,
+      isAuthenticated: false,
+      authChecked: true,
+      hasWallet: true,
+      hasPin: true,
+    });
+  });
+
+  // A lock() whose state update is still queued when the verdict runs wins:
+  // the verdict's updater sees the locked prev and leaves it. The ref the
+  // guard reads is still the unlocked render's here (no render between the
+  // lock and the verdict), and the vault clear throws without clearing (a
+  // failing teardown step), so the updater's own check is what holds the lock.
+  it('walletAndPin_lockQueuedWithVerdict_staysLocked', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    let resolvePin!: (value: boolean) => void;
+    (AccountSecureStorage.hasPinStrict as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolvePin = resolve;
+        })
+    );
+
+    let settled = false;
+    await act(async () => {
+      void rendered.result.current.recheckAuthState().then(() => {
+        settled = true;
+      });
+    });
+    await flush();
+    expect(settled).toBe(false);
+    expect(resolvePin).toBeDefined();
+
+    const clearSpy = jest
+      .spyOn(SessionKeyVault, 'clear')
+      .mockImplementationOnce(() => {
+        throw new Error('vault clear failed');
+      });
+    probe.renders = [];
+    probe.armed = true;
+    await act(async () => {
+      rendered.result.current.lock();
+      resolvePin(true);
+      for (let i = 0; i < 60; i += 1) await Promise.resolve();
+    });
+    await flush();
+    probe.armed = false;
+
+    // The discriminator: the vault clear ran once (lock()'s throwing call) and
+    // the vault is still filled, so the verdict passed the ref guard and the
+    // updater bailed with no teardown. A verdict that saw the locked state in
+    // the ref would have gone through landLocked, calling clear a second time
+    // (the real one) and emptying the vault.
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+    expect(SessionKeyVault.isUnlocked()).toBe(true);
+    expect(settled).toBe(true);
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: true,
+      isAuthenticated: false,
+      sessionId: null,
+    });
+    expect(probe.renders.length).toBeGreaterThan(0);
+    expect(probe.renders.every((r) => r.isLocked)).toBe(true);
+  });
+
+  // A locked verdict ends the session: its sessionId is cleared, as lock()
+  // clears it, so a later recheck cannot take it for a live session.
+  it('landLocked_clearsSessionId', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    expect(rendered.result.current.authState.sessionId).not.toBeNull();
+    SessionKeyVault.clear();
+
+    await recheck(rendered);
+
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: true,
+      isAuthenticated: false,
+      sessionId: null,
+    });
+  });
+
+  // The unlocked setup session never carries an earlier session's id.
+  it('setupVerdict_clearsSessionId', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    expect(rendered.result.current.authState.sessionId).not.toBeNull();
+    (
+      MultiAccountWalletService.hasWalletWithAccountsStrict as jest.Mock
+    ).mockResolvedValue(false);
+    (AccountSecureStorage.hasPinStrict as jest.Mock).mockResolvedValue(false);
+
+    await recheck(rendered);
+
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: false,
+      isAuthenticated: true,
+      hasWallet: false,
+      hasPin: false,
+      sessionId: null,
+    });
+  });
+});
+
+describe('recheck from a live session lands locked with the session torn down', () => {
   // L522: strict lock reads still fail after the bounded retries.
   it('strictReadsFail_recheckFromLiveSession_tearsDown', async () => {
     const rendered = await mount();
@@ -384,6 +722,7 @@ describe('recheck from a live session lands locked with the session torn down', 
     expect(rendered.result.current.authState).toEqual<AuthState>({
       ...before,
       ...FAIL_CLOSED_FIELDS,
+      sessionId: null,
     });
   });
 
@@ -405,6 +744,7 @@ describe('recheck from a live session lands locked with the session torn down', 
     expect(rendered.result.current.authState).toEqual<AuthState>({
       ...before,
       ...FAIL_CLOSED_FIELDS,
+      sessionId: null,
     });
   });
 
@@ -428,6 +768,7 @@ describe('recheck from a live session lands locked with the session torn down', 
     expect(rendered.result.current.authState).toEqual<AuthState>({
       ...before,
       ...FAIL_CLOSED_FIELDS,
+      sessionId: null,
     });
   });
 });
@@ -515,6 +856,17 @@ describe('recheck from the unlocked setup session into setup-resume', () => {
   });
 });
 
+// A live session whose recheck lands locked: a key-bearing account with no
+// readable PIN fails closed through landLocked with the vault still filled.
+// (A plain wallet + PIN recheck from a live session keeps it, TASK-560.)
+function armLiveRecheckLandsLocked() {
+  (
+    MultiAccountWalletService.hasKeyBearingAccountStrict as jest.Mock
+  ).mockResolvedValue(true);
+  (AccountSecureStorage.hasPinStrict as jest.Mock).mockResolvedValue(false);
+  (isPinSetupPending as jest.Mock).mockResolvedValue(false);
+}
+
 describe('guards', () => {
   // L714: the unlocked setup verdict must keep its session.
   it('unlockedSetupVerdict_keepsSession', async () => {
@@ -587,6 +939,7 @@ describe('guards', () => {
         throw new Error('listener failed');
       }
     });
+    armLiveRecheckLandsLocked();
     try {
       await recheck(rendered);
     } finally {
@@ -681,6 +1034,7 @@ describe('guards', () => {
     await unlockLive(rendered);
     const seeded = seedCaches();
     const spy = throwOnceAfterClearingPrivateKeyCache();
+    armLiveRecheckLandsLocked();
 
     await recheck(rendered);
 
