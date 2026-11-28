@@ -191,7 +191,11 @@ export class WalletConnectService extends EventEmitter {
    * Residual: the SDK core stays alive in this process. A relay event that
    * lands after the wipe's final storage check can write a `wc@2:` record
    * again; it holds no session (they are gone from memory) and the next
-   * Delete Everything removes it.
+   * Delete Everything removes it. The same holds for an SDK pairing already
+   * in flight when the wipe starts: it can write its pairing, key and
+   * subscription after this purge. And when a start rejects after the SDK
+   * core loaded its stores (the client never reports initialized), this purge
+   * skips the client, so whatever that core restored stays in memory.
    *
    * An initialize() under way restores the stored sessions into the SDK and
    * then loads them here, so the purge waits for it (bounded) and purges what
@@ -226,10 +230,11 @@ export class WalletConnectService extends EventEmitter {
    * and the v1 bridge. Registered at the timeout directly on the start's own
    * promise, so it runs before anything that starts awaiting that start after
    * the timeout. A `pair()` already waiting resumes first; it refuses on its
-   * own wipe check. On a rejected start the SDK client is not initialized, so
-   * only the service's own sessions and the v1 client are reset here. Not
-   * awaited by the wipe, which has already reported the timeout; a failure
-   * here is logged.
+   * own wipe check. On a rejected start the client does not report
+   * initialized, so only the service's own sessions and the v1 client are
+   * reset here; anything the SDK core loaded first is left (the residual
+   * above). Not awaited by the wipe, which has already reported the timeout; a
+   * failure here is logged.
    */
   private purgeWhenStartSettles(starting: Promise<void>): void {
     const purge = () => {
@@ -734,8 +739,10 @@ export class WalletConnectService extends EventEmitter {
 
   async pair(uri: string): Promise<void> {
     // A pairing asked for before or during a wipe belongs to the wiped wallet:
-    // if a wipe started since, it is refused rather than created on the
-    // emptied client (its awaits can resume after the wipe's purge).
+    // if a wipe started before the SDK pairing call, it is refused rather than
+    // created on the emptied client (the wait for a start can resume after the
+    // wipe's purge). A wipe that starts during the SDK call is not caught here
+    // (see the residual on purgeLocalForWipe).
     const epoch = wipeEpoch();
     try {
       // Startup race: `serviceBootstrap` starts WalletConnect and DeepLink init
