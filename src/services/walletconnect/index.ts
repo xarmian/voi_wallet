@@ -47,6 +47,8 @@ import { redactSensitiveForLog, redactError } from '@/utils/logRedaction';
 import {
   isWipeWindowOpen,
   registerWipeReset,
+  wipeEpoch,
+  wipedSince,
   wipeWindowClosed,
 } from '@/services/wipe/gate';
 import { WRITE_TIMEOUT_MS } from '@/services/secure/boundedWrites';
@@ -189,13 +191,19 @@ export class WalletConnectService extends EventEmitter {
    * Residual: the SDK core stays alive in this process. A relay event that
    * lands after the wipe's final storage check can write a `wc@2:` record
    * again; it holds no session (they are gone from memory) and the next
-   * Delete Everything removes it.
+   * Delete Everything removes it. The same holds for an SDK pairing already
+   * in flight when the wipe starts: it can write its pairing, key and
+   * subscription after this purge. And when a start rejects after the SDK
+   * core loaded its stores (the client never reports initialized), this purge
+   * skips the client, so whatever that core restored stays in memory.
    *
    * An initialize() under way restores the stored sessions into the SDK and
-   * then loads them here, so the purge waits for it (bounded; a timeout
-   * rejects and the wipe reports incomplete) and purges what it loaded. An
-   * initialize() that starts during the wipe waits for the wipe to settle
-   * (see runInitialization), so it finds nothing to restore.
+   * then loads them here, so the purge waits for it (bounded) and purges what
+   * it loaded. A timeout rejects and the wipe reports incomplete; the purge
+   * still runs when that late start finishes, so what it restores does not
+   * stay live (see purgeWhenStartSettles). An initialize() that starts during
+   * the wipe waits for the wipe to settle (see runInitialization), so it finds
+   * nothing to restore.
    */
   purgeLocalForWipe(): Promise<void> {
     this.forgetLocalSessions();
@@ -204,10 +212,40 @@ export class WalletConnectService extends EventEmitter {
     return withTimeout(
       starting.catch(() => undefined),
       WRITE_TIMEOUT_MS,
-      () => new Error('WalletConnect start did not finish')
+      () => {
+        // Called only when the deadline fires, i.e. the start has not settled:
+        // the purge below never runs for it, so nothing is purged twice.
+        this.purgeWhenStartSettles(starting);
+        return new Error('WalletConnect start did not finish');
+      }
     ).then(() => {
       this.forgetLocalSessions();
       return this.purgeClient();
+    });
+  }
+
+  /**
+   * Purge again once a start the wipe stopped waiting for settles: a start
+   * that finishes restores the wiped sessions into the SDK, `activeSessions`
+   * and the v1 bridge. Registered at the timeout directly on the start's own
+   * promise, so it runs before anything that starts awaiting that start after
+   * the timeout. A `pair()` already waiting resumes first; it refuses on its
+   * own wipe check. On a rejected start the client does not report
+   * initialized, so only the service's own sessions and the v1 client are
+   * reset here; anything the SDK core loaded first is left (the residual
+   * above). Not awaited by the wipe, which has already reported the timeout; a
+   * failure here is logged.
+   */
+  private purgeWhenStartSettles(starting: Promise<void>): void {
+    const purge = () => {
+      this.forgetLocalSessions();
+      return this.purgeClient();
+    };
+    void starting.then(purge, purge).catch((error: unknown) => {
+      console.warn(
+        'WalletConnect purge after a late start rejected:',
+        redactError(error)
+      );
     });
   }
 
@@ -700,6 +738,12 @@ export class WalletConnectService extends EventEmitter {
   }
 
   async pair(uri: string): Promise<void> {
+    // A pairing asked for before or during a wipe belongs to the wiped wallet:
+    // if a wipe started before the SDK pairing call, it is refused rather than
+    // created on the emptied client (the wait for a start can resume after the
+    // wipe's purge). A wipe that starts during the SDK call is not caught here
+    // (see the residual on purgeLocalForWipe).
+    const epoch = wipeEpoch();
     try {
       // Startup race: `serviceBootstrap` starts WalletConnect and DeepLink init
       // in PARALLEL, so a cold-start `wc:` link can reach us while init is
@@ -715,6 +759,7 @@ export class WalletConnectService extends EventEmitter {
       if (this.initializing) {
         await this.initializing;
       }
+      if (wipedSince(epoch)) throw new Error('the wallet was wiped');
 
       const provider = this.client.getProvider();
       const signClient = provider.client;
