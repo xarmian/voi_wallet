@@ -390,7 +390,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // TASK-557: every checkInitialAuthState verdict that lands LOCKED runs the
   // same teardown as lock(), on boot and on every recheckAuthState(). No await
   // and no storage read, so the boot verdict is unchanged, and authChecked
-  // always arrives.
+  // always arrives. A recheck from a live session whose vault is still filled
+  // (after a PIN or passphrase change) does not land locked (TASK-560).
   const landLocked = (
     fields: Partial<AuthState> & { isLocked: true; isAuthenticated: false }
   ) => {
@@ -784,7 +785,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Wallet exists and has a PIN — require authentication (UNCHANGED).
+      // Wallet exists and has a PIN. A live session whose vault still holds
+      // its secret is kept (TASK-560): a PIN or passphrase change rotates the
+      // vault and then rechecks, and the session survives the change. Liveness
+      // is read again here, not taken from sessionIsLive above: a lock that
+      // landed during this check's awaits (inactivity, background, explicit)
+      // flipped the state and cleared the vault, so that session stays locked
+      // and is not resurrected. A recheck with an empty vault lands locked
+      // too: Restore's onboarding recheck clears it first, and first-time PIN
+      // setup never fills it (the unlock that follows does).
+      // biometricEnabled comes from this pass's read, so a biometric disable
+      // made by the change shows on the kept session.
+      const stillLive =
+        authStateRef.current.isAuthenticated &&
+        !authStateRef.current.isLocked &&
+        SessionKeyVault.isUnlocked();
+      if (stillLive) {
+        setAuthState((prev) => ({
+          ...prev,
+          isLocked: false,
+          isAuthenticated: true,
+          securityUnavailable: false,
+          authChecked: true,
+          pinSetupResume: false,
+          hasWallet,
+          hasPin,
+          biometricEnabled: biometricEnabled && biometricAvailable,
+          timeoutMinutes,
+        }));
+        return;
+      }
+
+      // Otherwise require authentication.
       landLocked({
         isLocked: true,
         isAuthenticated: false,
