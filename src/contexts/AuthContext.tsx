@@ -390,15 +390,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // TASK-557: every checkInitialAuthState verdict that lands LOCKED runs the
   // same teardown as lock(), on boot and on every recheckAuthState(). No await
   // and no storage read, so the boot verdict is unchanged, and authChecked
-  // always arrives. A recheck from a live unlocked session whose vault was
-  // left filled and unchanged during the check (after a PIN or passphrase
-  // change) does not land locked (TASK-560; the guard is at the wallet + PIN
-  // verdict).
+  // always arrives. Like lock(), it nulls the sessionId (TASK-560): a locked
+  // verdict ends the session, so no later recheck can take the old id for a
+  // live one. A recheck from a live unlocked session whose vault was left
+  // filled and unchanged during the check (after a PIN or passphrase change)
+  // does not land locked (TASK-560; the guard is at the wallet + PIN verdict).
   const landLocked = (
     fields: Partial<AuthState> & { isLocked: true; isAuthenticated: false }
   ) => {
     runLockTeardown();
-    setAuthState((prev) => ({ ...prev, ...fields }));
+    setAuthState((prev) => ({ ...prev, ...fields, sessionId: null }));
   };
 
   const checkInitialAuthState = async () => {
@@ -777,6 +778,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Genuine ABSENCE of a wallet or PIN — allow access for setup (UNCHANGED
         // behavior). securityUnavailable is cleared: a transient failure that
         // recovered on retry lands here and never shows the recovery screen.
+        // The setup session has no sessionId (TASK-560): an id left from an
+        // earlier session (a live session whose recheck failed, then Retry and
+        // Delete Everything) is cleared, so the kept-session guard never takes
+        // the setup session for an unlocked one.
         setAuthState((prev) => ({
           ...prev,
           isLocked: false,
@@ -789,6 +794,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           backgroundedAt: null,
           timeoutMinutes,
           hasPin,
+          sessionId: null,
         }));
         return;
       }
@@ -797,8 +803,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // or passphrase change rotates the vault and then rechecks, and the
       // session survives the change. Every part of the guard is required:
       //  - Authenticated, unlocked, and holding a sessionId: only unlock and
-      //    unlockWithBiometrics set a sessionId and lock() nulls it, so this is
-      //    a real unlocked session. The unlocked setup session (no PIN yet) can
+      //    unlockWithBiometrics set a sessionId, and lock(), every locked
+      //    verdict (landLocked) and the setup verdict null it, so this is a
+      //    real unlocked session. The unlocked setup session (no PIN yet) can
       //    hold a vault filled by unlockForRestore but has no sessionId, and is
       //    not kept. Liveness is read again here, not taken from sessionIsLive
       //    above: a lock that landed during this check's awaits (inactivity,

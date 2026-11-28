@@ -416,6 +416,7 @@ describe('recheck from a live session with a wallet and a PIN', () => {
       backgroundedAt: null,
       timeoutMinutes: 5,
       hasPin: true,
+      sessionId: null,
     });
   });
 
@@ -645,7 +646,13 @@ describe('recheck from a live session with a wallet and a PIN', () => {
     await flush();
     probe.armed = false;
 
-    expect(clearSpy).toHaveBeenCalled();
+    // The discriminator: the vault clear ran once (lock()'s throwing call) and
+    // the vault is still filled, so the verdict passed the ref guard and the
+    // updater bailed with no teardown. A verdict that saw the locked state in
+    // the ref would have gone through landLocked, calling clear a second time
+    // (the real one) and emptying the vault.
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+    expect(SessionKeyVault.isUnlocked()).toBe(true);
     expect(settled).toBe(true);
     expect(rendered.result.current.authState).toMatchObject({
       isLocked: true,
@@ -654,6 +661,44 @@ describe('recheck from a live session with a wallet and a PIN', () => {
     });
     expect(probe.renders.length).toBeGreaterThan(0);
     expect(probe.renders.every((r) => r.isLocked)).toBe(true);
+  });
+
+  // A locked verdict ends the session: its sessionId is cleared, as lock()
+  // clears it, so a later recheck cannot take it for a live session.
+  it('landLocked_clearsSessionId', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    expect(rendered.result.current.authState.sessionId).not.toBeNull();
+    SessionKeyVault.clear();
+
+    await recheck(rendered);
+
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: true,
+      isAuthenticated: false,
+      sessionId: null,
+    });
+  });
+
+  // The unlocked setup session never carries an earlier session's id.
+  it('setupVerdict_clearsSessionId', async () => {
+    const rendered = await mount();
+    await unlockLive(rendered);
+    expect(rendered.result.current.authState.sessionId).not.toBeNull();
+    (
+      MultiAccountWalletService.hasWalletWithAccountsStrict as jest.Mock
+    ).mockResolvedValue(false);
+    (AccountSecureStorage.hasPinStrict as jest.Mock).mockResolvedValue(false);
+
+    await recheck(rendered);
+
+    expect(rendered.result.current.authState).toMatchObject({
+      isLocked: false,
+      isAuthenticated: true,
+      hasWallet: false,
+      hasPin: false,
+      sessionId: null,
+    });
   });
 });
 
@@ -677,6 +722,7 @@ describe('recheck from a live session lands locked with the session torn down', 
     expect(rendered.result.current.authState).toEqual<AuthState>({
       ...before,
       ...FAIL_CLOSED_FIELDS,
+      sessionId: null,
     });
   });
 
@@ -698,6 +744,7 @@ describe('recheck from a live session lands locked with the session torn down', 
     expect(rendered.result.current.authState).toEqual<AuthState>({
       ...before,
       ...FAIL_CLOSED_FIELDS,
+      sessionId: null,
     });
   });
 
@@ -721,6 +768,7 @@ describe('recheck from a live session lands locked with the session torn down', 
     expect(rendered.result.current.authState).toEqual<AuthState>({
       ...before,
       ...FAIL_CLOSED_FIELDS,
+      sessionId: null,
     });
   });
 });
